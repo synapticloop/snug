@@ -1,0 +1,43 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/snug-format",
+    "crates/snug-cli",
+    "crates/snug-launcher",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/synapticloop/snug"
+publish = false
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+thiserror = { version = "1" }
+sha2 = { version = "0.10" }
+crc32fast = { version = "1" }
+clap = { version = "4", features = ["derive"] }
+anyhow = { version = "1" }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Environment",
+    "Win32_System_Registry",
+    "Win32_System_Console",
+    "Win32_Storage_FileSystem",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+] }
+jni = { version = "0.22", features = ["invocation"] }
+
+[profile.release]
+opt-level = "z"     # the launcher should be tiny
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

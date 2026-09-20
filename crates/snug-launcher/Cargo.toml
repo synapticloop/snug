@@ -1,0 +1,36 @@
+[package]
+name = "snug-launcher"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Windows runtime that scans itself for the snug payload, locates a compatible JVM, and launches the embedded fat JAR via JNI."
+
+[lib]
+name = "snug_launcher"
+path = "src/lib.rs"
+
+[[bin]]
+name = "snug-launcher"
+path = "src/main.rs"
+
+[dependencies]
+snug-format = { path = "../snug-format" }
+thiserror = { workspace = true }
+serde = { workspace = true }
+postcard = { workspace = true }
+sha2 = { workspace = true }
+zip = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }
+jni = { workspace = true }
+
+# A precompiled stub launcher is cross-compiled from macOS / Linux via
+# `cargo zigbuild` and committed at bin/launcher-stub.exe. Snug-cli's
+# builder (slice 3) embeds it via include_bytes!() and appends the
+# encoded payload.
+[package.metadata.cargo-zigbuild]
+# Reserved for future use.
