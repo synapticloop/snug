@@ -35,6 +35,8 @@ windows-sys = { version = "0.59", features = [
 ] }
 jni = { version = "0.22", features = ["invocation"] }
 shell-words = { version = "1" }
+editpe = { version = "0.2", default-features = false, features = ["images"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [profile.release]
 opt-level = "z"     # the launcher should be tiny

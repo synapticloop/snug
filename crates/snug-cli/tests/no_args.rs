@@ -52,9 +52,9 @@ fn snug_no_args_prints_help_with_version() {
         "--min-java",
         "--main-class",
         "--icon",
+        "--manifest",
         "--splash",
         "--jvm-arg",
-        "--rcedit",
         "--snug-version",
     ] {
         assert!(

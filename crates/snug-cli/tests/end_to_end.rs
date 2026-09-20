@@ -93,7 +93,6 @@ fn construct_cli(jar: &std::path::Path, exe: &std::path::Path) -> Cli {
         "--main-class".into(),
         "com.example.Main".into(),
         "--jvm-arg=-Xmx512m".into(),
-        "--no-rcedit".into(),
     ];
     Cli::parse_from(args)
 }
@@ -103,7 +102,7 @@ fn output_path_defaults_to_jar_stem_exe() {
     let tmp = tempdir();
     let jar = tmp.join("MyApp.jar");
     write_fake_jar(&jar, None);
-    let cli = Cli::parse_from(["snug", &jar.display().to_string(), "--no-rcedit"]);
+    let cli = Cli::parse_from(["snug", &jar.display().to_string()]);
     let p = output_path(&cli);
     assert_eq!(p, tmp.join("MyApp.exe"));
 }

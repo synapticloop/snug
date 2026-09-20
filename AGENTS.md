@@ -116,9 +116,9 @@ precompiled `launcher-stub.exe` (v2).
 |---|------------------------------------------------|------------|
 | 1 | CLI surface + embedded-payload format          | **done**   |
 | 2 | Windows launcher runtime (JVM discovery + JNI) | partial — payload self-scan, cache path, manifest lookup, JVM discovery (env / PATH / registry / common), jvm.dll discovery, and the bare-stub launcher binary are all wired and compile-tested. **Actual `JNI_CreateJavaVM` launch path is stubbed** and returns a `JniStub` error; the `jni` 0.22 invocation API needs Windows-machine validation before we wire it up. A 454 KB precompiled `bin/launcher-stub.exe` (PE32+ GUI x86-64) is committed. |
-| 3 | snug-cli builder: load stub via `include_bytes!()`, append payload, optionally run rcedit for icon/version stamping | **done** — `snug app.jar -o App.exe` produces a real Windows `.exe` end-to-end. `include_bytes!` of the committed stub + encoded payload concatenation is unit + integration tested. Resource stamping is wired via `rcedit` (Windows-only, skipped on macOS / Linux unless `--rcedit` points at a Wine-invokable binary). `--no-rcedit` skips stamping. |
+| 3 | snug-cli builder: load stub via `include_bytes!()`, append payload, stamp icon/version/manifest via `editpe` | **done** — `snug app.jar -o App.exe` produces a real Windows `.exe` end-to-end. `include_bytes!` of the committed stub + encoded payload concatenation is unit + integration tested. Resource stamping is in-process via the [`editpe`](https://github.com/Systemcluster/editpe) crate (pure Rust, BSD-2-Clause, cross-platform — same code path runs on macOS, Linux, and Windows). `--icon` accepts PNG or ICO; `--manifest <XML>` embeds an arbitrary application manifest. |
 | 4 | Stub-append v2 hardening (alignment, overlay vs append, sparse stubs), per-app resource stamping UX, CI on `windows-latest` to actually run the produced EXE against a real JDK | planned |
-| 5 | Windows version-resource stamping              | partial — rcedit integration done in slice 3; full coverage (icon dimensions, MUI/translation, manifest) is follow-up |
+| 5 | Windows version-resource stamping              | **done** — `editpe` stamps `VS_VERSIONINFO` (ProductName / CompanyName / FileDescription / LegalCopyright) plus `FixedFileInfo` (signature, file/product version, VFT_APP) into every produced EXE. `--manifest <XML>` covers the application manifest gap. Icon dimension / MUI / translation coverage is follow-up. |
 | 6 | Native splash renderer (PNG via GDI+/WIC)      | planned    |
 | 7 | Per-user cache + old-version cleanup           | planned    |
 | 8 | GitHub Actions CI (windows-latest release)     | planned    |
@@ -137,6 +137,10 @@ precompiled `launcher-stub.exe` (v2).
   is disabled (via `disable_version_flag = true`) so the brief's
   `--version <APP-VERSION>` doesn't collide with it. Snug's own
   version is discoverable via `--snug-version` or `cargo metadata`.
+  Resource stamping is unconditional; the prior `--rcedit <path>` and
+  `--no-rcedit` flags are gone in favour of an in-process `editpe`
+  integration. The new `--manifest <XML>` flag embeds an arbitrary
+  Windows application manifest (XML).
 - **`snug.options` files** are supported. The CLI resolves an options
   file via `--options <path>` (explicit) or `snug.options` in the
   current working directory (default). One option per line, parsed as

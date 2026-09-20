@@ -1,9 +1,9 @@
 # Snug — Handoff Notes
 
 **Session end:** 2026-09-20
-**Last commit:** `8a90f8d` on `main`
+**Last commit:** `8a90f8d` on `main` (HEAD includes uncommitted editpe swap)
 **Toolchain:** rustc 1.98.1, cargo 1.96.0, zig 0.14.1, cargo-zigbuild 0.x
-**Tests:** 53 passing across 13 test binaries
+**Tests:** 55 passing across 14 test binaries (one pre-existing launcher test broken on Windows — see "Known failures")
 
 ---
 
@@ -13,8 +13,9 @@
 |---|---|
 | 1 — CLI surface + embedded-payload format | done |
 | 2 — Windows launcher runtime + cross-compiled stub | partial (JNI launch is **stubbed** — see below) |
-| 3 — snug-cli builder (stub + payload concat, rcedit) | done |
+| 3 — snug-cli builder (stub + payload concat, editpe) | done |
 | Extras — `--snug-version`, no-args help, `snug.options` config, README logo | done |
+| Extras — editpe in-process resource stamping, `--manifest`, PNG icons | done |
 
 ### Repository layout
 
@@ -42,6 +43,7 @@ snug/
 - `windows-sys 0.59` (gated to `cfg(windows)`)
 - `jni 0.22` (invocation feature, gated to `cfg(windows)`)
 - `shell-words 1` (used in `snug.options` parser)
+- `editpe 0.2` (no_std default features off, `images` feature on) — in-process PE resource editor (icon + version + manifest stamping). Replaces the prior subprocess-based `rcedit` integration. Dev-dep: `image 0.25` (PNG support).
 
 ---
 
@@ -151,10 +153,13 @@ is in place in `crates/snug-launcher/src/cache.rs`. What's missing:
 These were raised in the session but not resolved. Lean verdicts
 included where I have one.
 
-1. **`--rcedit <path>` CLI flag vs `RCEDIT` env var.** Lean: **drop
-   the CLI flag, add the env var.** Cleaner CLI surface, more
-   idiomatic (matches `RUSTC`, `CC`, `JAVA_HOME` patterns), same
-   customisation story.
+1. **`--rcedit <path>` CLI flag vs `RCEDIT` env var.** ~~Lean: drop
+   the CLI flag, add the env var.~~ **Resolved 2026-09-20: the whole
+   `rcedit` integration was replaced by the in-process `editpe` crate.**
+   Both `--rcedit` and `--no-rcedit` are gone; resource stamping is
+   unconditional (version info always; icon/manifest when supplied).
+   `--manifest <XML>` is the new opt-in flag for shipping a custom
+   Windows application manifest.
 
 2. **Short-flag aliases.** Only `-o` has a short form. Conventional
    pairings worth adding: `-n` for `--name`, `-c` for `--company`,
@@ -166,7 +171,7 @@ included where I have one.
 
 4. **Config file format.** `snug.options` is one option per line,
    which is simple but flat. A `snug.toml` with sections
-   (`[jvm_discovery]`, `[rcedit]`, `[build]`) would be richer but
+   (`[jvm_discovery]`, `[resources]`, `[build]`) would be richer but
    more code. Defer until someone asks.
 
 5. **JVM discovery fine-tuning CLI flags.** `LauncherBehavior` /
@@ -223,7 +228,7 @@ printf "Manifest-Version: 1.0\nMain-Class: com.example.Main\n" \
 
 cargo run --release -- /tmp/snug-smoke/smoke.jar -o /tmp/snug-smoke/Demo.exe \
   --name "Demo App" --company "SynapticLoop" --version 1.0.0 \
-  --min-java 25 --main-class com.example.Main --jvm-arg=-Xmx512m --no-rcedit
+  --min-java 25 --main-class com.example.Main --jvm-arg=-Xmx512m
 
 # Verify
 file /tmp/snug-smoke/Demo.exe
@@ -242,7 +247,7 @@ cat > snug.options <<EOF
 EOF
 # CLI override takes precedence
 /Users/osmanj/IdeaProjects/snug/target/release/snug /tmp/snug-smoke/smoke.jar \
-    --no-rcedit --dry-run --name "Override"
+    --dry-run --name "Override"
 # expect stderr: "snug: loaded options from /tmp/snug-opts/snug.options"
 # expect stdout: app name reflected from --name override
 ```
@@ -309,21 +314,21 @@ If you're picking this up cold, read in this order:
    `.exe` against a real JDK 25 install.
 
 2. **Get a Windows host in CI** so subsequent changes can be
-   end-to-end tested without a human in the loop.
+   end-to-end tested without a human in the loop. Also catches the
+   pre-existing `parse_version_subkey_orders_correctly` failure
+   that `cargo test --workspace` currently shows on Windows.
 
 3. **Native splash renderer** (WIC + GDI+). Biggest remaining UX
    win; the user-facing "before JVM" feel.
 
-4. **Drop `--rcedit <path>` CLI flag**, add `RCEDIT` env var. YAGNI
-   verdict from the CLI surface discussion.
+4. **Add `-V` / `-n` / `-c` short aliases** for the most-used flags.
 
-5. **Add `-V` / `-n` / `-c` short aliases** for the most-used flags.
+5. **Stub-append v2 hardening.** Overlay vs resource-mode,
+   fixed-offset locator, sparse-stub caching. Less urgent now that
+   `editpe` writes a proper resource section.
 
-6. **Stub-append v2 hardening.** Overlay vs resource-mode,
-   fixed-offset locator, sparse-stub caching.
-
-7. **Per-user cache cleanup at startup.** Prune sibling sha256
+6. **Per-user cache cleanup at startup.** Prune sibling sha256
    dirs that aren't the current hash.
 
-8. **GitHub Actions CI on `windows-latest`.** Build the stub,
+7. **GitHub Actions CI on `windows-latest`.** Build the stub,
    build a sample .exe, run it against a JDK, capture output.

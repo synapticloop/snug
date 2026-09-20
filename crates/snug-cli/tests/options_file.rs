@@ -26,24 +26,21 @@ fn tempdir() -> PathBuf {
 }
 
 fn write_jar(path: &PathBuf) {
-    let tmp = tempdir();
-    // Build a real manifest inside a META-INF/ directory.
-    let mut mf_dir = tmp.clone();
-    mf_dir.push("META-INF");
-    fs::create_dir_all(&mf_dir).unwrap();
-    fs::write(
-        mf_dir.join("MANIFEST.MF"),
-        "Manifest-Version: 1.0\nMain-Class: com.example.Main\n",
-    )
-    .unwrap();
+    // Build the JAR with the Rust `zip` crate so the test is portable
+    // across hosts (previously this helper spawned the system `zip`
+    // binary, which only exists on macOS / Linux).
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+    use zip::CompressionMethod;
 
-    let status = Command::new("zip")
-        .arg("-q")
-        .arg(path)
-        .arg(mf_dir.join("MANIFEST.MF"))
-        .status()
-        .expect("spawn zip — install via `brew install zip` or apt");
-    assert!(status.success(), "zip failed: {status:?}");
+    let file = fs::File::create(path).expect("create jar");
+    let mut zip = zip::ZipWriter::new(file);
+    let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    zip.start_file("META-INF/MANIFEST.MF", opts)
+        .expect("start_file");
+    zip.write_all(b"Manifest-Version: 1.0\nMain-Class: com.example.Main\n")
+        .expect("write manifest");
+    zip.finish().expect("finish zip");
 }
 
 #[test]
@@ -61,7 +58,6 @@ fn default_snug_options_in_cwd_is_loaded() {
     let output = Command::new(snug_bin())
         .current_dir(&tmp)
         .arg(&jar)
-        .arg("--no-rcedit")
         .arg("--dry-run")
         .output()
         .expect("spawn snug");
@@ -94,7 +90,6 @@ fn cli_options_override_file_options() {
     let output = Command::new(snug_bin())
         .current_dir(&tmp)
         .arg(&jar)
-        .arg("--no-rcedit")
         .arg("--dry-run")
         .arg("--min-java")
         .arg("17")
@@ -133,7 +128,6 @@ fn explicit_options_flag_overrides_cwd_default() {
     let output = Command::new(snug_bin())
         .current_dir(&tmp)
         .arg(&jar)
-        .arg("--no-rcedit")
         .arg("--dry-run")
         .arg("--options")
         .arg(&custom)
@@ -171,8 +165,12 @@ fn missing_explicit_options_file_errors() {
     assert!(!output.status.success(), "should exit non-zero");
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
+    // The exact OS error wording differs across platforms ("No such file or
+    // directory" on Unix, "The system cannot find the path specified." on
+    // Windows). The path we asked for and the snug-specific prefix are
+    // stable, so assert against those.
     assert!(
-        stderr.contains("No such file or directory"),
+        stderr.contains("loading options file /this/path/does/not/exist.opts"),
         "stderr should explain the missing file: {stderr}"
     );
 }

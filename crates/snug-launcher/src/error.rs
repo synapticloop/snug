@@ -28,14 +28,17 @@ pub enum LauncherError {
     #[error("`{symbol}` not found in {library}")]
     SymbolNotFound { library: String, symbol: String },
 
-    #[error("JNI_CreateJavaVM returned error code {0}")]
-    JniCreateVm(i32),
+    #[error("could not build JNI init args: {0}")]
+    JniInit(String),
 
-    #[error("JNI launch not yet implemented (slice 2 stub) — see crates/snug-launcher/src/platform/windows.rs")]
-    JniStub,
+    #[error("JNI_CreateJavaVM failed: {0}")]
+    JniCreate(String),
 
     #[error("AttachCurrentThread failed: {0}")]
-    JniAttach(i32),
+    JniAttach(String),
+
+    #[error("JNI invocation failed: {0}")]
+    JniInvoke(String),
 
     #[error("no Main-Class found in JAR manifest and no --main-class override")]
     NoMainClass,
@@ -54,4 +57,18 @@ pub enum LauncherError {
 
     #[error("embedded payload: {0}")]
     Format(#[from] snug_format::FormatError),
+}
+
+#[cfg(windows)]
+impl From<jni::errors::Error> for LauncherError {
+    fn from(e: jni::errors::Error) -> Self {
+        LauncherError::JniInvoke(e.to_string())
+    }
+}
+
+#[cfg(windows)]
+impl From<jni::errors::StartJvmError> for LauncherError {
+    fn from(e: jni::errors::StartJvmError) -> Self {
+        LauncherError::JniCreate(e.to_string())
+    }
 }

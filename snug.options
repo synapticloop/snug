@@ -1,0 +1,12 @@
+# snug.options — default flags for `snug` builds in this workspace.
+#
+# Loaded automatically when `snug` runs from this directory.
+# CLI flags always override file values. `#`-prefixed lines are comments.
+# Each line is parsed as shell-like tokens, so quote any value with
+# whitespace, e.g. `--name "My App"`.
+
+--name "Snug JavaFX Demo"
+--company "SynapticLoop"
+--description "Snug JavaFX demo launcher"
+--copyright "© SynapticLoop"
+--min-java 25

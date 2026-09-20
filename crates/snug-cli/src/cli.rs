@@ -6,7 +6,7 @@
 //! snug <jar> [-o EXE] [--name ...] [--company ...] [--version ...]
 //!            [--description ...] [--copyright ...]
 //!            [--min-java N] [--main-class CLASS]
-//!            [--icon ICO] [--splash PNG] [--splash-ms MS]
+//!            [--icon PNG/ICO] [--manifest XML] [--splash PNG] [--splash-ms MS]
 //!            [--jvm-arg ARG]...
 //! ```
 
@@ -70,9 +70,15 @@ pub struct Cli {
     #[arg(long = "main-class", value_name = "CLASS")]
     pub main_class: Option<String>,
 
-    /// `.ico` file used as the Windows Explorer icon for the EXE.
-    #[arg(long = "icon", value_name = "ICO")]
+    /// `.ico` or `.png` file used as the Windows Explorer icon for the EXE.
+    #[arg(long = "icon", value_name = "PNG/ICO")]
     pub icon: Option<PathBuf>,
+
+    /// Optional Windows application manifest (XML) embedded as
+    /// `RT_MANIFEST`. Use this to declare DPI-awareness, side-by-side
+    /// assembly identity, or `requestedExecutionLevel` for UAC.
+    #[arg(long = "manifest", value_name = "XML")]
+    pub manifest: Option<PathBuf>,
 
     /// PNG splash image shown by the native launcher before the JVM starts.
     #[arg(long = "splash", value_name = "PNG")]
@@ -101,21 +107,6 @@ pub struct Cli {
     /// Validate inputs and print what would be built, but write nothing.
     #[arg(long = "dry-run")]
     pub dry_run: bool,
-
-    /// Path to `rcedit.exe` used for stamping icon and version-resource
-    /// metadata into the produced EXE. Defaults to `rcedit` on `PATH`.
-    ///
-    /// Resource stamping only runs on Windows. On macOS / Linux this
-    /// flag is ignored unless the explicit path points to a Wine-
-    /// invokable rcedit binary.
-    #[arg(long = "rcedit", value_name = "PATH")]
-    pub rcedit: Option<PathBuf>,
-
-    /// Skip the rcedit resource-stamping step even when icon /
-    /// version metadata was supplied. Useful when building the EXE
-    /// locally and stamping on a Windows machine as a separate step.
-    #[arg(long = "no-rcedit")]
-    pub no_rcedit: bool,
 
     /// Print snug's own version (from `Cargo.toml`) and exit.
     ///

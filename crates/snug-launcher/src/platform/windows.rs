@@ -1,17 +1,14 @@
 //! Windows implementation: JVM discovery, jvm.dll load, JNI invocation.
-//!
-//! **Slice 2 status**: JVM discovery, cache extraction, payload
-//! self-scan, and Main-Class lookup are fully implemented and unit
-//! testable. The actual `JNI_CreateJavaVM` launch path is currently
-//! stubbed — it compiles, links, and produces a runnable stub binary,
-//! but on Windows the launcher will report a "not yet implemented"
-//! error and exit cleanly. The jni crate's full invocation API needs
-//! Windows-machine validation before we wire it up here.
 
 use std::fs;
 use std::io::Read;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
+
+use jni::objects::{JObjectArray, JString, JValue};
+use jni::signature::RuntimeMethodSignature;
+use jni::strings::JNIString;
+use jni::{InitArgsBuilder, JNIVersion, JavaVM};
 
 use windows_sys::Win32::Foundation::ERROR_SUCCESS;
 use windows_sys::Win32::System::Environment::GetEnvironmentVariableW;
@@ -28,17 +25,11 @@ use crate::manifest;
 use crate::LauncherError;
 
 /// Orchestrate the launch: extract JAR to cache, locate JVM, load
-/// jvm.dll, invoke Java main, return the exit code.
+/// jvm.dll, invoke Java `main`, return its exit code.
 ///
-/// **Currently stubbed at the JNI launch step**: every step up to and
-/// including "found a usable jvm.dll path" runs, but the actual JNI
-/// invocation is gated behind a TODO that returns
-/// [`LauncherError::JniCreateVm`] with code `-99`. This is intentional
-/// for slice 2 — the JNI launch path needs Windows-machine validation
-/// before we ship it. The crate compiles for `x86_64-pc-windows-gnu`
-/// and the resulting `launcher-stub.exe` runs as a bare stub (or, with
-/// a payload appended, gets all the way to JNI launch and then exits
-/// with a clear error).
+/// On success the JVM is destroyed before returning. The Windows
+/// launcher is the JVM's sole host for this process; we never spawn
+/// `javaw.exe`.
 pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherError> {
     let config = &embedded.payload.config;
 
@@ -52,24 +43,130 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
         Some(cls) => cls.clone(),
         None => manifest::read_main_class_required(&jar_dest)?,
     };
-    let _ = main_class_name;
 
-    // 3. Locate a compatible JVM.
+    // 3. Locate a compatible JVM and the `jvm.dll` we'll load.
     let jvm_dir = discover_jvm(&config.behavior.jvm_discovery, config.min_java)?
         .ok_or(LauncherError::JvmNotFound { min_java: config.min_java })?;
+    let jvm_dll = locate_jvm_dll(&jvm_dir).ok_or_else(|| LauncherError::LibraryLoad {
+        library: format!("jvm.dll under {}", jvm_dir.display()),
+        message: "no jvm.dll found under bin/server or bin/client".into(),
+    })?;
 
-    // 4. JNI launch — TODO for slice 3.
-    //
-    // The next slice will use the `jni` crate's `InitArgsBuilder` and
-    // `JavaVM::new` / `JavaVM::with_libjvm` to spawn the JVM, attach
-    // the main thread, find `Main-Class`, build a `String[]` from
-    // `CommandLineToArgvW(GetCommandLineW())`, invoke `main`, and
-    // return the JVM's exit code. That code needs validation on a
-    // real Windows machine before it ships — the jni 0.22 API is
-    // mostly safe but the wrapper around `AttachCurrentThread` plus
-    // exception-describe handling want eyeballs on them.
-    let _ = jvm_dir;
-    Err(LauncherError::JniStub)
+    // 4. Forward EXE command-line arguments to Java `main`, if configured.
+    let argv_strings: Vec<String> = if config.behavior.forward_args {
+        collect_argv()
+    } else {
+        Vec::new()
+    };
+
+    // 5. Build the JNI InitArgs. The cached JAR is on the classpath so
+    //    `find_class` resolves Main-Class through the system loader.
+    let mut builder = InitArgsBuilder::new().version(JNIVersion::V21);
+    for arg in &config.jvm_args {
+        builder = builder.option(arg.clone());
+    }
+    builder = builder.option(format!("-Djava.class.path={}", jar_dest.display()));
+    let init_args = builder
+        .build()
+        .map_err(|e| LauncherError::JniInit(e.to_string()))?;
+
+    // 6. Create the JVM by loading jvm.dll directly.
+    let jvm_dll_path = jvm_dll.clone();
+    let vm = JavaVM::with_libjvm(init_args, || Ok::<_, jni::errors::StartJvmError>(jvm_dll_path.as_os_str()))
+        .map_err(|e| LauncherError::JniCreate(e.to_string()))?;
+
+    // 7. Attach the current thread, resolve Main-Class, build the
+    //    String[] args, and invoke `main(String[])` synchronously.
+    let main_class_jni = main_class_name.replace('.', "/");
+    let main_class_name_for_err = main_class_name.clone();
+    let argv_for_main = argv_strings;
+
+    let exit_code: i32 = vm
+        .attach_current_thread(|env| -> Result<i32, LauncherError> {
+            let class = env.find_class(JNIString::new(&main_class_jni)).map_err(|e| {
+                LauncherError::MainClassNotFound(format!("{main_class_name_for_err} ({e})"))
+            })?;
+
+            let method_sig = RuntimeMethodSignature::from_str("([Ljava/lang/String;)V")
+                .map_err(|e| LauncherError::JniInvoke(format!("parse main signature: {e}")))?;
+
+            // Build args[] as a String[].
+            let arr: JObjectArray<JString> = if argv_for_main.is_empty() {
+                let placeholder = env
+                    .new_string("")
+                    .map_err(|e| LauncherError::JniInvoke(format!("new_string placeholder: {e}")))?;
+                JObjectArray::<JString>::new(env, 0, &placeholder)
+                    .map_err(|e| LauncherError::JniInvoke(format!("new String[0]: {e}")))?
+            } else {
+                let first = env
+                    .new_string(&argv_for_main[0])
+                    .map_err(|e| LauncherError::JniInvoke(format!("new_string[0]: {e}")))?;
+                let arr = JObjectArray::<JString>::new(env, argv_for_main.len(), &first)
+                    .map_err(|e| LauncherError::JniInvoke(format!("new String[]: {e}")))?;
+                for (i, s) in argv_for_main.iter().enumerate().skip(1) {
+                    let jstr = env
+                        .new_string(s)
+                        .map_err(|e| LauncherError::JniInvoke(format!("new_string[{i}]: {e}")))?;
+                    let jstr_ref: &JString = jstr.as_ref();
+                    arr.set_element(env, i, jstr_ref).map_err(|e| {
+                        LauncherError::JniInvoke(format!("set_element[{i}]: {e}"))
+                    })?;
+                }
+                arr
+            };
+
+            // main returns void; treat any successful return as exit code 0.
+            let args_value: JValue = (&arr).into();
+            let result = env.call_static_method(
+                &class,
+                JNIString::new("main"),
+                method_sig.method_signature(),
+                &[args_value],
+            );
+            match result {
+                Ok(_) => Ok(0),
+                Err(jni::errors::Error::MethodNotFound { .. }) => {
+                    Err(LauncherError::NoMainMethod(main_class_name_for_err.clone()))
+                }
+                Err(e) => {
+                    if env.exception_check() {
+                        env.exception_describe();
+                        env.exception_clear();
+                    }
+                    Err(LauncherError::JavaException(format!(
+                        "{main_class_name_for_err}: {e}"
+                    )))
+                }
+            }
+        })?;
+
+    // 8. Best-effort JVM teardown. The JNI spec says DestroyJavaVM
+    //    waits for non-daemon threads; on a clean main() return there
+    //    shouldn't be any.
+    let _ = unsafe { vm.destroy() };
+
+    Ok(exit_code as u32)
+}
+
+/// Resolve the `jvm.dll` path inside a Java home. We prefer the
+/// server VM when both server and client directories exist; the JVM
+/// itself picks a tier automatically, but the server tier is the
+/// modern default on x86_64.
+fn locate_jvm_dll(java_home: &Path) -> Option<PathBuf> {
+    let server = java_home.join("bin").join("server").join("jvm.dll");
+    if server.is_file() {
+        return Some(server);
+    }
+    let client = java_home.join("bin").join("client").join("jvm.dll");
+    if client.is_file() {
+        return Some(client);
+    }
+    // Some slim JREs drop jvm.dll straight under bin/.
+    let flat = java_home.join("bin").join("jvm.dll");
+    if flat.is_file() {
+        return Some(flat);
+    }
+    None
 }
 
 /// Copy `bytes` to `dest` (and create parents) unless it already exists.
@@ -317,13 +414,23 @@ fn read_registry_jdk_path(root: HKEY, subkey: &str) -> Result<Option<PathBuf>, L
 }
 
 fn parse_version_subkey(name: &str) -> Option<u32> {
+    // JavaSoft stores versions like `21.0.5+9` or `21.0.1+12-LTS`. We
+    // want a total order so the registry scan picks the highest
+    // available patch level — pack major/minor/patch into a single
+    // integer as `major*1_000_000 + minor*1_000 + patch`.
     let mut parts = name.split('.');
-    let first = parts.next()?.parse::<u32>().ok()?;
-    let second = parts
+    let major = parts.next()?.parse::<u32>().ok()?;
+    let minor = parts
         .next()
+        .and_then(|s| s.split(|c: char| !c.is_ascii_digit()).next())
         .and_then(|s| s.parse::<u32>().ok())
         .unwrap_or(0);
-    Some(first * 1000 + second)
+    let patch = parts
+        .next()
+        .and_then(|s| s.split(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(0);
+    Some(major * 1_000_000 + minor * 1_000 + patch)
 }
 
 fn common_install_paths() -> Vec<PathBuf> {
@@ -387,6 +494,16 @@ mod tests {
     fn parse_version_subkey_orders_correctly() {
         assert!(parse_version_subkey("25").unwrap() > parse_version_subkey("21").unwrap());
         assert!(parse_version_subkey("21.0.1").unwrap() > parse_version_subkey("21").unwrap());
+        assert!(parse_version_subkey("21.0.5").unwrap() > parse_version_subkey("21.0.1").unwrap());
+        assert_eq!(parse_version_subkey("21").unwrap(), 21_000_000);
+        assert_eq!(parse_version_subkey("21.0").unwrap(), 21_000_000);
+        assert_eq!(parse_version_subkey("21.0.5").unwrap(), 21_000_500);
+        // Build suffix is ignored — major.minor.patch is enough to
+        // disambiguate patch levels for registry ordering.
+        assert_eq!(
+            parse_version_subkey("21.0.5+9").unwrap(),
+            parse_version_subkey("21.0.5").unwrap()
+        );
         assert!(parse_version_subkey("not").is_none());
     }
 }

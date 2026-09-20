@@ -7,7 +7,7 @@ use anyhow::{bail, Context, Result};
 
 use crate::cli::Cli;
 use crate::manifest::read_main_class;
-use crate::rcedit::RceditPlan;
+use crate::resources::ResourcePlan;
 use crate::stub::STUB_BYTES;
 use snug_format::{
     embedded_file, encode, AppMetadata, EmbeddedFile, LauncherBehavior, LauncherConfig,
@@ -123,8 +123,9 @@ pub fn output_path(cli: &Cli) -> PathBuf {
 }
 
 /// Build the final Windows `.exe` by concatenating the precompiled
-/// stub launcher with the encoded snug payload, then optionally
-/// stamping icon / version-resource metadata via `rcedit`.
+/// stub launcher with the encoded snug payload, then stamping icon /
+/// version-resource / manifest metadata via the in-process [`editpe`]
+/// library.
 ///
 /// Returns the path that was actually written.
 pub fn build_exe(cli: &Cli, payload: &SnugPayload) -> Result<PathBuf> {
@@ -156,11 +157,12 @@ pub fn build_exe(cli: &Cli, payload: &SnugPayload) -> Result<PathBuf> {
         encoded.len()
     );
 
-    // Optional resource stamping.
-    let plan = RceditPlan::from_cli(cli);
+    // In-process resource stamping (editpe). Version info is always
+    // stamped from app metadata; icon and manifest are optional.
+    let plan = ResourcePlan::from_cli(cli);
     if plan.should_run() {
         plan.run(&output, &embedded)
-            .with_context(|| format!("running rcedit against {}", output.display()))?;
+            .with_context(|| format!("stamping PE resources on {}", output.display()))?;
     }
 
     Ok(output)

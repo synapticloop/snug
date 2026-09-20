@@ -102,20 +102,17 @@ fn dry_run(cli: &Cli, embedded: &SnugEmbedded) -> Result<()> {
             .map_or("(none)".into(), |p| p.display().to_string())
     );
     println!(
+        "  manifest:    {}",
+        cli.manifest
+            .as_ref()
+            .map_or("(none)".into(), |p| p.display().to_string())
+    );
+    println!(
         "  splash:      {}",
         if payload.config.splash.is_some() { "yes" } else { "no" }
     );
     println!("  jar sha256:  {}", hex_lower(&payload.jar.sha256));
-    println!(
-        "  rcedit:      {}",
-        if cli.no_rcedit {
-            "disabled".to_string()
-        } else {
-            cli.rcedit
-                .as_ref()
-                .map_or("(default rcedit on PATH)".into(), |p| p.display().to_string())
-        }
-    );
+    println!("  resources:   editpe (icon + version + manifest if set)");
     println!("  stub bytes:  {}", snug_cli::stub::STUB_BYTES.len());
     println!(
         "  total exE:   {} bytes (approx)",
