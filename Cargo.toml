@@ -34,6 +34,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_UI_Shell",
 ] }
 jni = { version = "0.22", features = ["invocation"] }
+shell-words = { version = "1" }
 
 [profile.release]
 opt-level = "z"     # the launcher should be tiny

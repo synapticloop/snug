@@ -124,4 +124,14 @@ pub struct Cli {
     /// shown in the no-args help output.
     #[arg(long = "snug-version", action = clap::ArgAction::Version)]
     pub snug_version: (),
+
+    /// Path to a snug options file. Default: `snug.options` in the
+    /// current working directory, if present.
+    ///
+    /// Format: one option per line, parsed as if it were supplied on
+    /// the command line (so `--name "My App"` works, quoting and
+    /// escaping included). Lines starting with `#` are comments.
+    /// Command-line options override file options.
+    #[arg(long = "options", value_name = "PATH")]
+    pub options: Option<PathBuf>,
 }

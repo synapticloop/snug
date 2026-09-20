@@ -136,7 +136,14 @@ precompiled `launcher-stub.exe` (v2).
   the canonical surface. Note: clap's auto-generated `--version` flag
   is disabled (via `disable_version_flag = true`) so the brief's
   `--version <APP-VERSION>` doesn't collide with it. Snug's own
-  version is discoverable via `cargo metadata` or `Cargo.toml`.
+  version is discoverable via `--snug-version` or `cargo metadata`.
+- **`snug.options` files** are supported. The CLI resolves an options
+  file via `--options <path>` (explicit) or `snug.options` in the
+  current working directory (default). One option per line, parsed as
+  shell-like tokens (so `--name "My App"` works with quotes and
+  escapes); `#`-prefixed lines are comments. CLI flags always override
+  file values (the file's matching flag is stripped at merge time).
+  Repeatable flags (`--jvm-arg`) accumulate from both sources.
 - Profile `release` is tuned for tiny binaries (`opt-level = "z"`, LTO,
   `panic = "abort"`, stripped). The launcher should be ~hundreds of KB
   not megabytes.

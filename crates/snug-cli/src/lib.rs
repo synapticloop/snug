@@ -6,5 +6,6 @@
 pub mod build;
 pub mod cli;
 pub mod manifest;
+pub mod options_file;
 pub mod rcedit;
 pub mod stub;

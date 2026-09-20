@@ -1,7 +1,13 @@
+<div align="center">
+
+<img src="assets/snug-logo.png" alt="snug" width="200">
+
 # snug
 
 > A small, modern, Rust-based launcher-wrapper for Java fat JARs. Turns
 > `MyApp-fat.jar` into `MyApp.exe` — without bundling a JVM.
+
+</div>
 
 Snug generates a single native Windows `.exe` that:
 
@@ -55,6 +61,13 @@ snug app.jar -o App.exe --dry-run
 
 # Pipe the encoded payload to stdout (.snug-blob format):
 snug app.jar --emit-payload
+
+# Use a `snug.options` file for default settings (CLI flags override):
+#   # snug.options (in cwd)
+#   --name "My App"
+#   --company "SynapticLoop"
+#   --min-java 25
+snug app.jar -o App.exe --name "Different Name"   # --name overrides the file
 ```
 
 The produced `.exe` is a 64-bit Windows GUI binary that:

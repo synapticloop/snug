@@ -10,6 +10,7 @@ use clap::{CommandFactory, Parser};
 
 use snug_cli::build::{build_exe, build_payload, output_path};
 use snug_cli::cli::Cli;
+use snug_cli::options_file;
 use snug_format::SnugEmbedded;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -23,7 +24,26 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<()> {
-    let cli = Cli::parse();
+    let raw_args: Vec<String> = std::env::args().collect();
+
+    // Resolve the options file (explicit `--options <path>` or
+    // CWD-relative `snug.options`) before clap sees anything. Tokens
+    // from the file are prepended to the real CLI args so command-line
+    // values win on conflict (clap's "last wins" semantics).
+    let cwd = std::env::current_dir().context("reading current working directory")?;
+    let options_path = options_file::resolve(&raw_args, &cwd);
+    let file_tokens = match &options_path {
+        Some(p) => options_file::load(p)
+            .with_context(|| format!("loading options file {}", p.display()))?,
+        None => Vec::new(),
+    };
+
+    let merged = options_file::merge(&raw_args, file_tokens);
+    let cli = Cli::parse_from(merged);
+
+    if let Some(p) = &options_path {
+        eprintln!("snug: loaded options from {}", p.display());
+    }
 
     // No JAR supplied: print help + snug's own version, exit 0.
     // (clap's own `--help` is handled automatically by ArgAction::Help.)
