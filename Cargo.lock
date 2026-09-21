@@ -264,8 +264,6 @@ dependencies = [
 [[package]]
 name = "editpe"
 version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de488f8727e67269a918bcb5b35b1b9ee59b2ae2859743ffdd6288de9701c5e6"
 dependencies = [
  "debug-ignore",
  "foldhash",
@@ -685,6 +683,7 @@ dependencies = [
 name = "snug-launcher"
 version = "0.1.0"
 dependencies = [
+ "editpe",
  "jni",
  "postcard",
  "serde",

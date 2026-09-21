@@ -141,7 +141,7 @@ mod tests {
                 splash: None,
                 behavior: Default::default(),
             },
-            jar,
+            jars: vec![jar],
             icon: None,
         }
     }

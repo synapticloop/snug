@@ -71,7 +71,7 @@ fn build_payload_for_test(cli: &Cli) -> snug_format::SnugPayload {
             splash: None,
             behavior: LauncherBehavior::default(),
         },
-        jar: embedded_file(jar_bytes),
+        jars: vec![embedded_file(jar_bytes)],
         icon: None,
     }
 }

@@ -4,41 +4,63 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
+use editpe::Image;
+use image::GenericImageView;
 
 use crate::cli::Cli;
 use crate::manifest::read_main_class;
 use crate::resources::ResourcePlan;
 use crate::stub::STUB_BYTES;
+use snug_launcher::payload_locator::PAYLOAD_RESOURCE_NAME;
 use snug_format::{
     embedded_file, encode, AppMetadata, EmbeddedFile, LauncherBehavior, LauncherConfig,
-    SnugEmbedded, SnugPayload, SplashConfig,
+    SnugEmbedded, SnugPayload, SplashConfig, SplashImage,
 };
 
 /// Build the full [`SnugPayload`] that the launcher will consume.
 ///
-/// Reads the JAR bytes, hashes them, optionally loads icon / splash files,
-/// reads `Main-Class` from the manifest (unless overridden), and assembles
-/// a complete [`SnugPayload`].
+/// Resolves the input source from either the positional `[JAR]`
+/// argument or `--input <JAR|DIR>`:
+/// - If the resolved path is a file, it is wrapped as a single-JAR
+///   launcher.
+/// - If the resolved path is a directory, every `*.jar` directly
+///   inside it is scanned (sorted by name) and embedded as a
+///   multi-JAR classpath.
+///
+/// Reads the JAR bytes, hashes them, optionally loads icon / splash
+/// files, reads `Main-Class` from the **first** JAR's manifest
+/// (unless `--main-class` overrides), and assembles a complete
+/// [`SnugPayload`].
 pub fn build_payload(cli: &Cli) -> Result<SnugPayload> {
-    let jar_path = cli
-        .jar
-        .as_ref()
-        .context("a JAR path is required (pass it as the first positional argument)")?;
-
-    // --- Validate the JAR ------------------------------------------------
-    let jar_meta = std::fs::metadata(jar_path)
-        .with_context(|| format!("stat-ing JAR {}", jar_path.display()))?;
-    if !jar_meta.is_file() {
-        bail!("{} is not a regular file", jar_path.display());
-    }
-    let jar_bytes = std::fs::read(jar_path)
-        .with_context(|| format!("reading JAR {}", jar_path.display()))?;
-    let jar = embedded_file(jar_bytes);
+    let (input_path, jars) = resolve_input(cli)?;
 
     // --- Resolve main class ---------------------------------------------
+    // For multi-JAR builds, Main-Class is read from the first JAR's
+    // manifest. CLI `--main-class` always overrides.
+    let main_class_jar = jars.first().map(|ef| &ef.bytes).ok_or_else(|| {
+        anyhow::anyhow!("at least one JAR is required to read Main-Class")
+    })?;
     let main_class = match &cli.main_class {
         Some(cls) => Some(cls.clone()),
-        None => read_main_class(jar_path).context("reading Main-Class from JAR manifest")?,
+        None => {
+            // We need a path for read_main_class; if the input was a
+            // directory, write the first JAR to a temp file so the
+            // existing manifest parser can read it. Cleaner: refactor
+            // read_main_class to take bytes directly. For now, read
+            // from a temp file.
+            let tmp = std::env::temp_dir().join(format!(
+                "snug-manifest-{}-{}.jar",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            ));
+            std::fs::write(&tmp, main_class_jar)?;
+            let result = read_main_class(&tmp);
+            let _ = std::fs::remove_file(&tmp);
+            result.context("reading Main-Class from JAR manifest")?
+        }
     };
 
     // --- Optional icon ---------------------------------------------------
@@ -48,12 +70,44 @@ pub fn build_payload(cli: &Cli) -> Result<SnugPayload> {
     };
 
     // --- Optional splash -------------------------------------------------
+    // At build time we decode the user's PNG, validate its size, and
+    // pre-convert it into the BGRA-premultiplied form the launcher's
+    // `UpdateLayeredWindow` path expects. The launcher therefore
+    // doesn't need an image decoder.
     let splash = match &cli.splash {
         Some(path) => {
-            let image = load_embedded_file(path, "splash")?;
+            let png_bytes = std::fs::read(path)
+                .with_context(|| format!("reading splash PNG {}", path.display()))?;
+            if png_bytes.is_empty() {
+                bail!("{} is empty", path.display());
+            }
+            let img = image::load_from_memory_with_format(&png_bytes, image::ImageFormat::Png)
+                .map_err(|e| anyhow::anyhow!("decode splash PNG {}: {e}", path.display()))?;
+            let (width, height) = img.dimensions();
+            check_splash_dimensions(width, height, &cli.splash_max);
+            let rgba = img.to_rgba8();
+            let mut pixels: Vec<u8> = rgba.into_raw();
+            // Convert RGBA straight → BGRA pre-multiplied. `UpdateLayeredWindow`
+            // with `BLENDFUNCTION { ..., AC_SRC_ALPHA }` requires a
+            // premultiplied 32-bit BGRA DIB. For fully-opaque pixels
+            // (alpha = 255) the multiply is a no-op on the channels.
+            for chunk in pixels.chunks_exact_mut(4) {
+                let r = chunk[0] as u32;
+                let g = chunk[1] as u32;
+                let b = chunk[2] as u32;
+                let a = chunk[3] as u32;
+                chunk[0] = ((b * a + 127) / 255) as u8; // B ← pre(B)
+                chunk[1] = ((g * a + 127) / 255) as u8; // G ← pre(G)
+                chunk[2] = ((r * a + 127) / 255) as u8; // R ← pre(R)
+                chunk[3] = a as u8; // A unchanged
+            }
             Some(SplashConfig {
                 duration_ms: cli.splash_ms,
-                image,
+                image: SplashImage {
+                    width,
+                    height,
+                    bytes: pixels,
+                },
             })
         }
         None => None,
@@ -63,8 +117,8 @@ pub fn build_payload(cli: &Cli) -> Result<SnugPayload> {
     let name = cli
         .name
         .clone()
-        .or_else(|| default_name_from_jar(jar_path))
-        .context("--name is required when it cannot be inferred from the JAR filename")?;
+        .or_else(|| default_name_from_input(&input_path))
+        .context("--name is required when it cannot be inferred from the input path")?;
     let company = cli.company.clone().unwrap_or_else(|| "Unknown".to_string());
     let version = cli.version.clone().unwrap_or_else(|| "0.0.0".to_string());
 
@@ -87,9 +141,83 @@ pub fn build_payload(cli: &Cli) -> Result<SnugPayload> {
 
     Ok(SnugPayload {
         config,
-        jar,
+        jars,
         icon,
     })
+}
+
+/// Resolve `[JAR]` vs `--input <JAR|DIR>` and return the resolved
+/// path plus the embedded JAR(s).
+fn resolve_input(cli: &Cli) -> Result<(PathBuf, Vec<EmbeddedFile>)> {
+    let input_path = match (&cli.jar, &cli.input) {
+        (Some(p), None) => p.clone(),
+        (None, Some(p)) => p.clone(),
+        (None, None) => bail!(
+            "an input source is required (pass a JAR as the positional argument, or use --input <JAR|DIR>)"
+        ),
+        (Some(_), Some(_)) => bail!(
+            "the positional [JAR] argument and --input are mutually exclusive"
+        ),
+    };
+
+    let meta = std::fs::metadata(&input_path)
+        .with_context(|| format!("stat-ing input {}", input_path.display()))?;
+
+    if meta.is_file() {
+        // Single-JAR input.
+        let bytes = std::fs::read(&input_path)
+            .with_context(|| format!("reading JAR {}", input_path.display()))?;
+        if bytes.is_empty() {
+            bail!("{} is empty", input_path.display());
+        }
+        Ok((input_path, vec![embedded_file(bytes)]))
+    } else if meta.is_dir() {
+        // Multi-JAR input: scan the directory for `*.jar`, sort by
+        // filename for determinism.
+        let mut jar_paths: Vec<PathBuf> = std::fs::read_dir(&input_path)
+            .with_context(|| format!("reading directory {}", input_path.display()))?
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                let path = entry.path();
+                if path.is_file()
+                    && path.extension().and_then(|e| e.to_str()) == Some("jar")
+                {
+                    Some(path)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        jar_paths.sort();
+
+        if jar_paths.is_empty() {
+            bail!(
+                "no *.jar files found in {} (--input directory must contain at least one JAR)",
+                input_path.display()
+            );
+        }
+
+        let mut jars = Vec::with_capacity(jar_paths.len());
+        for jar_path in &jar_paths {
+            let bytes = std::fs::read(jar_path)
+                .with_context(|| format!("reading JAR {}", jar_path.display()))?;
+            if bytes.is_empty() {
+                bail!("{} is empty", jar_path.display());
+            }
+            jars.push(embedded_file(bytes));
+        }
+        eprintln!(
+            "snug: indexed {} JAR(s) from {}",
+            jars.len(),
+            input_path.display()
+        );
+        Ok((input_path, jars))
+    } else {
+        bail!(
+            "{} is neither a regular file nor a directory",
+            input_path.display()
+        );
+    }
 }
 
 fn load_embedded_file(path: &std::path::Path, label: &str) -> Result<EmbeddedFile> {
@@ -101,43 +229,102 @@ fn load_embedded_file(path: &std::path::Path, label: &str) -> Result<EmbeddedFil
     Ok(embedded_file(bytes))
 }
 
-fn default_name_from_jar(jar: &std::path::Path) -> Option<String> {
-    let stem = jar.file_stem()?.to_str()?;
+fn default_name_from_input(path: &std::path::Path) -> Option<String> {
+    let stem = if path.is_dir() {
+        path.file_name()?.to_str()?
+    } else {
+        path.file_stem()?.to_str()?
+    };
     if stem.is_empty() {
         return None;
     }
     Some(stem.to_owned())
 }
 
-/// Resolve the final `.exe` output path from the CLI args.
+/// Parse a `--splash-max` value.
 ///
-/// Default: `<jar-stem>.exe` next to the input JAR.
-pub fn output_path(cli: &Cli) -> PathBuf {
-    match &cli.output {
-        Some(p) => p.clone(),
-        None => match &cli.jar {
-            Some(j) => j.with_extension("exe"),
-            None => PathBuf::from("App.exe"),
-        },
+/// Accepts `<W>x<H>` (e.g. `640x360`) or `off`/`none`/`unlimited`
+/// (case-insensitive) to disable the warning. `None` returned by this
+/// helper means "no max, never warn" (the `off` path); `Some((w, h))`
+/// means the warning fires when the source PNG exceeds either bound.
+fn parse_splash_max(value: &str) -> Option<(u32, u32)> {
+    let v = value.trim();
+    if v.is_empty() {
+        return Some((640, 360));
+    }
+    let low = v.to_ascii_lowercase();
+    if matches!(low.as_str(), "off" | "none" | "unlimited" | "disable" | "no" | "false") {
+        return None;
+    }
+    let (w_str, h_str) = v
+        .split_once('x')
+        .or_else(|| v.split_once('X'))
+        .or_else(|| v.split_once('×'))
+        .or_else(|| v.split_once(' '))?;
+    let w: u32 = w_str.trim().parse().ok()?;
+    let h: u32 = h_str.trim().parse().ok()?;
+    if w == 0 || h == 0 {
+        return None;
+    }
+    Some((w, h))
+}
+
+/// Emit a build-time warning if the decoded splash dimensions exceed
+/// the `--splash-max` bounds. No-op when the value parses to
+/// `off`/`none` or anything that disables the cap.
+fn check_splash_dimensions(width: u32, height: u32, max_value: &str) {
+    let max = match parse_splash_max(max_value) {
+        Some(m) => m,
+        None => return,
+    };
+    if width > max.0 || height > max.1 {
+        eprintln!(
+            "snug: warning: splash PNG is {width}x{height}, exceeds recommended max {}x{}",
+            max.0, max.1
+        );
+        eprintln!(
+            "snug: note:    the launcher renders at native pixel size (often looks oversized at >{}x{})",
+            max.0, max.1
+        );
+        eprintln!(
+            "snug: note:    silence with --splash-max off, or customise with --splash-max <WxH>"
+        );
     }
 }
 
-/// Build the final Windows `.exe` by concatenating the precompiled
-/// stub launcher with the encoded snug payload, then stamping icon /
-/// version-resource / manifest metadata via the in-process [`editpe`]
-/// library.
+/// Resolve the final `.exe` output path from the CLI args.
 ///
-/// Returns the path that was actually written.
+/// Default: `<input-stem>.exe` next to the input JAR / directory.
+pub fn output_path(cli: &Cli) -> PathBuf {
+    match &cli.output {
+        Some(p) => p.clone(),
+        None => {
+            let default_path = match (&cli.jar, &cli.input) {
+                (Some(j), None) => Some(j.with_extension("exe")),
+                (None, Some(i)) => Some(i.with_extension("exe")),
+                _ => None,
+            };
+            default_path.unwrap_or_else(|| PathBuf::from("App.exe"))
+        }
+    }
+}
+
+/// Build the final Windows `.exe`.
+///
+/// v2 (slice 4): the encoded payload is embedded as an `RT_RCDATA`
+/// resource entry (named `"SNUGEMBD"`) inside the precompiled stub's
+/// resource directory, alongside the optional icon, application
+/// manifest, and always-stamped version info. There is no overlay —
+/// the file ends at the last PE section.
+///
+/// The launcher locates the payload at runtime via
+/// [`crate::payload_locator::find_in_file`], which parses the running
+/// EXE's resource directory and reads the `RT_RCDATA` entry.
 pub fn build_exe(cli: &Cli, payload: &SnugPayload) -> Result<PathBuf> {
     let output = output_path(cli);
 
     let embedded = SnugEmbedded::new(payload.clone());
     let encoded = encode(&embedded).context("encoding snug payload")?;
-
-    let total_size = STUB_BYTES.len() + encoded.len();
-    let mut bytes = Vec::with_capacity(total_size);
-    bytes.extend_from_slice(STUB_BYTES);
-    bytes.extend_from_slice(&encoded);
 
     if let Some(parent) = output.parent() {
         if !parent.as_os_str().is_empty() {
@@ -146,24 +333,39 @@ pub fn build_exe(cli: &Cli, payload: &SnugPayload) -> Result<PathBuf> {
         }
     }
 
-    std::fs::write(&output, &bytes)
+    // Open the stub as a PE image so we can mutate its resource
+    // directory in place.
+    let mut image = Image::parse(STUB_BYTES).context("parsing embedded stub as PE image")?;
+
+    let mut resources = image
+        .resource_directory()
+        .cloned()
+        .unwrap_or_default();
+
+    // Embed the snug payload as an RT_RCDATA resource entry.
+    resources
+        .set_rcdata(PAYLOAD_RESOURCE_NAME, encoded.clone())
+        .context("embedding snug payload as RT_RCDATA resource")?;
+
+    // Stamp icon / manifest / version from CLI args.
+    let plan = ResourcePlan::from_cli(cli);
+    plan.apply(&mut resources, &embedded)
+        .context("stamping icon / manifest / version resources")?;
+
+    image
+        .set_resource_directory(resources)
+        .context("installing resource directory onto stub image")?;
+    image
+        .write_file(&output)
         .with_context(|| format!("writing EXE to {}", output.display()))?;
 
+    let final_size = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
     eprintln!(
-        "snug: wrote {} ({} bytes; stub {} + payload {})",
+        "snug: wrote {} ({} bytes; payload {} as RT_RCDATA)",
         output.display(),
-        bytes.len(),
-        STUB_BYTES.len(),
-        encoded.len()
+        final_size,
+        encoded.len(),
     );
-
-    // In-process resource stamping (editpe). Version info is always
-    // stamped from app metadata; icon and manifest are optional.
-    let plan = ResourcePlan::from_cli(cli);
-    if plan.should_run() {
-        plan.run(&output, &embedded)
-            .with_context(|| format!("stamping PE resources on {}", output.display()))?;
-    }
 
     Ok(output)
 }

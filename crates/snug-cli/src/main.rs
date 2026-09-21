@@ -45,9 +45,10 @@ fn run() -> Result<()> {
         eprintln!("snug: loaded options from {}", p.display());
     }
 
-    // No JAR supplied: print help + snug's own version, exit 0.
+    // No input source supplied (positional `[JAR]` or `--input`):
+    // print help + snug's own version, exit 0.
     // (clap's own `--help` is handled automatically by ArgAction::Help.)
-    if cli.jar.is_none() {
+    if cli.jar.is_none() && cli.input.is_none() {
         print_help_with_version();
         return Ok(());
     }
@@ -86,6 +87,7 @@ fn dry_run(cli: &Cli, embedded: &SnugEmbedded) -> Result<()> {
         "  jar:         {}",
         cli.jar
             .as_ref()
+            .or(cli.input.as_ref())
             .map_or("(none)".into(), |p| p.display().to_string())
     );
     println!("  output exE:  {}", output.display());
@@ -111,7 +113,11 @@ fn dry_run(cli: &Cli, embedded: &SnugEmbedded) -> Result<()> {
         "  splash:      {}",
         if payload.config.splash.is_some() { "yes" } else { "no" }
     );
-    println!("  jar sha256:  {}", hex_lower(&payload.jar.sha256));
+    println!(
+        "  jars:        {} (first sha256: {})",
+        payload.jars.len(),
+        hex_lower(&payload.jars[0].sha256)
+    );
     println!("  resources:   editpe (icon + version + manifest if set)");
     println!("  stub bytes:  {}", snug_cli::stub::STUB_BYTES.len());
     println!(

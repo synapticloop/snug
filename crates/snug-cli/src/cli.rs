@@ -29,7 +29,28 @@ use clap::Parser;
 )]
 pub struct Cli {
     /// Input fat JAR file. Omit to print help + version.
+    ///
+    /// Equivalent to `--input <jar>`; the positional form is kept for
+    /// shell convenience. `--input` and the positional are mutually
+    /// exclusive — supply one or the other.
     pub jar: Option<PathBuf>,
+
+    /// Input source — either a single fat-JAR file or a directory
+    /// containing one or more JARs.
+    ///
+    /// When the path is a file, it is wrapped as a single-JAR launcher
+    /// (identical to the positional `[JAR]` argument). When the path is
+    /// a directory, every `*.jar` directly inside it is scanned, sorted
+    /// by name, and embedded into the launcher as a multi-JAR classpath;
+    /// the runtime launcher extracts them all to its per-user cache and
+    /// concatenates them into `-classpath`. Use `--main-class` to
+    /// override the manifest's `Main-Class` for multi-JAR builds.
+    ///
+    /// `--input` and the positional `[JAR]` argument are mutually
+    /// exclusive; supply one or the other. Suitable for `snug.options`
+    /// so the JAR location doesn't need to live on the command line.
+    #[arg(long = "input", value_name = "JAR|DIR", conflicts_with = "jar")]
+    pub input: Option<PathBuf>,
 
     /// Output Windows executable path.
     ///
@@ -81,6 +102,13 @@ pub struct Cli {
     pub manifest: Option<PathBuf>,
 
     /// PNG splash image shown by the native launcher before the JVM starts.
+    ///
+    /// The PNG is embedded verbatim into the EXE and rendered at its
+    /// native pixel size, centred on the primary monitor. Recommended
+    /// for a branded splash: somewhere between `480x270` and
+    /// `640x360`. Anything bigger triggers a build-time warning
+    /// (see `--splash-max`); anything smaller renders fine but may
+    /// look lost on high-DPI displays.
     #[arg(long = "splash", value_name = "PNG")]
     pub splash: Option<PathBuf>,
 
@@ -90,6 +118,26 @@ pub struct Cli {
     /// duration elapses, whichever is later. Defaults to `1500`.
     #[arg(long = "splash-ms", value_name = "MS", default_value_t = 1_500)]
     pub splash_ms: u32,
+
+    /// Maximum recommended splash dimensions, or `off` to silence the
+    /// size warning at build time.
+    ///
+    /// Format: `<W>x<H>` (e.g. `640x360`, `800x600`). When the supplied
+    /// `--splash` PNG is wider or taller than this, snug emits a
+    /// build-time warning telling you the launcher will render at
+    /// native size (which usually looks oversized). The launcher does
+    /// not rescale the image — this is purely advisory.
+    ///
+    /// Set to `off`, `none`, or `unlimited` (case-insensitive) to
+    /// disable the warning without changing dimensions. Use a custom
+    /// `WxH` to raise the threshold; e.g. `--splash-max 1920x1080`
+    /// for a full-screen splash.
+    #[arg(
+        long = "splash-max",
+        value_name = "WxH|off",
+        default_value = "640x360"
+    )]
+    pub splash_max: String,
 
     /// Extra JVM option forwarded to `JNI_CreateJavaVM`.
     ///

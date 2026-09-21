@@ -23,7 +23,7 @@ MyApp-fat.jar + metadata + icon + (splash)
             ├── optional splash
             ├── locate Java 25+ (JAVA_HOME, JDK_HOME, PATH, registry, common)
             ├── locate jvm.dll
-            ├── extract/cache fat JAR under %LOCALAPPDATA%\<company>\<app>\snug\<sha256>\
+            ├── extract/cache fat JAR under %LOCALAPPDATA%\snug\<company>\<app>\<sha256>\
             ├── load jvm.dll directly via JNI
             ├── JNI_CreateJavaVM(...)
             └── invoke Java main class

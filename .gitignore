@@ -1,2 +1,5 @@
 /target
 /snug-javafx-demo.exe
+/assets/snug-javafx-demo.exe
+/assets/snug-javafx-demo-*.exe
+*.err

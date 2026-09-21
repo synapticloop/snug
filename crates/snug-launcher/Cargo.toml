@@ -27,6 +27,7 @@ zip = { workspace = true }
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }
 jni = { workspace = true }
+editpe = { workspace = true }
 
 # A precompiled stub launcher is cross-compiled from macOS / Linux via
 # `cargo zigbuild` and committed at bin/launcher-stub.exe. Snug-cli's

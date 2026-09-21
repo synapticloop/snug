@@ -21,7 +21,7 @@
 
 ```
 snug/
-├── assets/snug-logo.png          # 1254×1254, centred in README
+├── assets/snug-icon.png          # 1254×1254, centred in README
 ├── bin/launcher-stub.exe         # 454 KB, PE32+ GUI x86-64, committed
 ├── crates/
 │   ├── snug-format/              # embedded-payload types + postcard codec
@@ -138,7 +138,7 @@ three known ways:
 
 ### 4. Per-user cache + old-version cleanup — deferred
 
-The cache layout (`%LOCALAPPDATA%\<company>\<name>\snug\<jar-sha256>\`)
+The cache layout (`%LOCALAPPDATA%\snug\<company>\<app>\<jar-sha256>\`)
 is in place in `crates/snug-launcher/src/cache.rs`. What's missing:
 
 - Old-version cleanup at startup (scan sibling sha256 dirs, prune

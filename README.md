@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/snug-logo.png" alt="snug" width="512">
+<img src="assets/snug-splash.png" alt="snug" width="512">
 
 # snug
 
@@ -64,6 +64,11 @@ snug app.jar -o App.exe --jvm-arg=-Xms256m --jvm-arg=-Xmx2g \
 # Show a PNG splash before the JVM starts (dismissed on ready or after --splash-ms):
 snug app.jar -o App.exe --splash assets/splash.png --splash-ms 2500
 
+# Pass the JAR via `--input` (also accepts a directory of JARs for a multi-JAR
+# classpath; Main-Class is read from the first JAR's manifest):
+snug --input path/to/app.jar  -o App.exe
+snug --input path/to/lib-dir/ -o App.exe --main-class com.example.Main
+
 # Inspect what would be built without writing anything:
 snug app.jar -o App.exe --dry-run
 
@@ -72,12 +77,15 @@ snug app.jar -o App.exe --dry-run
 snug app.jar --emit-payload
 
 # Use a `snug.options` file for default settings (CLI flags always override).
-# Each line is parsed as if it were on the command line; `#` is a comment:
+# Each line is parsed as if it were on the command line; `#` is a comment.
+# `--input` (file or directory) and every other flag can live here too,
+# so the JAR location doesn't have to be on the command line:
 #   # snug.options (in cwd)
+#   --input path/to/app.jar         # or path/to/lib-dir/
 #   --name "My App"
 #   --company "SynapticLoop"
 #   --min-java 25
-snug app.jar -o App.exe --name "Different Name"   # --name overrides the file
+snug -o App.exe --name "Different Name"   # --name overrides the file
 
 # Snug's own version (distinct from --version, which sets the app's version):
 snug --snug-version
@@ -89,7 +97,7 @@ The produced `.exe` is a 64-bit Windows GUI binary that:
 - displays as a Windows GUI executable (no console window),
 - on launch scans itself for the `SNUGEMBD` trailer, decodes the
   postcard payload, extracts the JAR to
-  `%LOCALAPPDATA%\<company>\<name>\snug\<jar-sha256>\app.jar`, locates
+  `%LOCALAPPDATA%\snug\<company>\<name>\<jar-sha256>\app.jar`, locates
   a Java 25+ install + `jvm.dll`, and invokes the Java `main` class.
 
 ## Demo
@@ -103,7 +111,7 @@ cargo build --release -p snug-cli
     -o snug-javafx-demo.exe `
     --name "Snug JavaFX Demo" --company "SynapticLoop" --version 0.1.0 `
     --description "Snug JavaFX demo launcher" --copyright "© SynapticLoop" `
-    --icon assets\snug-logo.png
+    --icon assets\snug-icon.png
 ```
 
 The JAR's `Main-Class` (`synapticloop.snugjavafxdemo.HelloApplication`)
@@ -118,7 +126,7 @@ snug/
 ├── HANDOFF.md                  # session-end notes for the next agent
 ├── README.md                   # this file
 ├── assets/
-│   ├── snug-logo.png           # 1254×1254, used by README + --icon examples
+│   ├── snug-icon.png           # 1254×1254, used by README + --icon examples
 │   └── snug-javafx-demo.jar    # JavaFX demo fat JAR (Main-Class read from manifest)
 ├── bin/
 │   └── launcher-stub.exe       # precompiled cross-platform stub (PE32+ GUI x86-64, ~454 KB)
@@ -186,8 +194,8 @@ Notable test binaries:
 ## CLI surface (canonical)
 
 ```text
-snug <jar> [-o EXE] [--name ...] [--company ...] [--version ...]
-           [--description ...] [--copyright ...]
+snug [<jar>] [-o EXE] [--input JAR|DIR] [--name ...] [--company ...]
+           [--version ...] [--description ...] [--copyright ...]
            [--min-java N] [--main-class CLASS]
            [--icon PNG/ICO] [--manifest XML] [--splash PNG] [--splash-ms MS]
            [--jvm-arg ARG]...
@@ -208,3 +216,5 @@ identically on macOS, Linux, and Windows.
 ## Licence
 
 Dual-licensed under MIT OR Apache-2.0, at your option.
+
+<div align="center"><img src="assets/snug-icon.png" alt="snug" width="256"></div>

@@ -4,8 +4,6 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::EmbeddedFile;
-
 /// Top-level launcher behaviour and metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LauncherConfig {
@@ -69,10 +67,33 @@ pub struct SplashConfig {
     /// is later.
     pub duration_ms: u32,
 
-    /// PNG image bytes. The builder does not need to convert this to BMP;
-    /// the launcher uses the Windows GDI+ / WIC APIs to render PNG
-    /// directly.
-    pub image: EmbeddedFile,
+    /// Pre-processed splash pixels, ready for the Windows layered-window
+    /// DIB. Carries explicit dimensions and a BGRA premultiplied buffer
+    /// — no PNG decoding or colour-space conversion is needed at
+    /// runtime.
+    ///
+    /// The `snug` CLI converts the user-supplied PNG into this form at
+    /// build time; the launcher just memcpy's `bytes` into a DIB and
+    /// calls `UpdateLayeredWindow`. This keeps the launcher free of an
+    /// image-codec dependency and removes per-launch PNG decode cost.
+    pub image: SplashImage,
+}
+
+/// Pre-processed splash pixels for the launcher's `UpdateLayeredWindow`
+/// path.
+///
+/// Wire format note: `bytes` is row-major, **BGRA premultiplied by
+/// alpha**. Windows' 32-bit DIB + `AC_SRC_ALPHA` blend expects this
+/// layout. Generating it is the CLI's job; consumers (the launcher)
+/// just memcpy.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SplashImage {
+    /// Image width in pixels.
+    pub width: u32,
+    /// Image height in pixels.
+    pub height: u32,
+    /// Row-major BGRA bytes, premultiplied, `width * height * 4` long.
+    pub bytes: Vec<u8>,
 }
 
 /// Runtime behaviour knobs.
@@ -89,7 +110,7 @@ pub struct LauncherBehavior {
     ///
     /// Default layout on Windows:
     /// ```text
-    /// %LOCALAPPDATA%\<company>\<name>\snug\<jar-sha256>\app.jar
+    /// %LOCALAPPDATA%\snug\<company>\<name>\<jar-sha256>\app.jar
     /// ```
     /// Set this to inject a custom cache root (mostly useful for tests
     /// and for portable installs).

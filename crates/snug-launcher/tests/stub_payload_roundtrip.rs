@@ -1,25 +1,26 @@
 //! Integration test that takes the real precompiled `launcher-stub.exe`,
-//! appends a snug payload to it, and verifies the locator finds the
-//! payload despite `SNUGEMBD` substrings already living inside the
-//! stub binary.
+//! embeds a snug payload as an `RT_RCDATA` resource entry (slice 4 /
+//! v2 storage), and verifies the locator finds the payload despite
+//! `SNUGEMBD` substrings already living inside the stub binary.
 
 use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
 
+use editpe::Image;
 use snug_format::{
     embedded_file, encode, AppMetadata, LauncherBehavior, LauncherConfig, SnugEmbedded, SnugPayload,
 };
 use snug_launcher::find_in_file;
+use snug_launcher::payload_locator::PAYLOAD_RESOURCE_NAME;
 
 const STUB_PATH: &str = "../../bin/launcher-stub.exe";
 
 #[test]
-fn finds_payload_appended_to_real_stub() {
+fn finds_payload_as_rcdata_resource_on_real_stub() {
     let stub_path = canonicalise(STUB_PATH);
     if !stub_path.exists() {
         eprintln!(
-            "skipping: {} not found (build with `cargo zigbuild`)",
+            "skipping: {} not found (build with `cargo build --release -p snug-launcher`)",
             stub_path.display()
         );
         return;
@@ -41,37 +42,60 @@ fn finds_payload_appended_to_real_stub() {
             splash: None,
             behavior: LauncherBehavior::default(),
         },
-        jar: embedded_file(b"fake jar body".to_vec()),
+        jars: vec![embedded_file(b"fake jar body".to_vec())],
         icon: None,
     };
     let embedded = SnugEmbedded::new(payload);
     let encoded = encode(&embedded).unwrap();
 
-    // Concatenate stub + payload into a temp file.
-    let mut combined = fs::read(&stub_path).expect("read stub");
-    let payload_start = combined.len();
-    combined.extend_from_slice(&encoded);
-    let combined_path = tempdir().join("stubbed-app.exe");
-    fs::write(&combined_path, &combined).expect("write combined");
+    // Parse the stub, embed the payload as RT_RCDATA "SNUGEMBD", write.
+    let stub_bytes = fs::read(&stub_path).expect("read stub");
+    let mut image = Image::parse(&stub_bytes).expect("parse stub as PE");
+    let mut resources = image
+        .resource_directory()
+        .cloned()
+        .unwrap_or_default();
+    resources
+        .set_rcdata(PAYLOAD_RESOURCE_NAME, encoded.clone())
+        .expect("set_rcdata");
+    image
+        .set_resource_directory(resources)
+        .expect("set_resource_directory");
 
-    // The stub itself contains 5+ instances of the SNUGEMBD magic in
-    // its data section — the locator must skip those and find only the
-    // appended payload.
+    let combined_path = tempdir().join("stubbed-app.exe");
+    fs::write(&combined_path, image.data()).expect("write combined");
+
+    // The locator must read the payload back out of the resource
+    // directory. The stub itself contains false-positive `SNUGEMBD`
+    // substrings in its data section — these are no longer relevant in
+    // v2 (the locator doesn't scan for them) but the test still
+    // exercises the full file round-trip.
     let found = find_in_file(&combined_path).expect("scan");
     let found = found.expect("payload must be located");
     assert_eq!(found.payload.config.app.name, "End-to-end");
-    assert_eq!(found.payload.jar.bytes, b"fake jar body");
+    assert_eq!(found.payload.jars[0].bytes, b"fake jar body");
     assert_eq!(
         found.payload.config.jvm_args,
         vec!["-Xmx512m".to_string()]
     );
+}
 
-    // Sanity: the magic of the located payload should sit at the stub's
-    // tail boundary (payload_start), not inside the stub binary.
-    // We can't directly inspect `payload_start` from `SnugEmbedded`, but
-    // we know the locator found the payload — the stub's data-section
-    // matches all failed decode so the only valid one is at the tail.
-    let _ = payload_start;
+#[test]
+fn bare_stub_returns_none() {
+    let stub_path = canonicalise(STUB_PATH);
+    if !stub_path.exists() {
+        eprintln!(
+            "skipping: {} not found",
+            stub_path.display()
+        );
+        return;
+    }
+
+    // The bare stub has no resource directory entry, so the locator
+    // should return None — this is the "no payload appended yet" path
+    // that triggers the friendly stub error at runtime.
+    let found = find_in_file(&stub_path).expect("scan");
+    assert!(found.is_none(), "bare stub should report no payload");
 }
 
 fn canonicalise(rel: &str) -> PathBuf {
@@ -92,20 +116,4 @@ fn tempdir() -> PathBuf {
     let dir = base.join(unique);
     fs::create_dir_all(&dir).unwrap();
     dir
-}
-
-#[allow(dead_code)]
-fn _unused() {
-    let _ = std::io::stdout();
-    let _: Box<dyn Write> = Box::new(NullWriter);
-}
-
-struct NullWriter;
-impl Write for NullWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        Ok(buf.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
 }

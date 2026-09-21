@@ -10,3 +10,8 @@
 --description "Snug JavaFX demo launcher"
 --copyright "© SynapticLoop"
 --min-java 25
+--main-class synapticloop.snugjavafxdemo.Launcher
+--splash assets/snug-splash.png
+--splash-ms 2000
+--icon assets/snug-icon.png
+--output assets/snug-javafx-demo.exe

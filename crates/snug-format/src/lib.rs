@@ -30,7 +30,7 @@ pub mod payload;
 
 pub use codec::{decode, decode_payload, embedded_file, encode, encode_payload, sha256};
 pub use config::{
-    AppMetadata, JvmDiscovery, LauncherBehavior, LauncherConfig, SplashConfig,
+    AppMetadata, JvmDiscovery, LauncherBehavior, LauncherConfig, SplashConfig, SplashImage,
 };
 pub use embedded::{SnugEmbedded, FORMAT_VERSION, MAGIC};
 pub use error::FormatError;

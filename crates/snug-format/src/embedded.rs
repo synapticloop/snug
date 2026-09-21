@@ -14,7 +14,17 @@ pub const MAGIC: &[u8; 8] = b"SNUGEMBD";
 
 /// Maximum format version this build understands. Bump when the wire format
 /// changes incompatibly.
-pub const FORMAT_VERSION: u16 = 1;
+///
+/// v2 (2026-09): [`crate::SnugPayload`] switched from a single `jar:
+/// EmbeddedFile` to `jars: Vec<EmbeddedFile>` to support multi-JAR
+/// classpath mode (`snug --input <dir-of-jars>`).
+///
+/// v3 (2026-09): [`crate::SplashConfig::image`] changed from
+/// `EmbeddedFile` (PNG bytes) to [`crate::SplashImage`] (pre-processed
+/// BGRA premultiplied pixels + dimensions). The CLI now does the PNG →
+/// BGRA conversion at build time; the launcher no longer carries an
+/// image decoder dependency.
+pub const FORMAT_VERSION: u16 = 3;
 
 /// A snug payload wrapped with the metadata needed to locate, validate, and
 /// version-check it at runtime.

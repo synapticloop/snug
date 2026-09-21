@@ -1,20 +1,25 @@
-//! Per-user cache directory for extracted fat JARs.
+//! Per-user cache for extracted JARs.
 //!
 //! Default layout on Windows:
 //!
 //! ```text
-//! %LOCALAPPDATA%\<company>\<name>\snug\<jar-sha256>\app.jar
+//! %LOCALAPPDATA%\snug\<company>\<app>\<jar-sha256>\app.jar
 //! ```
 //!
-//! The SHA-256 of the JAR is the cache key: changing the application
-//! automatically yields a new cache location, so old versions can be
-//! cleaned up without affecting a running install.
+//! All snug-managed data lives under a top-level `snug\` namespace so
+//! it's easy to find (`Remove-Item -Recurse %LOCALAPPDATA%\snug\<co>\<app>`)
+//! and doesn't pollute the wrapped app's own AppData directory. We use
+//! `%LOCALAPPDATA%` (not `%APPDATA%`) because caches are by definition
+//! regenerable from the source-of-truth EXE and shouldn't roam with
+//! the user profile. Each JAR gets its own SHA-256-keyed subdirectory
+//! so multi-JAR builds can have collision-free filenames and unchanged
+//! JARs stay cached across rebuilds.
 
 use std::path::{Path, PathBuf};
 
 use snug_format::AppMetadata;
 
-/// Default subdirectory under the cache root.
+/// Default top-level subdirectory under the per-user data root.
 pub const SNUG_SUBDIR: &str = "snug";
 
 /// Default JAR filename inside a cache entry.
@@ -23,10 +28,9 @@ pub const CACHED_JAR_NAME: &str = "app.jar";
 /// Compute the per-user cache root for the given app metadata.
 ///
 /// Resolution order:
-/// 1. `config.behavior.cache_dir` if set (explicit override).
-/// 2. `config.app.cache_dir` if set (per-app override).
-/// 3. `%LOCALAPPDATA%\<company>\<name>\snug\` on Windows.
-/// 4. `$HOME/.cache/<company>/<name>/snug/` on other platforms (fallback).
+/// 1. Explicit override (passed via `behavior.cache_dir` or `app.cache_dir`).
+/// 2. `%LOCALAPPDATA%\snug\<company>\<app>\` on Windows.
+/// 3. `$HOME/.cache/snug/<company>/<app>/` on other platforms (fallback).
 pub fn cache_root(app: &AppMetadata, override_root: Option<&Path>) -> PathBuf {
     if let Some(root) = override_root {
         return root.to_path_buf();
@@ -36,7 +40,7 @@ pub fn cache_root(app: &AppMetadata, override_root: Option<&Path>) -> PathBuf {
     let name = sanitize_component(&app.name);
 
     let base = platform_local_app_data().unwrap_or_else(|| fallback_cache_base());
-    base.join(&company).join(&name).join(SNUG_SUBDIR)
+    base.join(SNUG_SUBDIR).join(&company).join(&name)
 }
 
 /// Compute the full path to the cached JAR for a given SHA-256 digest.
@@ -128,6 +132,36 @@ mod tests {
         let override_path = PathBuf::from("/tmp/x");
         let root = cache_root(&app("Acme", "Demo"), Some(&override_path));
         assert_eq!(root, override_path);
+    }
+
+    #[test]
+    fn cache_root_namespaces_under_snug_subdir() {
+        // With an explicit override the helper should return the
+        // override untouched; without one, the path must contain the
+        // top-level `snug` segment before the company / app segments.
+        let app = app("Acme", "Demo");
+        let root = cache_root(&app, None);
+        let parts: Vec<_> = root
+            .components()
+            .filter_map(|c| c.as_os_str().to_str())
+            .collect();
+        let snug_idx = parts
+            .iter()
+            .position(|p| *p == SNUG_SUBDIR)
+            .expect("snug namespace segment must be present");
+        let company_idx = parts
+            .iter()
+            .position(|p| *p == "Acme")
+            .expect("company segment must be present");
+        let app_idx = parts
+            .iter()
+            .position(|p| *p == "Demo")
+            .expect("app segment must be present");
+        assert!(
+            snug_idx < company_idx && company_idx < app_idx,
+            "expected snug/<company>/<app> ordering, got {:?}",
+            parts
+        );
     }
 
     #[test]

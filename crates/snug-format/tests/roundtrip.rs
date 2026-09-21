@@ -1,8 +1,9 @@
 //! Integration roundtrip test for snug-format.
 
 use snug_format::{
-    decode, embedded_file, encode, AppMetadata, EmbeddedFile, JvmDiscovery, LauncherBehavior,
-    LauncherConfig, SnugEmbedded, SnugPayload, SplashConfig, FORMAT_VERSION, MAGIC,
+    decode, embedded_file, encode, AppMetadata, EmbeddedFile, JvmDiscovery,
+    LauncherBehavior, LauncherConfig, SnugEmbedded, SnugPayload, SplashConfig,
+    SplashImage, FORMAT_VERSION, MAGIC,
 };
 
 fn sample_config() -> LauncherConfig {
@@ -23,7 +24,18 @@ fn sample_config() -> LauncherConfig {
         ],
         splash: Some(SplashConfig {
             duration_ms: 1_500,
-            image: embedded_file(b"\x89PNG\r\n\x1a\nfake-png".to_vec()),
+            // Pretend a 2×2 fully-opaque red splash. Sized down
+            // from a real build-time conversion for test brevity.
+            image: SplashImage {
+                width: 2,
+                height: 2,
+                bytes: vec![
+                    0x00, 0x00, 0xFF, 0xFF, // B=0 G=0 R=255 A=255
+                    0x00, 0x00, 0xFF, 0xFF,
+                    0x00, 0x00, 0xFF, 0xFF,
+                    0x00, 0x00, 0xFF, 0xFF,
+                ],
+            },
         }),
         behavior: LauncherBehavior {
             forward_args: true,
@@ -43,7 +55,7 @@ fn sample_config() -> LauncherConfig {
 fn sample_payload() -> SnugPayload {
     SnugPayload {
         config: sample_config(),
-        jar: embedded_file(b"PK\x03\x04fake-fat-jar".to_vec()),
+        jars: vec![embedded_file(b"PK\x03\x04fake-fat-jar".to_vec())],
         icon: Some(EmbeddedFile {
             sha256: [0u8; 32],
             bytes: b"\x00\x00\x01\x00fake-ico".to_vec(),

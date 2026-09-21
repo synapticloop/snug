@@ -21,7 +21,7 @@ use editpe::constants::{
     VS_FIXEDFILEINFO_VERSION,
 };
 use editpe::types::{FixedFileInfo, VersionU16, VersionU32};
-use editpe::{Image, VersionInfo, VersionStringTable};
+use editpe::{Image, ResourceDirectory, VersionInfo, VersionStringTable};
 
 use snug_format::{AppMetadata, SnugEmbedded};
 
@@ -59,19 +59,20 @@ impl ResourcePlan {
         true
     }
 
-    /// Parse `exe`, apply the planned stamp, and write the result back
-    /// in-place. The launcher stub's existing subsystem (GUI) is
-    /// preserved explicitly so a future stub swap can't silently change
-    /// the resulting binary's launch behaviour.
-    pub fn run(&self, exe: &Path, payload: &SnugEmbedded) -> Result<()> {
-        let mut image = Image::parse_file(exe)
-            .with_context(|| format!("parsing {} as a PE image", exe.display()))?;
-
-        let mut resources = image
-            .resource_directory()
-            .cloned()
-            .unwrap_or_default();
-
+    /// Apply the planned icon / manifest / version stamp directly to
+    /// an in-memory `ResourceDirectory`. The caller is responsible for
+    /// installing the resulting directory back onto a PE image and
+    /// writing it to disk.
+    ///
+    /// v2 (slice 4): used by [`crate::build::build_exe`] after the snug
+    /// payload has been embedded as an `RT_RCDATA` resource entry, so
+    /// the version / icon / manifest all end up in the same resource
+    /// directory that the launcher will read at runtime.
+    pub fn apply(
+        &self,
+        resources: &mut ResourceDirectory,
+        payload: &SnugEmbedded,
+    ) -> Result<()> {
         if let Some(icon_path) = &self.icon {
             let icon_str = icon_path.to_str().ok_or_else(|| {
                 anyhow::anyhow!(
@@ -107,6 +108,24 @@ impl ResourcePlan {
         resources
             .set_version_info(&version_info)
             .context("embedding VERSIONINFO from app metadata")?;
+
+        Ok(())
+    }
+
+    /// Parse `exe`, apply the planned stamp, and write the result back
+    /// in-place. Used by the v1 builder path (overlay-based) and by
+    /// ad-hoc re-stamping of an existing EXE; the v2 build path calls
+    /// [`Self::apply`] directly instead.
+    pub fn run(&self, exe: &Path, payload: &SnugEmbedded) -> Result<()> {
+        let mut image = Image::parse_file(exe)
+            .with_context(|| format!("parsing {} as a PE image", exe.display()))?;
+
+        let mut resources = image
+            .resource_directory()
+            .cloned()
+            .unwrap_or_default();
+
+        self.apply(&mut resources, payload)?;
 
         // Defensive: ensure the produced binary stays a Windows GUI
         // app even if we ever swap stubs.

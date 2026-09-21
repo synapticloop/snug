@@ -5,7 +5,7 @@ use std::io::Read;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 
-use jni::objects::{JObjectArray, JString, JValue};
+use jni::objects::{JObject, JObjectArray, JString, JValue};
 use jni::signature::RuntimeMethodSignature;
 use jni::strings::JNIString;
 use jni::{InitArgsBuilder, JNIVersion, JavaVM};
@@ -22,6 +22,7 @@ use snug_format::{JvmDiscovery, SnugEmbedded};
 
 use crate::cache;
 use crate::manifest;
+use crate::splash;
 use crate::LauncherError;
 
 /// Orchestrate the launch: extract JAR to cache, locate JVM, load
@@ -32,16 +33,30 @@ use crate::LauncherError;
 /// `javaw.exe`.
 pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherError> {
     let config = &embedded.payload.config;
+    let jars = &embedded.payload.jars;
 
-    // 1. Extract the JAR to the per-user cache.
+    if jars.is_empty() {
+        return Err(LauncherError::NoMainClass);
+    }
+
+    // 1. Extract every JAR to the per-user cache. Each JAR gets its
+    //    own sha256-keyed subdirectory so multi-JAR builds can have
+    //    collisions-free filenames and the launcher can reuse cached
+    //    entries when only some of the JARs change.
     let cache_root = cache::cache_root(&config.app, config.behavior.cache_dir.as_deref());
-    let jar_dest = cache::cached_jar_path(&cache_root, &embedded.payload.jar.sha256);
-    ensure_cached(&jar_dest, &embedded.payload.jar.bytes)?;
+    let mut cached_paths: Vec<PathBuf> = Vec::with_capacity(jars.len());
+    for jar in jars {
+        let dest = cache::cached_jar_path(&cache_root, &jar.sha256);
+        ensure_cached(&dest, &jar.bytes)?;
+        cached_paths.push(dest);
+    }
+    let primary_jar_dest = cached_paths[0].clone();
 
-    // 2. Resolve the Main-Class.
+    // 2. Resolve the Main-Class. For multi-JAR builds, the first JAR
+    //    is the one whose manifest carries `Main-Class`.
     let main_class_name = match &config.main_class {
         Some(cls) => cls.clone(),
-        None => manifest::read_main_class_required(&jar_dest)?,
+        None => manifest::read_main_class_required(&primary_jar_dest)?,
     };
 
     // 3. Locate a compatible JVM and the `jvm.dll` we'll load.
@@ -59,39 +74,82 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
         Vec::new()
     };
 
-    // 5. Build the JNI InitArgs. The cached JAR is on the classpath so
-    //    `find_class` resolves Main-Class through the system loader.
+    // 5. Build the JNI InitArgs. All cached JARs go on the classpath
+    //    joined by `;` (the Java/Windows separator) so `find_class`
+    //    resolves classes from any of them through the system loader.
+    let classpath = cached_paths
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(";");
     let mut builder = InitArgsBuilder::new().version(JNIVersion::V21);
     for arg in &config.jvm_args {
         builder = builder.option(arg.clone());
     }
-    builder = builder.option(format!("-Djava.class.path={}", jar_dest.display()));
+    builder = builder.option(format!("-Djava.class.path={classpath}"));
     let init_args = builder
         .build()
         .map_err(|e| LauncherError::JniInit(e.to_string()))?;
 
-    // 6. Create the JVM by loading jvm.dll directly.
+    // 6. Show the native splash window before we ask the JVM to start
+    //    loading classes. The launcher dismisses it once
+    //    `attach_current_thread` returns (the JVM is up and JavaFX is
+    //    about to take over the screen). On any error path the
+    //    SplashHandle's `Drop` impl cleans up the window + thread.
+    let splash_handle = match &config.splash {
+        Some(splash_cfg) => match splash::show(
+            splash_cfg.image.width,
+            splash_cfg.image.height,
+            splash_cfg.image.bytes.clone(),
+            splash_cfg.duration_ms,
+        ) {
+            Ok(h) => Some(h),
+            Err(e) => {
+                // Splash is best-effort; never block the launch on a
+                // broken PNG or a GDI hiccup.
+                eprintln!("snug-launcher: warning: failed to show splash: {e}");
+                None
+            }
+        },
+        None => None,
+    };
+
+    // 7. Create the JVM by loading jvm.dll directly.
     let jvm_dll_path = jvm_dll.clone();
     let vm = JavaVM::with_libjvm(init_args, || Ok::<_, jni::errors::StartJvmError>(jvm_dll_path.as_os_str()))
         .map_err(|e| LauncherError::JniCreate(e.to_string()))?;
 
     // 7. Attach the current thread, resolve Main-Class, build the
-    //    String[] args, and invoke `main(String[])` synchronously.
+    //    String[] args, and invoke Java's entry point synchronously.
+    //
+    //    Standard Java SE apps expose a `public static void main(String[])`.
+    //    JavaFX apps only override `start(Stage)` and must be launched via
+    //    `Application.launch(Class, String[])`. If `main` is missing and
+    //    the class extends `javafx.application.Application`, fall through
+    //    to that path.
     let main_class_jni = main_class_name.replace('.', "/");
     let main_class_name_for_err = main_class_name.clone();
     let argv_for_main = argv_strings;
+    // Move the splash handle into the closure so we can dismiss it as
+    // soon as the JVM thread is attached — before `find_class` or
+    // `Application.launch` blocks. The splash stays visible for at
+    // least `duration_ms` from `show()`, then dismisses; that covers
+    // the JNI_CreateJavaVM latency the user was hiding behind it.
+    let mut splash_handle = splash_handle;
 
     let exit_code: i32 = vm
         .attach_current_thread(|env| -> Result<i32, LauncherError> {
+            if let Some(h) = splash_handle.take() {
+                h.dismiss();
+            }
+
             let class = env.find_class(JNIString::new(&main_class_jni)).map_err(|e| {
                 LauncherError::MainClassNotFound(format!("{main_class_name_for_err} ({e})"))
             })?;
 
-            let method_sig = RuntimeMethodSignature::from_str("([Ljava/lang/String;)V")
-                .map_err(|e| LauncherError::JniInvoke(format!("parse main signature: {e}")))?;
-
-            // Build args[] as a String[].
-            let arr: JObjectArray<JString> = if argv_for_main.is_empty() {
+            // Build args[] as a String[]. Empty-arg case still allocates a
+            // zero-length array so we have a real JObject to hand to JNI.
+            let args_arr: JObjectArray<JString> = if argv_for_main.is_empty() {
                 let placeholder = env
                     .new_string("")
                     .map_err(|e| LauncherError::JniInvoke(format!("new_string placeholder: {e}")))?;
@@ -115,14 +173,71 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
                 arr
             };
 
-            // main returns void; treat any successful return as exit code 0.
-            let args_value: JValue = (&arr).into();
-            let result = env.call_static_method(
+            // `JValue` is `Copy` and borrows the JObject, so we can build
+            // it once and reuse across branches.
+            let args_obj: &JObjectArray<JString> = &args_arr;
+            let args_value: JValue = args_obj.into();
+
+            let main_sig = RuntimeMethodSignature::from_str("([Ljava/lang/String;)V")
+                .map_err(|e| LauncherError::JniInvoke(format!("parse main signature: {e}")))?;
+
+            // Try standard `main(String[])` first.
+            let main_method_result = env.get_static_method_id(
                 &class,
                 JNIString::new("main"),
-                method_sig.method_signature(),
-                &[args_value],
+                main_sig.method_signature(),
             );
+
+            let result = match main_method_result {
+                Ok(_) => env.call_static_method(
+                    &class,
+                    JNIString::new("main"),
+                    main_sig.method_signature(),
+                    &[args_value],
+                ),
+                Err(jni::errors::Error::MethodNotFound { .. }) => {
+                    // JavaFX fallback: invoke
+                    //   Application.launch(userClass, args)
+                    // iff the user's class extends javafx.application.Application.
+                    let app_class = env
+                        .find_class(JNIString::new("javafx/application/Application"))
+                        .map_err(|e| {
+                            LauncherError::JniInvoke(format!(
+                                "find javafx.application.Application: {e}"
+                            ))
+                        })?;
+                    let is_fx = env
+                        .is_assignable_from(&app_class, &class)
+                        .map_err(|e| {
+                            LauncherError::JniInvoke(format!(
+                                "isAssignableFrom(Application): {e}"
+                            ))
+                        })?;
+                    if !is_fx {
+                        return Err(LauncherError::NoMainMethod(
+                            main_class_name_for_err.clone(),
+                        ));
+                    }
+                    let launch_sig = RuntimeMethodSignature::from_str(
+                        "(Ljava/lang/Class;[Ljava/lang/String;)V",
+                    )
+                    .map_err(|e| {
+                        LauncherError::JniInvoke(format!("parse launch signature: {e}"))
+                    })?;
+                    let class_obj: &JObject = class.as_ref();
+                    let class_value: JValue = JValue::Object(class_obj);
+                    env.call_static_method(
+                        &app_class,
+                        JNIString::new("launch"),
+                        launch_sig.method_signature(),
+                        &[class_value, args_value],
+                    )
+                }
+                Err(e) => {
+                    return Err(LauncherError::JniInvoke(format!("get main method: {e}")));
+                }
+            };
+
             match result {
                 Ok(_) => Ok(0),
                 Err(jni::errors::Error::MethodNotFound { .. }) => {
@@ -140,9 +255,12 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
             }
         })?;
 
-    // 8. Best-effort JVM teardown. The JNI spec says DestroyJavaVM
+    // 9. Best-effort JVM teardown. The JNI spec says DestroyJavaVM
     //    waits for non-daemon threads; on a clean main() return there
-    //    shouldn't be any.
+    //    shouldn't be any. (The splash handle was moved into the
+    //    attach closure and dismissed from there; if `attach_current_thread`
+    //    was never called because of an earlier failure, its `Drop`
+    //    impl still tears down the splash window + thread.)
     let _ = unsafe { vm.destroy() };
 
     Ok(exit_code as u32)
