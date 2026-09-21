@@ -26,6 +26,13 @@ Rust-based, and open source.
 [exe4j]: https://www.ej-technologies.com/products/exe4j/overview.html
 [Launch4j]: https://launch4j.sourceforge.net/
 
+## Quick Demo
+
+For a quick demo of a JavaFx java demo (with a splashscreen) have a look at 
+and run the `./assets/snug-javafx-demo.exe`. 
+
+<div align="center"><img src="assets/snug-javafx-demo-screenshot.png" alt="snug" width="302"></div>
+
 ## Status
 
 **Pre-alpha.** Slices 1, 3, and 5 are done; the CLI builds a real
