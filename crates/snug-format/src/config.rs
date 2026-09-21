@@ -120,6 +120,18 @@ pub struct LauncherBehavior {
     /// Strategy the launcher uses to locate a compatible JVM.
     #[serde(default)]
     pub jvm_discovery: JvmDiscovery,
+
+    /// When `true` and the JVM lookup fails, the launcher pops up a
+    /// `TaskDialog` and offers to download a compatible Eclipse
+    /// Temurin JDK from `api.adoptium.net`, verifies the SHA-256,
+    /// extracts the zip under `%LOCALAPPDATA%\snug\jdk\<version>\`,
+    /// and retries discovery with the new `JAVA_HOME`.
+    ///
+    /// Default: `false`. Recommended to set via the `--download-jdk`
+    /// CLI flag on the builder so the user is never asked at runtime
+    /// unless the EXE was deliberately built with the opt-in.
+    #[serde(default)]
+    pub auto_download_jdk: bool,
 }
 
 impl Default for LauncherBehavior {
@@ -128,6 +140,7 @@ impl Default for LauncherBehavior {
             forward_args: true,
             cache_dir: None,
             jvm_discovery: JvmDiscovery::default(),
+            auto_download_jdk: false,
         }
     }
 }

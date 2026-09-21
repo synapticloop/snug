@@ -31,13 +31,16 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Registry",
     "Win32_System_Console",
     "Win32_Storage_FileSystem",
-    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Controls",
     "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 jni = { version = "0.22", features = ["invocation"] }
 shell-words = { version = "1" }
 editpe = { version = "0.2", default-features = false, features = ["images"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
+ureq = { version = "2", default-features = false, features = ["native-tls", "gzip"] }
+serde_json = "1"
 
 [patch.crates-io]
 # Local fork of `editpe` with `set_rcdata` / `get_rcdata` methods (snug

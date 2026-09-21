@@ -28,6 +28,11 @@ pub enum LauncherError {
     #[error("`{symbol}` not found in {library}")]
     SymbolNotFound { library: String, symbol: String },
 
+    /// Internal assumption broke during the launch flow (e.g., a
+    /// splash handle was missing when it shouldn't be).
+    #[error("internal: {0}")]
+    InvalidState(&'static str),
+
     #[error("could not build JNI init args: {0}")]
     JniInit(String),
 

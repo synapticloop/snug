@@ -173,4 +173,15 @@ pub struct Cli {
     /// Command-line options override file options.
     #[arg(long = "options", value_name = "PATH")]
     pub options: Option<PathBuf>,
+
+    /// If the launcher can't find a compatible JDK at runtime, pop a
+    /// `TaskDialog` and offer to download Eclipse Temurin from
+    /// `api.adoptium.net`, verify SHA-256, extract to
+    /// `%LOCALAPPDATA%\snug\jdk\<version>\`, and retry.
+    ///
+    /// Off by default — you'd typically build two flavours of your
+    /// EXE: one with the flag (portable, end-user friendly) and one
+    /// without (developer, requires Java pre-installed).
+    #[arg(long = "download-jdk")]
+    pub download_jdk: bool,
 }
