@@ -48,6 +48,7 @@ fn sample_config() -> LauncherConfig {
                 try_registry: true,
                 try_common: true,
             },
+            auto_download_jdk: false,
         },
     }
 }

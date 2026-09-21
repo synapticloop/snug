@@ -24,7 +24,13 @@ pub const MAGIC: &[u8; 8] = b"SNUGEMBD";
 /// BGRA premultiplied pixels + dimensions). The CLI now does the PNG →
 /// BGRA conversion at build time; the launcher no longer carries an
 /// image decoder dependency.
-pub const FORMAT_VERSION: u16 = 3;
+///
+/// v4 (2026-09): [`crate::LauncherBehavior`] gained an
+/// `auto_download_jdk: bool` flag. When `true` and the JVM lookup
+/// fails, the launcher pops up a `TaskDialog` and offers to download
+/// Eclipse Temurin from `api.adoptium.net`, verifies SHA-256, extracts
+/// to `%LOCALAPPDATA%\snug\jdk\<version>\`, and retries discovery.
+pub const FORMAT_VERSION: u16 = 4;
 
 /// A snug payload wrapped with the metadata needed to locate, validate, and
 /// version-check it at runtime.

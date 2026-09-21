@@ -21,6 +21,7 @@ use windows_sys::Win32::UI::Shell::CommandLineToArgvW;
 use snug_format::{JvmDiscovery, SnugEmbedded};
 
 use crate::cache;
+use crate::jdk_install;
 use crate::manifest;
 use crate::splash;
 use crate::LauncherError;
@@ -59,9 +60,43 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
         None => manifest::read_main_class_required(&primary_jar_dest)?,
     };
 
-    // 3. Locate a compatible JVM and the `jvm.dll` we'll load.
-    let jvm_dir = discover_jvm(&config.behavior.jvm_discovery, config.min_java)?
-        .ok_or(LauncherError::JvmNotFound { min_java: config.min_java })?;
+    // 3. Locate a compatible JVM and the `jvm.dll` we'll load. If
+    //    none is found AND `auto_download_jdk` is set, pop a
+    //    `TaskDialog` prompt and offer to download Temurin.
+    let mut jvm_dir = discover_jvm(&config.behavior.jvm_discovery, config.min_java)?;
+    if jvm_dir.is_none() && config.behavior.auto_download_jdk {
+        let install_root = jdk_install_root();
+        let result = jdk_install::maybe_install(
+            // No splash window yet (it's created at step 6) — the
+            // dialog stands alone; `HWND_DESKTOP` keeps it visually
+            // modal to the launcher process.
+            std::ptr::null_mut(),
+            config.min_java,
+            &install_root,
+        );
+        match result {
+            Ok(Some(new_home)) => {
+                // `std::env::set_var` is unsafe in Rust 2024 because
+                // it's racy with `getenv` reads in other threads.
+                // Single-threaded during launch means it's safe in
+                // practice; we wrap in `unsafe` rather than serialise.
+                unsafe {
+                    std::env::set_var("JAVA_HOME", &new_home);
+                }
+                let mut retry = config.behavior.jvm_discovery.clone();
+                retry.explicit = Some(new_home);
+                jvm_dir = discover_jvm(&retry, config.min_java)?;
+            }
+            Ok(None) => {
+                // User cancelled or opened the download page. Fall
+                // through to the standard "no JVM" error below.
+            }
+            Err(e) => {
+                eprintln!("snug-launcher: JDK install flow failed: {e}");
+            }
+        }
+    }
+    let jvm_dir = jvm_dir.ok_or(LauncherError::JvmNotFound { min_java: config.min_java })?;
     let jvm_dll = locate_jvm_dll(&jvm_dir).ok_or_else(|| LauncherError::LibraryLoad {
         library: format!("jvm.dll under {}", jvm_dir.display()),
         message: "no jvm.dll found under bin/server or bin/client".into(),
@@ -264,6 +299,18 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
     let _ = unsafe { vm.destroy() };
 
     Ok(exit_code as u32)
+}
+
+/// Root directory for cached JDK installations on Windows.
+///
+/// Used by the auto-download path: `%LOCALAPPDATA%\snug\jdk\` is the
+/// parent; individual JDKs are extracted into `<root>\<version>\`
+/// subdirectories.
+fn jdk_install_root() -> PathBuf {
+    match std::env::var_os("LOCALAPPDATA") {
+        Some(base) => PathBuf::from(base).join("snug").join("jdk"),
+        None => std::env::temp_dir().join("snug").join("jdk"),
+    }
 }
 
 /// Resolve the `jvm.dll` path inside a Java home. We prefer the

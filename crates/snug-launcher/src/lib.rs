@@ -23,6 +23,7 @@
 
 pub mod cache;
 pub mod error;
+pub mod jdk_install;
 pub mod manifest;
 pub mod payload_locator;
 pub mod splash;
