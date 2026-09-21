@@ -103,6 +103,15 @@ impl ResourcePlan {
                     )
                 })?;
         }
+        // NOTE: a v6 common-controls manifest (`assets/snug-default-manifest.xml`)
+        // used to be embedded by default, but on some Windows installs it
+        // triggers a SxS activation crash inside comctl32 v6 itself rather
+        // than enabling `TaskDialogIndirect`. The launcher falls back to a
+        // `MessageBoxW`-driven flow when `TaskDialogIndirect` isn't
+        // available, so a missing manifest is graceful. Users who want the
+        // native progress-bar UX can pass `--manifest <path>` to embed a
+        // manifest of their choice — see `assets/snug-default-manifest.xml`
+        // for the v6 common-controls block to include.
 
         let version_info = build_version_info(&payload.payload.config.app);
         resources

@@ -18,10 +18,11 @@ use windows_sys::Win32::System::Registry::{
 };
 use windows_sys::Win32::UI::Shell::CommandLineToArgvW;
 
-use snug_format::{JvmDiscovery, SnugEmbedded};
+use snug_format::{DownloadJdkMode, JvmDiscovery, SnugEmbedded};
 
 use crate::cache;
 use crate::jdk_install;
+use crate::log;
 use crate::manifest;
 use crate::splash;
 use crate::LauncherError;
@@ -53,19 +54,86 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
     }
     let primary_jar_dest = cached_paths[0].clone();
 
+    // 1a. Open the per-launch log next to the primary cached JAR.
+    //     `init` truncates any prior session's file. Failures are
+    //     non-fatal: we still launch, just without file logging.
+    let log_path = cache::cached_log_path(&cache_root, &jars[0].sha256);
+    match log::init(&log_path) {
+        Ok(resolved) => {
+            log::log(&format!(
+                "snug-launcher starting — log file: {}",
+                resolved.display()
+            ));
+        }
+        Err(e) => {
+            eprintln!(
+                "snug-launcher: warning: could not open log file at {}: {e}",
+                log_path.display()
+            );
+        }
+    }
+    log::log(&format!("app: {} / {}", config.app.company, config.app.name));
+    log::log(&format!(
+        "app version: {}",
+        config.app.version
+    ));
+    log::log(&format!("cache_root: {}", cache_root.display()));
+    log::log(&format!("primary JAR sha256: {}", cache::hex_lower(&jars[0].sha256)));
+    log::log(&format!("cached jars: {}", cached_paths.len()));
+    log::log(&format!("min-java: {}", config.min_java));
+    log::log(&format!(
+        "download-jdk mode: {:?}",
+        config.behavior.download_jdk
+    ));
+    log::log(&format!(
+        "forward args: {}",
+        config.behavior.forward_args
+    ));
+
     // 2. Resolve the Main-Class. For multi-JAR builds, the first JAR
     //    is the one whose manifest carries `Main-Class`.
     let main_class_name = match &config.main_class {
         Some(cls) => cls.clone(),
         None => manifest::read_main_class_required(&primary_jar_dest)?,
     };
+    log::log(&format!("main class: {}", main_class_name));
 
-    // 3. Locate a compatible JVM and the `jvm.dll` we'll load. If
-    //    none is found AND `auto_download_jdk` is set, pop a
-    //    `TaskDialog` prompt and offer to download Temurin.
-    let mut jvm_dir = discover_jvm(&config.behavior.jvm_discovery, config.min_java)?;
-    if jvm_dir.is_none() && config.behavior.auto_download_jdk {
+    // 3. Locate a compatible JVM and the `jvm.dll` we'll load. The
+    //    exact behaviour depends on `config.behavior.download_jdk`:
+    //
+    //    - `Off`  — discovery only. Bail if no JVM found.
+    //    - `Auto` — discovery first; on miss, ask the user via a
+    //      `TaskDialog` whether to download Temurin.
+    //    - `Force` — skip discovery entirely. The user always gets
+    //      the dialog; a previously cached Temurin (under
+    //      `%LOCALAPPDATA%\snug\jdk\`) is silently reused.
+    let mut jvm_dir = match config.behavior.download_jdk {
+        DownloadJdkMode::Off | DownloadJdkMode::Auto => {
+            let found = discover_jvm(&config.behavior.jvm_discovery, config.min_java)?;
+            log::log(&format!(
+                "JVM discovery: {}",
+                found
+                    .as_ref()
+                    .map(|p| format!("found at {}", p.display()))
+                    .unwrap_or_else(|| "no compatible JVM found".to_string())
+            ));
+            found
+        }
+        // Force — let `maybe_install` decide (its internal cache
+        // check covers "already downloaded on a previous run").
+        DownloadJdkMode::Force => {
+            log::log("JVM discovery: skipped (download-jdk=force)");
+            None
+        }
+    };
+    let should_offer_install = match config.behavior.download_jdk {
+        DownloadJdkMode::Off => false,
+        DownloadJdkMode::Auto => jvm_dir.is_none(),
+        DownloadJdkMode::Force => true,
+    };
+    if should_offer_install {
         let install_root = jdk_install_root();
+        log::log(&format!("JDK install flow starting; root: {}", install_root.display()));
         let result = jdk_install::maybe_install(
             // No splash window yet (it's created at step 6) — the
             // dialog stands alone; `HWND_DESKTOP` keeps it visually
@@ -76,6 +144,7 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
         );
         match result {
             Ok(Some(new_home)) => {
+                log::log(&format!("JDK install flow succeeded: {}", new_home.display()));
                 // `std::env::set_var` is unsafe in Rust 2024 because
                 // it's racy with `getenv` reads in other threads.
                 // Single-threaded during launch means it's safe in
@@ -83,24 +152,47 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
                 unsafe {
                     std::env::set_var("JAVA_HOME", &new_home);
                 }
+                // `Force` skipped discovery; the install path also
+                // picks the jvm.dll itself when `Force` was the
+                // entrypoint. So this retry is only meaningful in
+                // `Auto`, where `jvm_dir` was already `None`.
                 let mut retry = config.behavior.jvm_discovery.clone();
                 retry.explicit = Some(new_home);
                 jvm_dir = discover_jvm(&retry, config.min_java)?;
             }
             Ok(None) => {
+                log::log("JDK install flow: user cancelled or opened browser");
                 // User cancelled or opened the download page. Fall
                 // through to the standard "no JVM" error below.
+                // For `Force`, this means we never had a JVM and
+                // the user declined — same outcome as `Auto` would
+                // have produced.
             }
             Err(e) => {
+                log::log(&format!("JDK install flow failed: {e}"));
                 eprintln!("snug-launcher: JDK install flow failed: {e}");
             }
         }
     }
-    let jvm_dir = jvm_dir.ok_or(LauncherError::JvmNotFound { min_java: config.min_java })?;
-    let jvm_dll = locate_jvm_dll(&jvm_dir).ok_or_else(|| LauncherError::LibraryLoad {
-        library: format!("jvm.dll under {}", jvm_dir.display()),
-        message: "no jvm.dll found under bin/server or bin/client".into(),
+    let jvm_dir = jvm_dir.ok_or_else(|| {
+        log::log(&format!(
+            "no compatible Java {}+ JVM found; aborting",
+            config.min_java
+        ));
+        LauncherError::JvmNotFound { min_java: config.min_java }
     })?;
+    log::log(&format!("using JAVA_HOME: {}", jvm_dir.display()));
+    let jvm_dll = locate_jvm_dll(&jvm_dir).ok_or_else(|| {
+        log::log(&format!(
+            "jvm.dll not found under {}/bin/server or bin/client",
+            jvm_dir.display()
+        ));
+        LauncherError::LibraryLoad {
+            library: format!("jvm.dll under {}", jvm_dir.display()),
+            message: "no jvm.dll found under bin/server or bin/client".into(),
+        }
+    })?;
+    log::log(&format!("loading jvm.dll from: {}", jvm_dll.display()));
 
     // 4. Forward EXE command-line arguments to Java `main`, if configured.
     let argv_strings: Vec<String> = if config.behavior.forward_args {

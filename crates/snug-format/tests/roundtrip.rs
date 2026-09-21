@@ -1,7 +1,7 @@
 //! Integration roundtrip test for snug-format.
 
 use snug_format::{
-    decode, embedded_file, encode, AppMetadata, EmbeddedFile, JvmDiscovery,
+    decode, embedded_file, encode, AppMetadata, DownloadJdkMode, EmbeddedFile, JvmDiscovery,
     LauncherBehavior, LauncherConfig, SnugEmbedded, SnugPayload, SplashConfig,
     SplashImage, FORMAT_VERSION, MAGIC,
 };
@@ -48,7 +48,7 @@ fn sample_config() -> LauncherConfig {
                 try_registry: true,
                 try_common: true,
             },
-            auto_download_jdk: false,
+            download_jdk: DownloadJdkMode::Auto,
         },
     }
 }

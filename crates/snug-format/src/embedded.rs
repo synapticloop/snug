@@ -30,7 +30,15 @@ pub const MAGIC: &[u8; 8] = b"SNUGEMBD";
 /// fails, the launcher pops up a `TaskDialog` and offers to download
 /// Eclipse Temurin from `api.adoptium.net`, verifies SHA-256, extracts
 /// to `%LOCALAPPDATA%\snug\jdk\<version>\`, and retries discovery.
-pub const FORMAT_VERSION: u16 = 4;
+///
+/// v5 (2026-09): Replaced the `auto_download_jdk: bool` field with a
+/// `download_jdk: DownloadJdkMode` enum (`off` / `auto` / `force`).
+/// `force` makes the launcher skip JVM discovery and always show the
+/// TaskDialog, letting the end user choose whether to download
+/// Temurin regardless of what's on PATH / JAVA_HOME. v4 payloads with
+/// the old bool field are no longer decodable — both ends ship
+/// together in the workspace.
+pub const FORMAT_VERSION: u16 = 5;
 
 /// A snug payload wrapped with the metadata needed to locate, validate, and
 /// version-check it at runtime.

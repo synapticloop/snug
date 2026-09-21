@@ -12,7 +12,34 @@
 
 use std::path::PathBuf;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
+use snug_format::DownloadJdkMode;
+
+/// CLI-side mirror of [`snug_format::DownloadJdkMode`].
+///
+/// Exists as a separate type so we can derive `clap::ValueEnum`
+/// without pulling `clap` into `snug-format` (the orphan rule
+/// forbids `impl ValueEnum for DownloadJdkMode` in this crate).
+/// `build.rs` converts at the seam via `From`.
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+pub enum CliDownloadJdkMode {
+    /// No download flow — bail if no JVM is found.
+    Off,
+    /// Ask the user to download Temurin only if no compatible JVM is found.
+    Auto,
+    /// Always show the download dialog, bypassing JVM discovery.
+    Force,
+}
+
+impl From<CliDownloadJdkMode> for DownloadJdkMode {
+    fn from(m: CliDownloadJdkMode) -> Self {
+        match m {
+            CliDownloadJdkMode::Off => DownloadJdkMode::Off,
+            CliDownloadJdkMode::Auto => DownloadJdkMode::Auto,
+            CliDownloadJdkMode::Force => DownloadJdkMode::Force,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Parser)]
 #[command(
@@ -179,9 +206,26 @@ pub struct Cli {
     /// `api.adoptium.net`, verify SHA-256, extract to
     /// `%LOCALAPPDATA%\snug\jdk\<version>\`, and retry.
     ///
+    /// Modes:
+    ///
+    /// - omitted — no download flow at all.
+    /// - `--download-jdk` (no value) — `auto`: pop the dialog only if
+    ///   JVM discovery fails. Equivalent to the legacy boolean flag.
+    /// - `--download-jdk=auto` — same as above, explicit.
+    /// - `--download-jdk=force` — always pop the dialog, bypassing
+    ///   JVM discovery. Useful when the end user wants to install
+    ///   Temurin regardless of what's on `JAVA_HOME` / `PATH`.
+    ///
     /// Off by default — you'd typically build two flavours of your
     /// EXE: one with the flag (portable, end-user friendly) and one
     /// without (developer, requires Java pre-installed).
-    #[arg(long = "download-jdk")]
-    pub download_jdk: bool,
+    #[arg(
+        long = "download-jdk",
+        value_enum,
+        default_missing_value = "auto",
+        default_value_t = CliDownloadJdkMode::Off,
+        num_args = 0..=1,
+        require_equals = true,
+    )]
+    pub download_jdk: CliDownloadJdkMode,
 }

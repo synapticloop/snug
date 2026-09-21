@@ -49,6 +49,21 @@ pub fn cached_jar_path(root: &Path, sha256: &[u8; 32]) -> PathBuf {
     root.join(hex).join(CACHED_JAR_NAME)
 }
 
+/// Compute the path to the per-launch log file. Sits next to the
+/// cached JAR so a user reviewing an EXE's behaviour has one place
+/// to look.
+pub fn cached_log_path(root: &Path, sha256: &[u8; 32]) -> PathBuf {
+    let hex = hex_lower(sha256);
+    root.join(hex).join("snug.log")
+}
+
+/// Lowercase hex encoding of a SHA-256 digest (64 chars). Public so
+/// the log module can render the same string without re-implementing
+/// the encoding.
+pub(crate) fn hex_lower(bytes: &[u8]) -> String {
+    hex_lower_impl(bytes)
+}
+
 /// Replace path separators and other characters that are unsafe in a
 /// directory name across the platforms we support.
 fn sanitize_component(s: &str) -> String {
@@ -63,7 +78,7 @@ fn sanitize_component(s: &str) -> String {
         .to_string()
 }
 
-fn hex_lower(bytes: &[u8]) -> String {
+fn hex_lower_impl(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
     for b in bytes {

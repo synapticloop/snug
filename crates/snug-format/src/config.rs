@@ -121,17 +121,14 @@ pub struct LauncherBehavior {
     #[serde(default)]
     pub jvm_discovery: JvmDiscovery,
 
-    /// When `true` and the JVM lookup fails, the launcher pops up a
-    /// `TaskDialog` and offers to download a compatible Eclipse
-    /// Temurin JDK from `api.adoptium.net`, verifies the SHA-256,
-    /// extracts the zip under `%LOCALAPPDATA%\snug\jdk\<version>\`,
-    /// and retries discovery with the new `JAVA_HOME`.
+    /// How the launcher should behave when it can't find a compatible
+    /// JVM on the host. See [`DownloadJdkMode`] for the three states.
     ///
-    /// Default: `false`. Recommended to set via the `--download-jdk`
-    /// CLI flag on the builder so the user is never asked at runtime
-    /// unless the EXE was deliberately built with the opt-in.
+    /// Default: [`DownloadJdkMode::Off`]. Enable with the
+    /// `--download-jdk[=<mode>]` builder flag (bare = `auto`,
+    /// `=force` to skip discovery and always show the dialog).
     #[serde(default)]
-    pub auto_download_jdk: bool,
+    pub download_jdk: DownloadJdkMode,
 }
 
 impl Default for LauncherBehavior {
@@ -140,9 +137,45 @@ impl Default for LauncherBehavior {
             forward_args: true,
             cache_dir: None,
             jvm_discovery: JvmDiscovery::default(),
-            auto_download_jdk: false,
+            download_jdk: DownloadJdkMode::default(),
         }
     }
+}
+
+/// How the launcher reacts to "no compatible JVM on this machine".
+///
+/// Three states, in order of decreasing deference to the user's
+/// environment:
+///
+/// - [`Off`](Self::Off) — no download flow at all. Default.
+/// - [`Auto`](Self::Auto) — only when `discover_jvm()` returns `None`.
+///   The launcher pops up a `TaskDialog` offering Download / Open in
+///   browser / Cancel. Equivalent to the legacy `--download-jdk`
+///   boolean flag.
+/// - [`Force`](Self::Force) — skip `discover_jvm()` entirely and go
+///   straight to the TaskDialog. The user always gets to choose
+///   whether to download Temurin from `api.adoptium.net`, even if
+///   another Java install would technically satisfy the minimum
+///   version. Useful when the end user explicitly wants the bundled
+///   Temurin regardless of what's already on PATH / JAVA_HOME.
+///
+/// On either `Auto` or `Force`, the launcher first checks
+/// `%LOCALAPPDATA%\snug\jdk\<version>\` for a cached Temurin matching
+/// `min_java`. A cache hit is reused silently (no GUI).
+///
+/// Wire format: postcard serialises a 3-variant unit-only enum as a
+/// 1-byte discriminator (`0` = Off, `1` = Auto, `2` = Force). New
+/// variants must be appended at the end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DownloadJdkMode {
+    /// No download flow. (Default.)
+    #[default]
+    Off,
+    /// Pop the TaskDialog only when JVM discovery fails.
+    Auto,
+    /// Always pop the TaskDialog, bypassing JVM discovery.
+    Force,
 }
 
 /// JVM discovery strategy. The launcher walks these in order, returning the
