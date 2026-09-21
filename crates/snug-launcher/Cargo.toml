@@ -25,6 +25,7 @@ postcard = { workspace = true }
 sha2 = { workspace = true }
 zip = { workspace = true }
 ureq = { workspace = true }
+toml = { version = "0.8", default-features = false, features = ["parse"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }

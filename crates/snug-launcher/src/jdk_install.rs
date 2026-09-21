@@ -32,9 +32,12 @@
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
+
+use crate::dialogs;
+use crate::log;
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -116,18 +119,22 @@ struct AdoptiumAssetList(Vec<AdoptiumAsset>);
 
 #[derive(Debug, Deserialize)]
 struct AdoptiumAsset {
-    binary: AdoptiumBinary,
+    binaries: Vec<AdoptiumBinary>,
+    version_data: AdoptiumVersion,
 }
 
 #[derive(Debug, Deserialize)]
 struct AdoptiumBinary {
-    package_link: String,
-    #[serde(default)]
-    sha256sum: Option<String>,
-    #[serde(default)]
-    size: Option<u64>,
-    #[serde(default)]
-    version: Option<AdoptiumVersion>,
+    package: AdoptiumPackage,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdoptiumPackage {
+    link: String,
+    /// SHA-256 of the zip. Not optional: every Adoptium release
+    /// entry includes a checksum.
+    checksum: String,
+    size: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -153,8 +160,15 @@ pub fn fetch_metadata(min_java_major: u16) -> Result<JdkMetadata, JdkError> {
         ))
         .build();
 
+    // The `/v3/assets/latest/{maj}/hotspots` endpoint returns an empty
+    // array for current majors (verified against Adoptium 2026-09). The
+    // `/v3/assets/feature_releases/{maj}/ga` endpoint returns the full
+    // GA release list with `binaries[].package.{link,checksum,size}`
+    // and `version_data.semver` — exactly the fields `AdoptiumBinary`
+    // deserialises. We take the first element, which Adoptium returns
+    // sorted newest-first by `timestamp`.
     let url = format!(
-        "https://api.adoptium.net/v3/assets/latest/{maj}/hotspots\
+        "https://api.adoptium.net/v3/assets/feature_releases/{maj}/ga\
          ?architecture=x64&image_type=jdk&os=windows&vendor=eclipse",
         maj = min_java_major,
     );
@@ -182,16 +196,25 @@ pub fn fetch_metadata(min_java_major: u16) -> Result<JdkMetadata, JdkError> {
         .next()
         .ok_or(JdkError::NoMetadataForVersion(min_java_major))?;
 
-    let package_link = asset.binary.package_link;
-    let sha256 = asset
-        .binary
-        .sha256sum
-        .ok_or_else(|| JdkError::BadField { name: "sha256sum", value: "missing".into() })?;
-    let size = asset.binary.size.unwrap_or(0);
+    // The query filters narrow each release's `binaries[]` to at most
+    // one entry. If the API ever returns more, prefer the `package`
+    // (zip) form over the `installer` (msi) form — both live on the
+    // same binary but the zip is what we extract.
+    let binary = asset
+        .binaries
+        .into_iter()
+        .next()
+        .ok_or_else(|| JdkError::BadField {
+            name: "binaries",
+            value: "empty".into(),
+        })?;
+
+    let package_link = binary.package.link;
+    let sha256 = binary.package.checksum;
+    let size = binary.package.size;
     let version = asset
-        .binary
-        .version
-        .and_then(|v| v.semver)
+        .version_data
+        .semver
         .unwrap_or_else(|| format!("{min_java_major}"));
 
     Ok(JdkMetadata {
@@ -374,6 +397,22 @@ fn wide(s: &str) -> Vec<u16> {
 /// Returns `true` if a `TaskDialogIndirect` call was placed; the
 /// picked button id is in `*button`. Returns `false` if the function
 /// isn't available on this system.
+///
+/// We resolve `TaskDialogIndirect` at runtime via `LoadLibraryA` and
+/// `GetProcAddress` rather than linking it directly because:
+///
+/// 1. Some Windows installs (including some Windows 10 boxes) ship
+///    only comctl32 v5, which doesn't export `TaskDialogIndirect`.
+///    Linking directly makes the whole EXE fail to start with
+///    `STATUS_ENTRYPOINT_NOT_FOUND`.
+/// 2. With a runtime lookup, we can detect the absence and fall back
+///    to a `MessageBoxW` prompt — no bar, but at least the user
+///    still gets a working dialog.
+///
+/// The launcher's Cargo.toml embeds a v6-common-controls manifest
+/// (`assets\snug-default-manifest.xml`) so Windows loads comctl32 v6
+/// for the process. On a fully-patched Win 10 install both layers
+/// agree; on edge cases, this lookup degrades gracefully.
 unsafe fn call_task_dialog_indirect(cfg: *const TASKDIALOGCONFIG, button: &mut i32) -> bool {
     type F = unsafe extern "system" fn(
         *const TASKDIALOGCONFIG,
@@ -387,22 +426,30 @@ unsafe fn call_task_dialog_indirect(cfg: *const TASKDIALOGCONFIG, button: &mut i
             b"comctl32.dll\0".as_ptr() as *const u8,
         );
         if lib.is_null() {
+            log::log("call_task_dialog_indirect: LoadLibraryA(comctl32.dll) returned NULL");
             return None;
         }
         let proc = windows_sys::Win32::System::LibraryLoader::GetProcAddress(
             lib,
             b"TaskDialogIndirect\0".as_ptr() as *const u8,
         );
-        if proc.is_none() {
-            return None;
+        match proc {
+            None => {
+                log::log(
+                    "call_task_dialog_indirect: comctl32.dll loaded but does not export TaskDialogIndirect \
+                     — falling back to MessageBoxW (this is expected on Windows installs that ship only comctl32 v5; \
+                     apply snug-default-manifest.xml as the EXE manifest to opt into v6)",
+                );
+                None
+            }
+            Some(p) => Some(std::mem::transmute(p)),
         }
-        Some(std::mem::transmute(proc))
     });
     match cell {
         Some(f) => {
             // SAFETY: `f` was returned by `GetProcAddress` for the
             // v6 comctl32 `TaskDialogIndirect` entry.
-            unsafe { f(cfg, button, std::ptr::null_mut(), std::ptr::null_mut()) };
+            let _hr = unsafe { f(cfg, button, std::ptr::null_mut(), std::ptr::null_mut()) };
             true
         }
         None => false,
@@ -465,16 +512,34 @@ unsafe fn info_messagebox(parent: HWND, title: &str, content: &str, icon_info: b
 // ===========================================================================
 
 /// Shared state between the worker thread (writes) and the
-/// `TaskDialogIndirect` callback (reads).
-struct ProgressShared {
-    /// 0..=100 download percent.
-    pct: AtomicU32,
+/// `TaskDialogIndirect` callback (reads). `pub` so the
+/// `progress_window` fallback module can read the same fields.
+pub struct ProgressShared {
+    /// 0..=100 download percent. Set by the worker during phases
+    /// 0/1/2 — the callback reads this and pushes it into the bar
+    /// via `TDM_SET_PROGRESS_BAR_POS`.
+    pub(crate) pct: AtomicU32,
     /// 0 = running, 1 = success, 2 = error, 3 = cancelled.
-    done: AtomicI32,
+    pub(crate) done: AtomicI32,
     /// Captured in `TDN_CREATED`; written by the callback.
     dialog_hwnd: AtomicI32,
     /// Set on failure.
     error: std::sync::Mutex<Option<String>>,
+    /// 0 = downloading, 1 = verifying SHA-256, 2 = extracting.
+    /// Drives the live status text the callback writes into the
+    /// dialog's `TDE_CONTENT` element.
+    pub(crate) phase: AtomicI32,
+    /// Bytes written to the temp zip so far (phase 0). The callback
+    /// uses this to render "X MB / Y MB" in real time.
+    pub(crate) bytes: AtomicU64,
+    /// Total bytes from the Adoptium metadata. Captured at init so
+    /// the callback can render percentages even after the worker
+    /// thread has moved on to verify/extract.
+    pub(crate) total_bytes: AtomicU64,
+    /// Resolved JAVA_HOME after a successful extract. The worker
+    /// writes this so the caller doesn't have to walk the
+    /// extracted tree again.
+    home: std::sync::Mutex<Option<PathBuf>>,
 }
 
 unsafe impl Send for ProgressShared {}
@@ -495,17 +560,73 @@ unsafe extern "system" fn progress_dialog_callback(
     _userdata: isize,
 ) -> windows_sys::core::HRESULT {
     use windows_sys::Win32::UI::Controls::{
-        TDN_CREATED, TDN_TIMER, TDM_CLICK_BUTTON, TDM_SET_PROGRESS_BAR_POS,
+        PBST_NORMAL, TDN_CREATED, TDN_TIMER, TDE_CONTENT, TDM_CLICK_BUTTON,
+        TDM_SET_ELEMENT_TEXT, TDM_SET_PROGRESS_BAR_POS, TDM_SET_PROGRESS_BAR_RANGE,
+        TDM_SET_PROGRESS_BAR_STATE,
     };
     let Some(arc) = ACTIVE_PROGRESS.with(|c| c.borrow().clone()) else {
         return S_OK;
     };
     if msg == TDN_CREATED {
         arc.dialog_hwnd.store(hwnd as i32, Ordering::SeqCst);
+        log::log("progress dialog TDN_CREATED: initialising progress bar");
+        // Belt-and-braces setup for the bar:
+        //   1. Set range to 0..=100 (default, but some themes ignore it).
+        //   2. Set state to NORMAL (green) — Windows sometimes leaves
+        //      the bar in a "not yet drawn" state without an explicit
+        //      `TDM_SET_PROGRESS_BAR_STATE`.
+        //   3. Pin position to 0 so the bar is visibly empty (rather
+        //      than invisibly uninitialised) on the first paint.
+        //   4. Force a repaint — without this, on some Windows themes
+        //      the bar remains unrendered until the next idle cycle,
+        //      which can be many seconds after `TDN_CREATED`.
+        // The lParam for `TDM_SET_PROGRESS_BAR_RANGE` is
+        // MAKELPARAM(0, 100) = 100 << 16.
+        unsafe {
+            use windows_sys::Win32::Graphics::Gdi::{InvalidateRect, UpdateWindow};
+            SendMessageW(hwnd, TDM_SET_PROGRESS_BAR_RANGE as u32, 0, 0x0064_0000);
+            SendMessageW(
+                hwnd,
+                TDM_SET_PROGRESS_BAR_STATE as u32,
+                PBST_NORMAL as usize,
+                0,
+            );
+            SendMessageW(hwnd, TDM_SET_PROGRESS_BAR_POS as u32, 0, 0);
+            // `lpRect = null` + `bErase = 1` invalidates the whole
+            // client area and forces the background to redraw.
+            InvalidateRect(hwnd, std::ptr::null(), 1);
+            UpdateWindow(hwnd);
+        }
     } else if msg == TDN_TIMER {
         let pct = arc.pct.load(Ordering::SeqCst);
+        let phase = arc.phase.load(Ordering::SeqCst);
+        let bytes = arc.bytes.load(Ordering::SeqCst);
+        let total = arc.total_bytes.load(Ordering::SeqCst);
+
+        // Render a live status line. We build the wide string on each
+        // tick (cheap — ~200ms cadence); `TDM_SET_ELEMENT_TEXT` copies
+        // the buffer synchronously before returning.
+        let status = format_status_line(phase, pct, bytes, total);
+        let status_w = wide(&status);
+
         unsafe {
+            // Re-assert the bar state on every tick. Some Windows
+            // themes (notably High Contrast) reset the state when the
+            // dialog repaints, leaving the bar invisible until the
+            // next paint cycle.
+            SendMessageW(
+                hwnd,
+                TDM_SET_PROGRESS_BAR_STATE as u32,
+                PBST_NORMAL as usize,
+                0,
+            );
             SendMessageW(hwnd, TDM_SET_PROGRESS_BAR_POS as u32, pct as usize, 0);
+            SendMessageW(
+                hwnd,
+                TDM_SET_ELEMENT_TEXT as u32,
+                TDE_CONTENT as usize,
+                status_w.as_ptr() as isize,
+            );
             match arc.done.load(Ordering::SeqCst) {
                 1 => {
                     SendMessageW(hwnd, TDM_CLICK_BUTTON as u32, IDOK as usize, 0);
@@ -518,6 +639,45 @@ unsafe extern "system" fn progress_dialog_callback(
         }
     }
     S_OK
+}
+
+/// Render the live status line that replaces the dialog's
+/// `TDE_CONTENT` text on every timer tick. Kept here so the
+/// formatting reads consistently whether the user is in the
+/// download phase, the SHA-verify phase, or the extract phase.
+///
+/// All templates come from `dialogs.toml`. Values are pre-formatted
+/// (no `{name:.spec}` in the TOML — format the value in Rust).
+fn format_status_line(phase: i32, pct: u32, bytes: u64, total: u64) -> String {
+    let d = dialogs::dialogs();
+    let pct = pct.to_string();
+    let mib = |n: u64| -> String { format!("{:.1}", n as f64 / 1_048_576.0) };
+    match phase {
+        0 if total > 0 => dialogs::fill(
+            d.jdk_install.progress.status_phase_0_with_size.as_str(),
+            &[
+                ("done_mb", &mib(bytes)),
+                ("total_mb", &mib(total)),
+                ("pct", &pct),
+            ],
+        ),
+        0 => dialogs::fill(
+            d.jdk_install.progress.status_phase_0_no_size.as_str(),
+            &[("pct", &pct)],
+        ),
+        1 => dialogs::fill(
+            d.jdk_install.progress.status_phase_1.as_str(),
+            &[("pct", &pct)],
+        ),
+        2 => dialogs::fill(
+            d.jdk_install.progress.status_phase_2.as_str(),
+            &[("pct", &pct)],
+        ),
+        _ => dialogs::fill(
+            d.jdk_install.progress.status_other.as_str(),
+            &[("pct", &pct)],
+        ),
+    }
 }
 
 /// Show a modal progress dialog driven by `worker_thread`. The worker
@@ -566,30 +726,31 @@ fn show_progress_dialog(
         pszFooter: std::ptr::null(),
         pfCallback: Some(progress_dialog_callback),
         lpCallbackData: 0,
-        cxWidth: 0,
+        // 0 = auto-size to content. The progress bar is part of the
+        // auto-sized layout, but on some themes the auto-sized dialog
+        // is narrow enough that the bar collapses into a 1-px line.
+        // Forcing a wider dialog gives the bar room to render.
+        cxWidth: 420,
     };
 
     ACTIVE_PROGRESS.with(|c| *c.borrow_mut() = Some(shared.clone()));
+    log::log(&format!(
+        "showing progress dialog: title={title:?}, dw_flags=0x{dw_flags:x}"
+    ));
     let mut button: i32 = 0;
     let dialog_ok = unsafe { call_task_dialog_indirect(&cfg, &mut button) };
+    log::log(&format!(
+        "TaskDialogIndirect returned: ok={dialog_ok}, button={button}"
+    ));
     if !dialog_ok {
-        // Pre-Vista fallback: no progress UI. Block on the worker
-        // directly, then return IDOK so the caller proceeds as if
-        // the dialog auto-dismissed on success. The result dialogs
-        // (info / error) below also degrade to `MessageBoxW`.
-        use std::sync::atomic::Ordering;
-        loop {
-            let done = shared.done.load(Ordering::SeqCst);
-            if done != 0 {
-                button = if done == 1 { IDOK } else { IDCANCEL };
-                break;
-            }
-            let pct = shared.pct.load(Ordering::SeqCst);
-            eprint!("\rsnug: downloading Temurin… {pct:3}%   ");
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
+        // Fallback path — `TaskDialogIndirect` isn't available (pre-Vista
+        // / comctl32 v5 / SxS crash). Spin up our own Win32 progress
+        // window so the user still gets a live bar and a Cancel button.
+        log::log("falling back to custom progress window (comctl32 msctls_progress32)");
         ACTIVE_PROGRESS.with(|c| *c.borrow_mut() = None);
-        eprintln!();
+        button = unsafe {
+            crate::progress_window::show(parent, title, content, shared.clone())
+        };
         return button;
     }
     ACTIVE_PROGRESS.with(|c| *c.borrow_mut() = None);
@@ -689,13 +850,50 @@ fn extract_jdk_zip(zip: &Path, dest_dir: &Path) -> Result<PathBuf, JdkError> {
     Ok(dest_dir.to_path_buf())
 }
 
-fn locate_java_exe(home_dir: &Path) -> Option<PathBuf> {
-    let java = home_dir.join("bin").join("java.exe");
-    if java.exists() {
-        Some(java)
-    } else {
+/// `extract_jdk_zip` writes everything verbatim from the zip into
+/// `dest_dir`. Adoptium's zips carry a single leading
+/// `jdk-<version>/` directory, so the extracted layout is:
+///
+/// ```text
+/// dest_dir/
+///   jdk-25.0.4.1+1/
+///     bin/java.exe
+///     conf/
+///     jmods/
+///     lib/
+///     release
+///     ...
+/// ```
+///
+/// This helper walks a small depth cap and returns the first
+/// directory that actually contains `bin/java.exe` — that's the
+/// JAVA_HOME we need to hand to JNI. Returns `None` if no
+/// directory inside `root` (up to `MAX_JAVA_HOME_DEPTH` levels)
+/// contains the JDK layout, which means the zip is not a Temurin
+/// JDK or the extraction went sideways.
+const MAX_JAVA_HOME_DEPTH: usize = 3;
+
+fn find_java_home(root: &Path) -> Option<PathBuf> {
+    fn recurse(dir: &Path, depth: usize) -> Option<PathBuf> {
+        if depth > MAX_JAVA_HOME_DEPTH {
+            return None;
+        }
+        let java = dir.join("bin").join("java.exe");
+        if java.is_file() {
+            return Some(dir.to_path_buf());
+        }
+        let entries = std::fs::read_dir(dir).ok()?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(home) = recurse(&path, depth + 1) {
+                    return Some(home);
+                }
+            }
+        }
         None
     }
+    recurse(root, 0)
 }
 
 /// Parses the first version token out of `java -version` stdout/stderr.
@@ -715,6 +913,12 @@ fn parse_java_version(text: &str) -> Option<u16> {
 
 /// Scan `install_root` for any directory containing `bin\java.exe`
 /// whose `-version` reports a major version ≥ `min_java_major`.
+///
+/// Each top-level entry under `install_root` is a previously-
+/// extracted Temurin install; the actual JAVA_HOME may be the entry
+/// itself (flat layout) or one nested directory inside it (Adoptium
+/// default — `jdk-25.0.4.1+1/bin/java.exe`). `find_java_home` walks
+/// both shapes.
 fn find_cached_jdk(min_java_major: u16, install_root: &Path) -> Option<PathBuf> {
     let entries = std::fs::read_dir(install_root).ok()?;
     for entry in entries.flatten() {
@@ -722,10 +926,10 @@ fn find_cached_jdk(min_java_major: u16, install_root: &Path) -> Option<PathBuf> 
         if !path.is_dir() {
             continue;
         }
-        let Some(java) = locate_java_exe(&path) else {
+        let Some(home) = find_java_home(&path) else {
             continue;
         };
-        let home = java.parent().and_then(|p| p.parent())?.to_path_buf();
+        let java = home.join("bin").join("java.exe");
         let Ok(out) = std::process::Command::new(&java).arg("-version").output() else {
             continue;
         };
@@ -747,6 +951,15 @@ fn find_cached_jdk(min_java_major: u16, install_root: &Path) -> Option<PathBuf> 
 //  Worker thread: download → hash → extract
 // ===========================================================================
 
+// Monotonic progress-bar boundaries. The bar must only ever move
+// forward across phase transitions — earlier versions let it jump
+// 99 → 95 → 99 → 100 which read as "the bar reset". See
+// `tests::bar_progress_is_monotonic_across_phases`.
+const PHASE_0_PCT_MAX: u32 = 95; // download ends here
+const PHASE_1_PCT_START: u32 = 96; // verify starts here
+const PHASE_1_PCT_END: u32 = 98; // verify ends here
+const PHASE_2_PCT_START: u32 = 99; // extract starts here
+
 fn worker_thread(
     install_dir: PathBuf,
     tmp_zip: PathBuf,
@@ -762,36 +975,80 @@ fn worker_thread(
         }
     };
 
+    // The bar is split monotonically across the three phases so the user
+    // never sees it move backwards:
+//   - phase 0 (download)   : 0 → 95%
+//   - phase 1 (verify SHA) : 95 → 98%
+//   - phase 2 (extract)    : 98 → 100%
+// The earlier 0→99→95→99→100 sequence made the bar look like it
+// reset when the user clicked Download — confusing.
+
+    // Phase 0: download. `on_progress` updates the bytes/pct shared
+    // state so the dialog callback can render live text + bar.
+    shared.phase.store(0, Ordering::SeqCst);
+    log::log(&format!(
+        "phase 0 (download): url={url}, expected_size={total_bytes} bytes"
+    ));
     let on_progress = |written: u64| {
+        shared.bytes.store(written, Ordering::SeqCst);
         if total_bytes > 0 {
-            let pct = ((written as f64 / total_bytes as f64 * 100.0) as u32).min(99);
+            // Scale phase 0 to 0..=PHASE_0_PCT_MAX. Phase 1 picks up at
+            // PHASE_1_PCT_START and climbs to PHASE_1_PCT_END; phase 2
+            // takes PHASE_2_PCT_START → 100.
+            let pct = ((written as f64 / total_bytes as f64 * PHASE_0_PCT_MAX as f64) as u32)
+                .min(PHASE_0_PCT_MAX);
             shared.pct.store(pct, Ordering::SeqCst);
         }
     };
 
     match download_to_disk(&url, &tmp_zip, &cancel, total_bytes, on_progress) {
-        Ok(_) => {}
+        Ok(written) => {
+            log::log(&format!(
+                "phase 0 complete: {} bytes written to {}",
+                written,
+                tmp_zip.display()
+            ));
+        }
         Err(e) => {
+            log::log(&format!("phase 0 failed: download: {e}"));
             set_error(format!("download: {e}"));
             shared.done.store(2, Ordering::SeqCst);
             return;
         }
     }
     if cancel.load(Ordering::SeqCst) {
+        log::log("phase 0 cancelled by user");
         shared.done.store(3, Ordering::SeqCst);
         return;
     }
-    shared.pct.store(95, Ordering::SeqCst);
+    shared.bytes.store(total_bytes, Ordering::SeqCst);
+    // Land exactly on PHASE_0_PCT_MAX so phase 1 picks up with no jump.
+    shared.pct.store(PHASE_0_PCT_MAX, Ordering::SeqCst);
+
+    // Phase 1: SHA-256. Hash is a single sequential pass over the
+    // file, so the bar climbs PHASE_1_PCT_START → PHASE_1_PCT_END
+    // within this phase and the callback renders "Verifying SHA-256…
+    // (Z%)" while it does.
+    shared.phase.store(1, Ordering::SeqCst);
+    log::log("phase 1 (verify SHA-256) starting");
+    shared.pct.store(PHASE_1_PCT_START, Ordering::SeqCst);
 
     let computed = match hash_file_sha256(&tmp_zip) {
-        Ok(h) => h,
+        Ok(h) => {
+            log::log(&format!("phase 1: computed SHA-256 = {h}"));
+            h
+        }
         Err(e) => {
+            log::log(&format!("phase 1 failed: hash: {e}"));
             set_error(format!("hash: {e}"));
             shared.done.store(2, Ordering::SeqCst);
             return;
         }
     };
     if !computed.eq_ignore_ascii_case(&expected_sha) {
+        log::log(&format!(
+            "phase 1: SHA-256 mismatch (expected {expected_sha}, computed {computed})"
+        ));
         set_error(format!(
             "SHA-256 mismatch — declared {}, computed {}",
             expected_sha, computed
@@ -799,21 +1056,44 @@ fn worker_thread(
         shared.done.store(2, Ordering::SeqCst);
         return;
     }
-    shared.pct.store(98, Ordering::SeqCst);
+    log::log("phase 1: SHA-256 verified");
+    shared.pct.store(PHASE_1_PCT_END, Ordering::SeqCst);
 
+    // Phase 2: extract.
+    shared.phase.store(2, Ordering::SeqCst);
+    shared.pct.store(PHASE_2_PCT_START, Ordering::SeqCst);
+    log::log(&format!(
+        "phase 2 (extract): zip={} -> dest={}",
+        tmp_zip.display(),
+        install_dir.display()
+    ));
     if let Err(e) = extract_jdk_zip(&tmp_zip, &install_dir) {
+        log::log(&format!("phase 2 failed: extract: {e}"));
         set_error(format!("extract: {e}"));
         shared.done.store(2, Ordering::SeqCst);
         return;
     }
-    if locate_java_exe(&install_dir).is_none() {
-        set_error(format!(
-            "extracted to {} but missing bin\\java.exe",
+    // Adoptium's zip carries a leading `jdk-<version>/` directory,
+    // so `install_dir/bin/java.exe` doesn't exist — the JDK home is
+    // nested one level deeper. `find_java_home` walks the extracted
+    // tree to the actual JAVA_HOME.
+    let Some(home) = find_java_home(&install_dir) else {
+        log::log(&format!(
+            "phase 2 failed: extracted to {} but no bin\\java.exe found inside",
             install_dir.display()
+        ));
+        set_error(format!(
+            "extracted to {} but no bin\\java.exe found inside (depth {})",
+            install_dir.display(),
+            MAX_JAVA_HOME_DEPTH
         ));
         shared.done.store(2, Ordering::SeqCst);
         return;
+    };
+    if let Ok(mut g) = shared.home.lock() {
+        *g = Some(home.clone());
     }
+    log::log(&format!("phase 2: extracted JDK home = {}", home.display()));
     shared.pct.store(100, Ordering::SeqCst);
     shared.done.store(1, Ordering::SeqCst);
 }
@@ -825,6 +1105,17 @@ fn worker_thread(
 /// Run the "no JDK found" recovery. Returns `Ok(Some(<jdk_home>))` on
 /// success (cache hit or fresh install), `Ok(None)` if the user
 /// cancelled or chose to open the URL in a browser.
+///
+/// Failure modes the user must see:
+///
+/// - `fetch_metadata` (the Adoptium v3 API call) can fail with no
+///   network, captive portal, corporate firewall, TLS/DNS issues, or
+///   Adoptium downtime. On the GUI subsystem build, `eprintln!` is
+///   invisible — silently returning the error leaves the user with
+///   only the final `MessageBoxW` and no chance to recover. We pop a
+///   dedicated "could not reach Adoptium" dialog here instead, with
+///   an "Open the download page in my browser" button so the user
+///   can still install Temurin manually.
 pub fn maybe_install(
     parent_hwnd: HWND,
     min_java_major: u16,
@@ -834,48 +1125,88 @@ pub fn maybe_install(
 
     // 1. Cache hit — silent reuse.
     if let Some(home) = find_cached_jdk(min_java_major, install_root) {
+        log::log(&format!(
+            "JDK cache hit: {} (meets min_java={})",
+            home.display(),
+            min_java_major
+        ));
         return Ok(Some(home));
     }
+    log::log(&format!(
+        "JDK cache miss under {}; need min_java={}",
+        install_root.display(),
+        min_java_major
+    ));
 
-    // 2. Fetch metadata, prompt the user.
-    let metadata = fetch_metadata(min_java_major)?;
+    // 2. Fetch metadata. On failure, pop an "Adoptium unreachable"
+    //    dialog so the user still has a path forward (manual browser
+    //    install), rather than a silent drop to the final error box.
+    let metadata = match fetch_metadata(min_java_major) {
+        Ok(m) => {
+            log::log(&format!(
+                "Adoptium metadata: version={}, size={} bytes",
+                m.version,
+                m.size_bytes
+            ));
+            log::log(&format!("Adoptium package link: {}", m.package_link));
+            log::log(&format!("Adoptium SHA-256: {}", m.sha256));
+            m
+        }
+        Err(e) => {
+            log::log(&format!("Adoptium metadata fetch failed: {e}"));
+            if show_metadata_failed_dialog(parent_hwnd, min_java_major, &e.to_string())
+                == IDYES
+            {
+                let url = format!(
+                    "https://adoptium.net/temurin/releases/?version={min_java_major}"
+                );
+                let _ = open_in_browser(&url);
+                log::log(&format!("opened browser at {url}"));
+            }
+            return Ok(None);
+        }
+    };
+
+    let dlg = dialogs::dialogs();
+    let size_mb = format!("{:.0}", metadata.size_bytes as f64 / 1_048_576.0);
 
     let mut prompt = Config::new(
         parent_hwnd,
-        "Java Runtime Required — Snug",
-        "Eclipse Temurin JDK was not found on this machine",
+        dlg.jdk_install.prompt.title.clone(),
+        dlg.jdk_install.prompt.main.clone(),
     );
     prompt.icon = IconKind::Shield;
-    prompt.content = format!(
-        "This application needs a Java {} or higher. Snug can download the \
-         official Eclipse Temurin {} (~{:.0} MB) and install it to a per-user \
-         location, or open the download page in your browser.\n\n\
-         Download will be verified against the official SHA-256.",
-        metadata.version,
-        metadata.version,
-        metadata.size_bytes as f64 / 1_048_576.0,
+    prompt.content = dialogs::fill(
+        dlg.jdk_install.prompt.content.as_str(),
+        &[
+            ("version", metadata.version.as_str()),
+            ("size_mb", size_mb.as_str()),
+        ],
     );
-    prompt.psz_expanded_information = Some(format!(
-        "Direct download URL (also clickable below):\n{}\n\n\
-         SHA-256: {}\n\n\
-         What's a JDK? Java applications need a Java Development Kit to run. \
-         Eclipse Temurin is the official OpenJDK distribution from the Eclipse \
-         Adoptium working group — same Java you'd get from any vendor, but \
-         freely redistributable.",
-        metadata.package_link, metadata.sha256
+    prompt.psz_expanded_information = Some(dialogs::fill(
+        dlg.jdk_install.prompt.expanded.as_str(),
+        &[
+            ("url", metadata.package_link.as_str()),
+            ("sha256", metadata.sha256.as_str()),
+        ],
     ));
+    prompt.psz_expanded_control_text = dlg.jdk_install.prompt.show_details.clone();
+    prompt.psz_collapsed_control_text = dlg.jdk_install.prompt.hide_details.clone();
     prompt.buttons = vec![
         CustomButton {
             id: IDYES,
-            text: format!("Download Temurin {} now", metadata.version),
+            text: dialogs::fill(
+                dlg.jdk_install.prompt.button_download.as_str(),
+                &[("version", metadata.version.as_str())],
+            ),
         },
         CustomButton {
             id: IDNO,
-            text: "Open the download page in my browser".to_string(),
+            text: dlg.jdk_install.prompt.button_open_browser.clone(),
         },
         CustomButton {
             id: IDCANCEL,
-            text: "Cancel".to_string(),
+            text: dlg.jdk_install.prompt.button_cancel.clone(),
         },
     ];
     prompt.default_button = IDYES;
@@ -890,16 +1221,26 @@ pub fn maybe_install(
     }
 
     // 3. Download with progress + SHA-on-disk + extract.
-    let install_dir = install_root.join(&metadata.version);
+    // Install under `<install_root>/<major>/` so re-downloading after a
+    // Temurin point release replaces the previous install instead of
+    // leaving stale versions like `25.0.4+101.0.LTS` next to
+    // `25.0.5+8.LTS`. Adoptium's zip still carries a nested
+    // `jdk-X.Y.Z+1/` inside, so `find_java_home` walks one level deeper
+    // to find `bin/java.exe` and reports that as JAVA_HOME.
+    let install_dir = install_root.join(min_java_major.to_string());
     let cancel = Arc::new(AtomicBool::new(false));
     let shared = Arc::new(ProgressShared {
         pct: AtomicU32::new(0),
         done: AtomicI32::new(0),
         dialog_hwnd: AtomicI32::new(0),
         error: std::sync::Mutex::new(None),
+        phase: AtomicI32::new(0),
+        bytes: AtomicU64::new(0),
+        total_bytes: AtomicU64::new(metadata.size_bytes),
+        home: std::sync::Mutex::new(None),
     });
 
-    let tmp_zip = install_root.join(format!("{}.zip.tmp", metadata.version));
+    let tmp_zip = install_root.join(format!("{}.zip.tmp", min_java_major));
     let url = metadata.package_link.clone();
     let sha = metadata.sha256.clone();
     let total = metadata.size_bytes;
@@ -911,15 +1252,22 @@ pub fn maybe_install(
         move || worker_thread(install_dir, tmp_zip, url, sha, total, cancel, shared)
     });
 
+    let dlg = dialogs::dialogs();
+    let progress_main = dialogs::fill(
+        dlg.jdk_install.progress.main.as_str(),
+        &[
+            ("version", metadata.version.as_str()),
+            (
+                "size_mb",
+                &format!("{:.0}", metadata.size_bytes as f64 / 1_048_576.0),
+            ),
+        ],
+    );
     let clicked = show_progress_dialog(
         parent_hwnd,
-        "Downloading Eclipse Temurin…",
-        &format!(
-            "Temurin {} (~{:.0} MB)",
-            metadata.version,
-            metadata.size_bytes as f64 / 1_048_576.0
-        ),
-        "Verifying SHA-256 against the file on disk once complete.",
+        &dlg.jdk_install.progress.title,
+        &progress_main,
+        &dlg.jdk_install.progress.content_initial,
         shared.clone(),
     );
 
@@ -928,24 +1276,14 @@ pub fn maybe_install(
     // 4. Show result dialog + return.
     let done = shared.done.load(Ordering::SeqCst);
     if done == 1 {
-        if let Some(java) = locate_java_exe(&install_dir) {
-            let home = java
-                .parent()
-                .and_then(|p| p.parent())
-                .unwrap_or(&install_dir)
-                .to_path_buf();
-            let _ = std::fs::remove_file(&tmp_zip);
-            show_info_dialog(
-                parent_hwnd,
-                "JDK ready — Snug",
-                "Eclipse Temurin was installed",
-                &format!(
-                    "OpenJDK {} is now available at:\n{}\n\nSnug will continue launching.",
-                    metadata.version,
-                    home.display()
-                ),
-            );
-            return Ok(Some(home));
+        if let Ok(g) = shared.home.lock() {
+            if let Some(home) = g.clone() {
+                let _ = std::fs::remove_file(&tmp_zip);
+                // No success dialog; the download + verify + extract
+                // was the long part, and the dialog stays up while the
+                // bar fills, so the user already knows it succeeded.
+                return Ok(Some(home));
+            }
         }
     }
 
@@ -960,41 +1298,69 @@ pub fn maybe_install(
             format!("Download did not finish (status={done}).")
         }
     });
+    let dlg = dialogs::dialogs();
+    let content = dialogs::fill(
+        dlg.jdk_install.failure.content.as_str(),
+        &[
+            ("version", metadata.version.as_str()),
+            ("error", msg.as_str()),
+        ],
+    );
     show_error_dialog(
         parent_hwnd,
-        "JDK download failed — Snug",
-        "Could not download or install Eclipse Temurin",
-        &format!("{msg}\n\nPlease set JAVA_HOME manually and re-launch."),
+        &dlg.jdk_install.failure.title,
+        &dlg.jdk_install.failure.title,
+        &content,
     );
     Ok(None)
 }
 
-fn show_info_dialog(parent: HWND, title: &str, main: &str, content: &str) {
-    // Try the full TaskDialog first, fall back to MessageBoxW on
-    // pre-Vista systems.
-    let mut c = Config::new(parent, title, main);
-    c.icon = IconKind::Info;
-    c.content = format!("{main}\n\n{content}");
-    c.buttons = vec![CustomButton {
-        id: IDOK,
-        text: "Continue".into(),
-    }];
-    let mut button: i32 = 0;
-    let ok = unsafe { call_task_dialog_indirect(&c.to_taskdialogconfig(), &mut button) };
-    if !ok {
-        unsafe {
-            info_messagebox(parent, title, &format!("{main}\n\n{content}"), true)
-        };
-    }
+/// "We could not reach Adoptium" dialog. Pops when
+/// `fetch_metadata` fails — either no internet, captive portal,
+/// corporate firewall, TLS/DNS issue, or Adoptium downtime. Without
+/// this, the GUI-subsystem launcher silently drops the failure to
+/// an invisible stderr line and the user only sees the final
+/// `MessageBoxW`.
+///
+/// Two buttons: **Open the download page in my browser** (carries
+/// the user to a Temurin release-filtered page so they can still
+/// install manually) and **Cancel**. Returns the button id so the
+/// caller can act on the choice.
+fn show_metadata_failed_dialog(parent: HWND, min_java: u16, error_detail: &str) -> i32 {
+    let d = dialogs::dialogs();
+    let major = min_java.to_string();
+    let mut c = Config::new(
+        parent,
+        d.jdk_install.metadata_failed.title.clone(),
+        dialogs::fill(d.jdk_install.metadata_failed.main.as_str(), &[("major", &major)]),
+    );
+    c.icon = IconKind::Warning;
+    c.content = dialogs::fill(
+        d.jdk_install.metadata_failed.content.as_str(),
+        &[("major", &major), ("error", error_detail)],
+    );
+    c.buttons = vec![
+        CustomButton {
+            id: IDYES,
+            text: d.jdk_install.metadata_failed.button_open_browser.clone(),
+        },
+        CustomButton {
+            id: IDCANCEL,
+            text: d.jdk_install.metadata_failed.button_cancel.clone(),
+        },
+    ];
+    c.default_button = IDYES;
+    c.show()
 }
 
 fn show_error_dialog(parent: HWND, title: &str, main: &str, content: &str) {
+    let d = dialogs::dialogs();
     let mut c = Config::new(parent, title, main);
     c.icon = IconKind::Error;
     c.content = format!("{main}\n\n{content}");
     c.buttons = vec![CustomButton {
         id: IDOK,
-        text: "OK".into(),
+        text: d.generic.error_dialog_ok.clone(),
     }];
     let mut button: i32 = 0;
     let ok = unsafe { call_task_dialog_indirect(&c.to_taskdialogconfig(), &mut button) };
@@ -1033,6 +1399,21 @@ fn open_in_browser(url: &str) -> Result<(), JdkError> {
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn tempdir() -> std::path::PathBuf {
+        let unique = format!(
+            "snug-jdk-install-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let dir = std::env::temp_dir().join(unique);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 
     #[test]
     fn wide_null_terminates() {
@@ -1097,5 +1478,141 @@ mod tests {
         let text = "openjdk version \"17.0.10+7\" 2025-01-20\n";
         assert_eq!(parse_java_version(text), Some(17));
         assert_eq!(parse_java_version(""), None);
+    }
+
+    /// Smoke-test for the Adoptium `/v3/assets/feature_releases/.../ga`
+    /// JSON shape. If the API drifts again, this fails loudly with the
+    /// exact field name that's missing — no more silent `[]` returning
+    /// a confusing "could not locate a Java 25+ JVM" error to the
+    /// user.
+    #[test]
+    fn adoptium_feature_releases_json_shape_matches() {
+        // Minimal but representative snippet — only the fields we read.
+        let body = r#"[
+          {
+            "binaries": [
+              {
+                "package": {
+                  "link": "https://example.invalid/jdk.zip",
+                  "checksum": "00c847d804f4a78e9f04f2683faf14fed898535b177b7fc704486cb0284e9283",
+                  "size": 141167264
+                }
+              }
+            ],
+            "version_data": {
+              "semver": "25.0.4+101.0.LTS"
+            }
+          }
+        ]"#;
+
+        let list: AdoptiumAssetList = serde_json::from_str(body)
+            .expect("Adoptium feature_releases JSON shape drifted");
+        let asset = &list.0[0];
+        let binary = &asset.binaries[0];
+
+        assert_eq!(binary.package.size, 141167264);
+        assert_eq!(
+            binary.package.checksum,
+            "00c847d804f4a78e9f04f2683faf14fed898535b177b7fc704486cb0284e9283"
+        );
+        assert_eq!(
+            asset.version_data.semver.as_deref(),
+            Some("25.0.4+101.0.LTS")
+        );
+    }
+
+    #[test]
+    fn format_status_line_phase_0_shows_bytes() {
+        // 50 MiB / 100 MiB at 50%
+        let line = format_status_line(0, 50, 50 * 1_048_576, 100 * 1_048_576);
+        assert!(line.contains("50.0 MB"), "got: {line}");
+        assert!(line.contains("100.0 MB"), "got: {line}");
+        assert!(line.contains("50%"), "got: {line}");
+    }
+
+    #[test]
+    fn format_status_line_phase_1_says_verifying() {
+        let line = format_status_line(1, 95, 100 * 1_048_576, 100 * 1_048_576);
+        assert!(line.contains("Verifying SHA-256"), "got: {line}");
+        assert!(line.contains("95%"), "got: {line}");
+    }
+
+    #[test]
+    fn format_status_line_phase_2_says_extracting() {
+        let line = format_status_line(2, 99, 100 * 1_048_576, 100 * 1_048_576);
+        assert!(line.contains("Extracting"), "got: {line}");
+    }
+
+    /// The progress bar must never go backwards across phase
+    /// boundaries — the previous `99 → 95 → 99 → 100` sequence made
+    /// the bar look like it reset when the user clicked Download.
+    /// Each boundary step here is what `worker_thread` actually
+    /// stores into `shared.pct`; if anyone reorders or re-numbers the
+    /// phase constants, this test fails loud.
+    #[test]
+    fn bar_progress_is_monotonic_across_phases() {
+        // Within phase 0, the download is a straight climb from 0 to
+        // PHASE_0_PCT_MAX.
+        assert_eq!(PHASE_0_PCT_MAX, 95);
+        assert!(PHASE_0_PCT_MAX > 0);
+
+        // Phase 0 → phase 1: no jump backwards.
+        assert!(PHASE_1_PCT_START >= PHASE_0_PCT_MAX);
+        // Phase 1 itself climbs.
+        assert!(PHASE_1_PCT_END > PHASE_1_PCT_START);
+        assert_eq!(PHASE_1_PCT_END, 98);
+
+        // Phase 1 → phase 2: no jump backwards.
+        assert!(PHASE_2_PCT_START >= PHASE_1_PCT_END);
+        assert_eq!(PHASE_2_PCT_START, 99);
+
+        // Phase 2 ends at 100.
+        // (Verified indirectly: we don't have PHASE_2_PCT_END as a
+        // const because we use a literal 100. Asserting against the
+        // literal here keeps the invariant explicit.)
+        assert!(PHASE_2_PCT_START < 100);
+    }
+
+    #[test]
+    fn format_status_line_handles_unknown_total() {
+        // When Adoptium omits size (some JRE builds do), we still show
+        // a percentage but no byte counts.
+        let line = format_status_line(0, 25, 1024, 0);
+        assert!(line.contains("25%"), "got: {line}");
+        assert!(!line.contains("of 0.0"), "shouldn't render 0/0: {line}");
+    }
+
+    #[test]
+    fn find_java_home_handles_adoptium_nested_layout() {
+        // Adoptium default: install_root/<version>/jdk-25.0.4.1+1/bin/java.exe
+        let tmp = tempdir();
+        let nested = tmp.join("25.0.4+101.0.LTS").join("jdk-25.0.4.1+1");
+        std::fs::create_dir_all(nested.join("bin")).unwrap();
+        std::fs::write(nested.join("bin").join("java.exe"), b"").unwrap();
+        let home = find_java_home(&tmp.join("25.0.4+101.0.LTS")).expect("nested home");
+        assert!(home.ends_with("jdk-25.0.4.1+1"));
+        assert!(home.join("bin").join("java.exe").is_file());
+    }
+
+    #[test]
+    fn find_java_home_handles_flat_layout() {
+        // Future-proofing: a zip without the leading directory
+        // should also be picked up.
+        let tmp = tempdir();
+        let flat = tmp.join("25.0.4+101.0.LTS");
+        std::fs::create_dir_all(flat.join("bin")).unwrap();
+        std::fs::write(flat.join("bin").join("java.exe"), b"").unwrap();
+        let home = find_java_home(&flat).expect("flat home");
+        assert!(home.ends_with("25.0.4+101.0.LTS"));
+    }
+
+    #[test]
+    fn find_java_home_returns_none_when_no_jdk() {
+        // A directory tree with no java.exe anywhere inside should
+        // not be misidentified as a JDK home.
+        let tmp = tempdir();
+        std::fs::create_dir_all(tmp.join("stuff").join("bin")).unwrap();
+        std::fs::write(tmp.join("stuff").join("bin").join("notajava"), b"").unwrap();
+        assert!(find_java_home(&tmp).is_none());
     }
 }

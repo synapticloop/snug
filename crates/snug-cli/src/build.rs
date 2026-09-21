@@ -137,7 +137,7 @@ pub fn build_payload(cli: &Cli) -> Result<SnugPayload> {
         jvm_args: cli.jvm_args.clone(),
         splash,
         behavior: LauncherBehavior {
-            auto_download_jdk: cli.download_jdk,
+            download_jdk: cli.download_jdk.into(),
             ..LauncherBehavior::default()
         },
     };

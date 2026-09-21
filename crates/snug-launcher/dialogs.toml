@@ -1,0 +1,133 @@
+# ===========================================================================
+# dialogs.toml — every user-visible string the Windows launcher shows.
+# ===========================================================================
+#
+# After editing this file, rebuild with:
+#
+#     powershell -ExecutionPolicy Bypass -File ./scripts/build-release.ps1
+#
+# Convention
+# ----------
+#   - Strings are loaded into the launcher at compile time via
+#     `include_str!`, so changing them requires a rebuild (no runtime
+#     hot-reload).
+#   - Triple-quoted TOML strings (`"""..."""`) preserve newlines exactly;
+#     use `\n` to embed a literal newline.
+#   - Format placeholders use Rust's `format!` named-argument syntax:
+#     `{version}`, `{size_mb}`, `{url}`, `{pct}`, etc. The Rust caller
+#     fills these in at runtime. Renaming a placeholder in this file
+#     without updating the matching Rust `format!(...)` call will fail
+#     at runtime.
+#   - Anything you DON'T want to brand: title bar windows like
+#     "Java Runtime Required — Snug" can be edited in place. The
+#     "— Snug" suffix is consistent across dialogs so users see the
+#     brand every time, but feel free to drop it.
+# ===========================================================================
+
+
+# --- First-run download prompt --------------------------------------------
+# Shown when no compatible JDK is found and `download-jdk` is `auto` or
+# `force` and the user hasn't been prompted yet.
+
+[jdk_install.prompt]
+title = "Java Runtime Required — Snug"
+main = "Eclipse Temurin JDK was not found on this machine"
+content = """\
+This application needs a Java {version} or higher. Snug can download the \
+official Eclipse Temurin {version} (~{size_mb} MB) and install it to a per-user \
+location, or open the download page in your browser.\n\n\
+Download will be verified against the official SHA-256."""
+expanded = """\
+Direct download URL (also clickable below):\n\
+{url}\n\n\
+SHA-256: {sha256}\n\n\
+What's a JDK? Java applications need a Java Development Kit to run. \
+Eclipse Temurin is the official OpenJDK distribution from the Eclipse \
+Adoptium working group — same Java you'd get from any vendor, but \
+rebuilt and redistributed for free under the GPL."""
+
+# Button labels. The first one is the default (highlighted + Enter).
+button_download = "Download Temurin {version} now"
+button_open_browser = "Open the download page in my browser"
+button_cancel = "Cancel"
+
+# The "Show details" / "Hide details" toggle is a Windows convention;
+# users expect it to read exactly this. Change only if you have a
+# strong reason.
+show_details = "Show details"
+hide_details = "Hide details"
+
+
+# --- Metadata-fetch failure prompt ----------------------------------------
+# Shown when api.adoptium.net is unreachable. Gives the user a path
+# forward even without the download flow.
+
+[jdk_install.metadata_failed]
+title = "Could not reach Adoptium — Snug"
+main = "Snug could not reach api.adoptium.net to look up a download link for Java {major}."
+content = """\
+Either this host has no internet access, a firewall or proxy is blocking the \
+request, or the Adoptium API is temporarily unavailable.\n\n\
+You can still install Eclipse Temurin {major} manually:\n\
+  - Open the download page below and run the installer, or\n\
+  - Download the .zip and extract it under\n\
+    %LOCALAPPDATA%\\snug\\jdk\\<version>\\ and re-launch this app.\n\n\
+URL: https://adoptium.net/temurin/releases/?version={major}\n\n\
+Technical detail:\n\
+{error}"""
+button_open_browser = "Open the download page in my browser"
+button_cancel = "Cancel"
+
+
+# --- Live progress dialog --------------------------------------------------
+# Title / main / initial content stay put while the bar fills.
+# `status_*` lines are rewritten in place every ~200 ms by the
+# `TDN_TIMER` callback so the user sees real-time progress.
+
+[jdk_install.progress]
+title = "Downloading Eclipse Temurin…"
+main = "Temurin {version} (~{size_mb} MB)"
+content_initial = "Verifying SHA-256 against the file on disk once complete."
+
+status_phase_0_with_size = "Downloaded {done_mb} MB of {total_mb} MB ({pct}%)"
+status_phase_0_no_size  = "Downloading… ({pct}%)"
+status_phase_1          = "Verifying SHA-256 against the file on disk… ({pct}%)"
+status_phase_2          = "Extracting… ({pct}%)"
+status_other            = "Working… ({pct}%)"
+
+
+# --- Post-install success dialog ------------------------------------------
+
+[jdk_install.success]
+title = "JDK ready — Snug"
+main = "Eclipse Temurin was installed"
+content = """\
+OpenJDK {version} is now available at:\n\
+{home}\n\n\
+Snug will continue launching."""
+
+
+# --- Post-install failure dialog ------------------------------------------
+# Shown when the install flow returns `Ok(None)` (user cancelled) or
+# hits an unrecoverable error after the cleanup phase.
+
+[jdk_install.failure]
+title = "Could not download or install Eclipse Temurin"
+content = """\
+Snug could not download or install Eclipse Temurin {version}.\n\n\
+{error}\n\n\
+The launch will continue using whichever Java (if any) is already installed on this machine."""
+
+# Generic OK button used by the success / failure dialogs above.
+button_ok = "OK"
+button_continue = "Continue"
+
+
+# --- Generic error dialog (used by the rest of the launcher) --------------
+# `show_error_dialog` and `show_info_dialog` use these. The title and
+# main are passed in by the caller, so they're effectively labels for
+# the "shell" of the dialog.
+
+[generic]
+error_dialog_ok = "OK"
+info_dialog_continue = "Continue"
