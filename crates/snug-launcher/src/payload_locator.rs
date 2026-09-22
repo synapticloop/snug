@@ -53,7 +53,7 @@ pub fn find_in_file(path: &Path) -> Result<Option<SnugEmbedded>, FormatError> {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::PathBuf;
+    
 
     use snug_format::{embedded_file, AppMetadata, LauncherBehavior, LauncherConfig, SnugEmbedded};
 

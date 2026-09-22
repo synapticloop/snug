@@ -63,6 +63,39 @@ pub struct ProgressDialog {
     pub title: String,
     pub main: String,
     pub content_initial: String,
+
+    // Strings used by the custom-painted v5 fallback window
+    // (`progress_window.rs`). Mirrors the user-facing mockup layout
+    // — large heading, subtitle, percent label, phase description,
+    // transfer speed + ETA, info-box copy.
+    pub heading: String,
+    pub subtitle: String,
+    pub pct_label: String,
+    pub phase_label: String,
+    pub detail_with_size: String,
+    pub detail_no_size: String,
+    pub detail_eta_seconds: String,
+    pub detail_eta_second: String,
+    pub detail_eta_done: String,
+    pub info_heading: String,
+    pub info_subtext: String,
+    /// Label of the Cancel button while the download phase is
+    /// running. Default `"Install"` — the download is part of the
+    /// install flow, and labelling the abort button "Install"
+    /// signals the user what's about to happen. Swapped to
+    /// `prompt.button_cancel` once the verify / extract phases
+    /// start.
+    pub cancel_button_during_download: String,
+    /// When `true`, the JDK download flow uses `TaskDialogIndirect`
+    /// instead of `progress_window::show`. Default `false` so the
+    /// user-facing mockup design wins on every modern Windows
+    /// install; flip on for the rare v6-SxS-crash install class.
+    #[serde(default)]
+    pub use_taskdialog_fallback: bool,
+
+    // Strings used by the TaskDialogIndirect v6 path
+    // (`jdk_install::progress_dialog_callback`). The `status_*` line
+    // is the live content rewritten each TDN_TIMER tick.
     pub status_phase_0_with_size: String,
     pub status_phase_0_no_size: String,
     pub status_phase_1: String,
