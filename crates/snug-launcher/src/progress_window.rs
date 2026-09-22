@@ -44,20 +44,22 @@ use std::time::Instant;
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    AC_SRC_ALPHA, AC_SRC_OVER, AlphaBlend, BeginPaint, BITMAP, BLENDFUNCTION,
-    CreateCompatibleDC, CreateFontW, CreateRoundRectRgn, CreateSolidBrush, DeleteDC,
-    DeleteObject, EndPaint, FillRect, FillRgn, FW_BOLD, FW_NORMAL, GetObjectW, GetStockObject,
-    HBRUSH, HDC, HBITMAP, HFONT, InvalidateRect, NULL_BRUSH, PAINTSTRUCT, SelectObject,
-    FW_SEMIBOLD, WHITE_BRUSH,
+    AC_SRC_ALPHA, AC_SRC_OVER, AlphaBlend, BeginPaint, BITMAP, BITMAPINFO, BITMAPINFOHEADER,
+    BLENDFUNCTION, BI_RGB, CreateCompatibleDC, CreateDIBSection, CreateFontW,
+    CreateRoundRectRgn, CreateSolidBrush, DIB_RGB_COLORS, DeleteDC, DeleteObject, EndPaint,
+    FillRect, FillRgn, FW_BOLD, FW_NORMAL, GetObjectW, GetStockObject, HBRUSH, HDC, HBITMAP,
+    HFONT, InvalidateRect, NULL_BRUSH, PAINTSTRUCT, SelectObject, FW_SEMIBOLD, WHITE_BRUSH,
 };
-use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::LibraryLoader::{
+    FindResourceW, GetModuleHandleW, LoadResource, LockResource,
+};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, DrawIconEx, GetMessageW,
-    GetSystemMetrics, HICON, KillTimer, LoadIconW, LoadImageW, MSG, PostQuitMessage,
+    GetSystemMetrics, HICON, KillTimer, LoadIconW, MSG, PostQuitMessage,
     RegisterClassExW, SendMessageW, SetTimer, SetWindowTextW, SetWindowLongPtrW,
     GetWindowLongPtrW, TranslateMessage, CW_USEDEFAULT, IDCANCEL, ICON_BIG, IDI_INFORMATION,
-    ICON_SMALL, IMAGE_ICON, LR_SHARED, SM_CXSCREEN, SM_CYSCREEN, BS_DEFPUSHBUTTON,
+    ICON_SMALL, SM_CXSCREEN, SM_CYSCREEN, BS_DEFPUSHBUTTON,
     WM_COMMAND, WM_CREATE, WM_CLOSE, WM_NCDESTROY, WM_CTLCOLORSTATIC, WM_PAINT, WM_SETICON,
     WM_TIMER,
     WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_SYSMENU, WS_VISIBLE, WS_OVERLAPPED, WS_EX_TOPMOST,
@@ -677,22 +679,37 @@ unsafe extern "system" fn progress_wndproc(
             } else {
                 0
             };
-            if mascot_hbitmap != 0 {
+if mascot_hbitmap != 0 {
+                crate::log::log(&format!(
+                    "WM_PAINT mascot: PNG bitmap path hbitmap={}",
+                    mascot_hbitmap
+                ));
                 draw_mascot_hbitmap(hdc, mascot_hbitmap as _);
             } else {
-                let mascot_hicon = load_mascot_hicon().unwrap_or(std::ptr::null_mut());
-                if !mascot_hicon.is_null() {
-                    DrawIconEx(
-                        hdc,
-                        MASCOT_X,
-                        MASCOT_Y,
-                        mascot_hicon,
-                        MASCOT_W,
-                        MASCOT_H,
-                        0,
-                        std::ptr::null_mut(),
-                        0,
-                    );
+                // Production path: read the EXE icon resource and
+                // AlphaBlend it onto the mascot slot. `DrawIconEx`
+                // doesn't honour 32-bit alpha for these icons (the
+                // icons are encoded as PNG-in-ICO and `DrawIconEx`
+                // falls back to the 1-bit AND mask, which renders the
+                // soft-alpha background as fully opaque). Going
+                // through `AlphaBlend` directly gives the user the
+                // same per-pixel transparency the preview shows for
+                // the PNG mascot.
+                let hinst = unsafe { GetModuleHandleW(std::ptr::null()) };
+                if !hinst.is_null() {
+                    let best_id = crate::jdk_install::best_icon_id_for_size(hinst, MASCOT_LOAD_CX, MASCOT_LOAD_CY);
+                    match best_id {
+                        Some(id) => unsafe {
+                            crate::log::log(&format!(
+                                "WM_PAINT mascot: AlphaBlend path, RT_ICON id={}",
+                                id
+                            ));
+                            draw_exe_mascot_with_alpha(hdc, hinst, id, MASCOT_X, MASCOT_Y, MASCOT_W, MASCOT_H);
+                        },
+                        None => crate::log::log("WM_PAINT mascot: no RT_ICON id found"),
+                    }
+                } else {
+                    crate::log::log("WM_PAINT mascot: GetModuleHandleW returned NULL");
                 }
             }
 
@@ -1091,32 +1108,145 @@ unsafe fn draw_mascot_hbitmap(hdc_dest: HDC, hbitmap: HBITMAP) {
     }
 }
 
-/// Try to load the largest available size of the EXE's main icon for
-/// the mascot slot. ICO files typically carry 16/32/48/256 px sizes —
-/// asking for 256 lets `LoadImageW` pick the largest. Returns
-/// `None` when the EXE has no icon (bare stub, no `--icon` input).
-fn load_mascot_hicon() -> Option<HICON> {
-    // `LoadImageW` with `IMAGE_ICON` + a fixed cx/cy walks the ICO
-    // directory and picks the entry whose dimensions are ≥ the
-    // requested size, downscaling if nothing larger is available.
+/// Look up the EXE's main icon at the entry whose dimensions best match
+/// `(cx, cy)`, build a top-down DIB section from its raw
+/// `BITMAPINFOHEADER` + BGRA pixel data, and `AlphaBlend` it onto the
+/// dialog at `(x, y)` with size `(w, h)`.
+///
+/// This is the production equivalent of `draw_mascot_hbitmap` (which
+/// takes an HBITMAP from the PNG preview path). `DrawIconEx` honours
+/// `LR_SHARED` + the 1-bit AND mask for transparency, but a 32-bit
+/// BGRA icon with a soft alpha background (like `assets/snug-icon.png`)
+/// drawn via `DrawIconEx` ends up either fully opaque or fully
+/// transparent depending on `editpe`'s icon encoding, neither of
+/// which matches the mockup. Reading the raw RT_ICON bytes and
+/// `AlphaBlend`-ing with `AC_SRC_ALPHA` gives full 32-bit alpha
+/// transparency the way the user expects.
+fn draw_exe_mascot_with_alpha(
+    hdc: HDC,
+    hinst: windows_sys::Win32::Foundation::HINSTANCE,
+    icon_id: u16,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+) {
+    const RT_ICON: u16 = 3;
     unsafe {
-        let hinst = GetModuleHandleW(std::ptr::null());
-        if hinst.is_null() {
-            return load_exe_main_icon_hicon();
-        }
-        let hicon = LoadImageW(
+        let hres = FindResourceW(
             hinst,
-            1usize as *const u16,
-            IMAGE_ICON,
-            MASCOT_LOAD_CX,
-            MASCOT_LOAD_CY,
-            LR_SHARED,
+            icon_id as usize as *const u16,
+            RT_ICON as *const u16,
         );
-        if !hicon.is_null() {
-            Some(hicon)
-        } else {
-            load_exe_main_icon_hicon()
+        if hres.is_null() {
+            crate::log::log(&format!(
+                "draw_exe_mascot_with_alpha: FindResourceW(RT_ICON id={}) returned NULL",
+                icon_id
+            ));
+            return;
         }
+        let hmem = LoadResource(hinst, hres);
+        let pdata = if !hmem.is_null() {
+            LockResource(hmem)
+        } else {
+            crate::log::log("draw_exe_mascot_with_alpha: LoadResource returned NULL");
+            std::ptr::null_mut()
+        };
+        if pdata.is_null() {
+            return;
+        }
+
+        // Parse BITMAPINFOHEADER. `biHeight` is doubled for icons
+        // (color + AND mask); we want just the color portion.
+        let header = pdata as *const BITMAPINFOHEADER;
+        let bi_width = (*header).biWidth;
+        let bi_height_full = (*header).biHeight.unsigned_abs();
+        let bi_bit_count = (*header).biBitCount as u32;
+        let bi_height = bi_height_full as i32 / 2;
+
+        if bi_bit_count != 32 || bi_width <= 0 || bi_height == 0 {
+            crate::log::log(&format!(
+                "draw_exe_mascot_with_alpha: unsupported icon format (w={} h={} bpp={})",
+                bi_width, bi_height, bi_bit_count
+            ));
+            return;
+        }
+
+        // Pixel data follows the BITMAPINFOHEADER (typically 40 bytes).
+        let pixels = (pdata as *const u8).add((*header).biSize as usize);
+
+        // Build a top-down DIB section so AlphaBlend reads BGRA rows
+        // in the natural top-to-bottom order without an extra flip.
+let bmi = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: bi_width,
+                biHeight: -bi_height, // negative = top-down
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB,
+                biSizeImage: 0,
+                biXPelsPerMeter: 0,
+                biYPelsPerMeter: 0,
+                biClrUsed: 0,
+                biClrImportant: 0,
+            },
+            bmiColors: [std::mem::zeroed(); 1],
+        };
+
+        let mut bits: *mut core::ffi::c_void = core::ptr::null_mut();
+        let hbmp = CreateDIBSection(
+            core::ptr::null_mut(),
+            &bmi,
+            DIB_RGB_COLORS,
+            &mut bits,
+            core::ptr::null_mut(),
+            0,
+        );
+        if hbmp.is_null() || bits.is_null() {
+            crate::log::log("draw_exe_mascot_with_alpha: CreateDIBSection failed");
+            return;
+        }
+        let row_bytes = bi_width as usize * 4;
+        core::ptr::copy_nonoverlapping(pixels, bits as *mut u8, row_bytes * bi_height as usize);
+
+        // AlphaBlend onto the dialog HDC.
+        let mem_dc = CreateCompatibleDC(hdc);
+        if mem_dc.is_null() {
+            DeleteObject(hbmp);
+            return;
+        }
+        let old = SelectObject(mem_dc, hbmp);
+        let blend = BLENDFUNCTION {
+            BlendOp: AC_SRC_OVER as u8,
+            BlendFlags: 0,
+            SourceConstantAlpha: 255,
+            AlphaFormat: AC_SRC_ALPHA as u8,
+        };
+        let ok = AlphaBlend(
+            hdc,
+            x,
+            y,
+            w,
+            h,
+            mem_dc,
+            0,
+            0,
+            bi_width,
+            bi_height as i32,
+            blend,
+        );
+        if ok == 0 {
+            crate::log::log("draw_exe_mascot_with_alpha: AlphaBlend returned 0");
+        } else {
+            crate::log::log(&format!(
+                "draw_exe_mascot_with_alpha: AlphaBlend OK ({}x{} -> {}x{} at {}, {})",
+                bi_width, bi_height, w, h, x, y
+            ));
+        }
+        SelectObject(mem_dc, old);
+        DeleteDC(mem_dc);
+        DeleteObject(hbmp);
     }
 }
 
