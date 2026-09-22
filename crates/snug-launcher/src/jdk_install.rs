@@ -549,6 +549,15 @@ pub struct ProgressShared {
     /// the user has explicitly opted in — the progress window
     /// appears in a "ready to install" paused state.
     pub(crate) started: AtomicBool,
+    /// Optional `HBITMAP` handle (cast to `i32`) for a custom mascot
+    /// to draw in the 170×170 slot. `0` means "fall back to the EXE's
+    /// main icon resource" (the production path). The
+    /// `progress_preview` bin embeds `assets/snug-icon.png` via
+    /// `include_bytes!`, decodes it with the `image` crate, and
+    /// stores the resulting top-down DIB section here. The dialog
+    /// paints this bitmap via `StretchDIBits` ahead of the icon
+    /// fallback in `WM_PAINT`.
+    pub(crate) mascot: AtomicI32,
     /// Resolved JAVA_HOME after a successful extract. The worker
     /// writes this so the caller doesn't have to walk the
     /// extracted tree again.
@@ -582,6 +591,7 @@ impl ProgressShared {
             home: Mutex::new(None),
             error_at: Mutex::new(None),
             started: AtomicBool::new(false),
+            mascot: AtomicI32::new(0),
         }
     }
 
@@ -650,6 +660,19 @@ impl ProgressShared {
     /// Set the terminal status.
     pub fn set_status(&self, status: i32) {
         self.done.store(status, Ordering::SeqCst);
+    }
+
+    /// Optional `HBITMAP` handle (cast to `i32`) for a custom mascot
+    /// image. `0` means "use the EXE icon fallback". See
+    /// [`ProgressShared::mascot`] for the field doc.
+    pub fn mascot_hbitmap(&self) -> i32 {
+        self.mascot.load(Ordering::SeqCst)
+    }
+    /// Set the mascot `HBITMAP`. Pass `0` to clear (use icon
+    /// fallback). The bitmap must remain valid for as long as the
+    /// dialog is open.
+    pub fn set_mascot_hbitmap(&self, hbitmap: i32) {
+        self.mascot.store(hbitmap, Ordering::SeqCst);
     }
 }
 
@@ -1545,6 +1568,7 @@ fn run_one_install_attempt(
         home: std::sync::Mutex::new(None),
         error_at: std::sync::Mutex::new(None),
         started: AtomicBool::new(false),
+        mascot: AtomicI32::new(0),
     });
 
     let worker = thread::spawn({
