@@ -44,8 +44,9 @@ use std::time::Instant;
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, CreateFontW, CreateSolidBrush, DeleteObject, EndPaint, FillRect, FW_BOLD,
-    GetStockObject, HBRUSH, HFONT, NULL_BRUSH, PAINTSTRUCT,
+    BeginPaint, BITMAP, CreateCompatibleDC, CreateFontW, CreateSolidBrush, DeleteDC, DeleteObject,
+    EndPaint, FillRect, FW_BOLD, GetObjectW, GetStockObject, HBRUSH, HDC, HBITMAP, HFONT,
+    NULL_BRUSH, PAINTSTRUCT, SelectObject, SRCCOPY, StretchBlt,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::{PBM_SETBARCOLOR, PBM_SETPOS, PBM_SETRANGE};
@@ -100,13 +101,13 @@ const WINDOW_H: i32 = 270;
 const MARGIN: i32 = 16;
 const MASCOT_X: i32 = MARGIN;
 const MASCOT_Y: i32 = 36;
-const MASCOT_W: i32 = 170;
-const MASCOT_H: i32 = 170;
+const MASCOT_W: i32 = 140;
+const MASCOT_H: i32 = 140;
 
 const TEXT_X: i32 = MASCOT_X + MASCOT_W + 18;
 const TEXT_W: i32 = WINDOW_W - TEXT_X - MARGIN;
 
-const HEADING_Y: i32 = 40;
+const HEADING_Y: i32 = 30;
 const HEADING_H: i32 = 18;
 
 const SUBTITLE_Y: i32 = 65;
@@ -483,21 +484,34 @@ unsafe extern "system" fn progress_wndproc(
             FillRect(hdc, &info_rc, info_brush);
             DeleteObject(info_brush as _);
 
-            // 3. Mascot icon — try a 256 px version of the EXE icon
-            // for sharpness, fall back to the system-size one.
-            let mascot_hicon = load_mascot_hicon().unwrap_or(std::ptr::null_mut());
-            if !mascot_hicon.is_null() {
-                DrawIconEx(
-                    hdc,
-                    MASCOT_X,
-                    MASCOT_Y,
-                    mascot_hicon,
-                    MASCOT_W,
-                    MASCOT_H,
-                    0,
-                    std::ptr::null_mut(),
-                    0,
-                );
+            // 3. Mascot. Prefer an HBITMAP the caller pushed via
+            // `ProgressShared::set_mascot_hbitmap()` — `progress_preview`
+            // uses this to draw `assets/snug-icon.png` directly. Falls
+            // back to the EXE's main icon resource when no bitmap is
+            // set (production path).
+            let raw = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut ProgressState;
+            let mascot_hbitmap = if !raw.is_null() {
+                (&(*raw).shared).mascot_hbitmap()
+            } else {
+                0
+            };
+            if mascot_hbitmap != 0 {
+                draw_mascot_hbitmap(hdc, mascot_hbitmap as _);
+            } else {
+                let mascot_hicon = load_mascot_hicon().unwrap_or(std::ptr::null_mut());
+                if !mascot_hicon.is_null() {
+                    DrawIconEx(
+                        hdc,
+                        MASCOT_X,
+                        MASCOT_Y,
+                        mascot_hicon,
+                        MASCOT_W,
+                        MASCOT_H,
+                        0,
+                        std::ptr::null_mut(),
+                        0,
+                    );
+                }
             }
 
             EndPaint(hwnd, &ps);
@@ -766,6 +780,65 @@ unsafe fn apply_window_icon(hwnd: HWND) {
             SendMessageW(hwnd, WM_SETICON, ICON_SMALL as WPARAM, hicon as LPARAM);
             SendMessageW(hwnd, WM_SETICON, ICON_BIG as WPARAM, hicon as LPARAM);
         }
+    }
+}
+
+/// Stretch a caller-supplied `HBITMAP` into the mascot slot. Used by
+/// `progress_preview`, which decodes `assets/snug-icon.png` into a
+/// top-down DIB section at startup and pushes the handle into
+/// `ProgressShared::mascot` via `set_mascot_hbitmap()`. Falls back to
+/// the EXE-icon path in `load_mascot_hicon` when the handle is
+/// `NULL`.
+///
+/// The bitmap is assumed to be a 32-bpp top-down DIB section with
+/// BGRA byte order (the format `CreateDIBSection` + `BI_RGB` produces
+/// when the caller writes raw pixel bytes — see `progress_preview`
+/// for the conversion routine). `StretchBlt` with `SRCCOPY` ignores
+/// the alpha channel and treats each 32-bit pixel as opaque, so a
+/// PNG with a transparent background will composite over the dialog's
+/// white background instead of looking correct — that's a known
+/// limitation noted for the follow-up `mascot.png` payload slice.
+unsafe fn draw_mascot_hbitmap(hdc_dest: HDC, hbitmap: HBITMAP) {
+    if hbitmap.is_null() {
+        return;
+    }
+    let mut bmp: BITMAP = unsafe { std::mem::zeroed() };
+    let got = unsafe {
+        GetObjectW(
+            hbitmap as _,
+            std::mem::size_of::<BITMAP>() as i32,
+            &mut bmp as *mut _ as *mut _,
+        )
+    };
+    if got == 0 {
+        return;
+    }
+    let src_w = bmp.bmWidth;
+    let src_h = bmp.bmHeight;
+    if src_w <= 0 || src_h <= 0 {
+        return;
+    }
+    let hdc_mem = unsafe { CreateCompatibleDC(hdc_dest) };
+    if hdc_mem.is_null() {
+        return;
+    }
+    let old = unsafe { SelectObject(hdc_mem, hbitmap as _) };
+    unsafe {
+        StretchBlt(
+            hdc_dest,
+            MASCOT_X,
+            MASCOT_Y,
+            MASCOT_W,
+            MASCOT_H,
+            hdc_mem,
+            0,
+            0,
+            src_w,
+            src_h,
+            SRCCOPY,
+        );
+        SelectObject(hdc_mem, old);
+        DeleteDC(hdc_mem);
     }
 }
 

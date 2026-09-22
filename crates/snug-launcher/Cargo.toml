@@ -38,3 +38,11 @@ editpe = { workspace = true }
 # encoded payload.
 [package.metadata.cargo-zigbuild]
 # Reserved for future use.
+
+# Dev-only: the `progress_preview` bin uses this to decode
+# `assets/snug-icon.png` into a DIB section that the dialog paints
+# into the mascot slot. Keeping `image` here (not in `[dependencies]`)
+# means the production launcher-stub and the embedded icon-resource
+# path are unaffected.
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
