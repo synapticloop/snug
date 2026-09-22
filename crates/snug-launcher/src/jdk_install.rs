@@ -34,7 +34,7 @@ use std::io::{Read, Write};
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 /// `Win32` process-creation flag that prevents Windows from allocating a
@@ -564,6 +564,94 @@ pub struct ProgressShared {
 
 unsafe impl Send for ProgressShared {}
 unsafe impl Sync for ProgressShared {}
+
+impl ProgressShared {
+    /// Construct a fresh `ProgressShared` initialised for a download of
+    /// `total_bytes` bytes. Mirrors the literal the production worker
+    /// thread uses so `progress_preview` (and any future test harness)
+    /// can build one without poking at private fields.
+    pub fn new(total_bytes: u64) -> Self {
+        Self {
+            pct: AtomicU32::new(0),
+            done: AtomicI32::new(0),
+            dialog_hwnd: AtomicI32::new(0),
+            error: Mutex::new(None),
+            phase: AtomicI32::new(0),
+            bytes: AtomicU64::new(0),
+            total_bytes: AtomicU64::new(total_bytes),
+            home: Mutex::new(None),
+            error_at: Mutex::new(None),
+            started: AtomicBool::new(false),
+        }
+    }
+
+    // -- Getter / setter pairs for the worker-accessible fields. ----
+    //
+    // The fields themselves stay `pub(crate)`; these accessors are the
+    // only way binaries inside the `snug-launcher` package (currently
+    // just `progress_preview`) can read or drive the dialog state.
+    //
+    // All use `Ordering::SeqCst` to match the production worker
+    // thread and dialog callback. The dialog polls at 5 Hz so the cost
+    // of a function-call wrapper over an atomic load is irrelevant.
+
+    /// Current 0..=100 percent shown on the bar.
+    pub fn pct(&self) -> u32 {
+        self.pct.load(Ordering::SeqCst)
+    }
+    /// Update the bar percentage.
+    pub fn set_pct(&self, pct: u32) {
+        self.pct.store(pct, Ordering::SeqCst);
+    }
+
+    /// Bytes downloaded so far (phase 0). Goes stale once the worker
+    /// moves on to verify / extract.
+    pub fn bytes_done(&self) -> u64 {
+        self.bytes.load(Ordering::SeqCst)
+    }
+    /// Update the byte counter (used by the worker and by the preview
+    /// worker thread).
+    pub fn set_bytes_done(&self, bytes: u64) {
+        self.bytes.store(bytes, Ordering::SeqCst);
+    }
+
+    /// Total bytes the download is expected to land at. Captured at
+    /// construction from the Adoptium metadata (or, in the preview,
+    /// from the CLI args).
+    pub fn total_bytes(&self) -> u64 {
+        self.total_bytes.load(Ordering::SeqCst)
+    }
+
+    /// Current phase: 0 = downloading, 1 = verifying SHA-256,
+    /// 2 = extracting.
+    pub fn phase(&self) -> i32 {
+        self.phase.load(Ordering::SeqCst)
+    }
+    /// Update the current phase.
+    pub fn set_phase(&self, phase: i32) {
+        self.phase.store(phase, Ordering::SeqCst);
+    }
+
+    /// `true` once the user has clicked Install (i.e. the worker
+    /// thread has been released from its `started` spin loop).
+    pub fn is_started(&self) -> bool {
+        self.started.load(Ordering::SeqCst)
+    }
+    /// Set the started flag.
+    pub fn set_started(&self, started: bool) {
+        self.started.store(started, Ordering::SeqCst);
+    }
+
+    /// Terminal status: 0 = running, 1 = success, 2 = error,
+    /// 3 = cancelled. The dialog observes non-zero and exits.
+    pub fn status(&self) -> i32 {
+        self.done.load(Ordering::SeqCst)
+    }
+    /// Set the terminal status.
+    pub fn set_status(&self, status: i32) {
+        self.done.store(status, Ordering::SeqCst);
+    }
+}
 
 thread_local! {
     /// Set just before `show_progress_dialog` is called and cleared
