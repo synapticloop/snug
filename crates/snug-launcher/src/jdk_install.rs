@@ -11,10 +11,9 @@
 //!    The "do not show again" checkbox has been **removed** per
 //!    product decision — the cache layer means the user only sees
 //!    the prompt when no usable JDK is on disk, so re-asking is fine.
-//! 4. **`show_progress_dialog`** opens a second `TaskDialogIndirect`
-//!    with `TDF_SHOW_PROGRESS_BAR` and `TDF_CALLBACK_TIMER`, drives
-//!    a determinate bar via the worker thread, and auto-dismisses on
-//!    completion or failure.
+//! 4. **`progress_window::show`** renders a custom-painted modal
+//!    matching the user-facing mockup, drives the bar from the
+//!    worker thread, and auto-dismisses on completion or failure.
 //! 5. The worker thread streams the zip straight to disk (no in-memory
 //!    SHA), then hashes the **file on disk** via [`hash_file_sha256`],
 //!    then extracts.
@@ -49,16 +48,16 @@ use crate::log;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM, S_OK};
+use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::UI::Controls::{
     TD_ERROR_ICON, TD_INFORMATION_ICON, TD_SHIELD_ICON, TD_WARNING_ICON,
-    TDF_ALLOW_DIALOG_CANCELLATION, TDF_CALLBACK_TIMER, TDF_ENABLE_HYPERLINKS,
-    TDF_SHOW_PROGRESS_BAR, TDF_USE_COMMAND_LINKS, TDF_USE_HICON_MAIN,
+    TDF_ALLOW_DIALOG_CANCELLATION, TDF_ENABLE_HYPERLINKS,
+    TDF_USE_COMMAND_LINKS,
     TASKDIALOG_BUTTON, TASKDIALOGCONFIG, TASKDIALOGCONFIG_0, TASKDIALOGCONFIG_1,
 };
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    HICON, SendMessageW, IDCANCEL, IDOK, IDYES, SW_SHOWNORMAL,
+    HICON, IDCANCEL, IDOK, IDYES, SW_SHOWNORMAL,
 };
 
 // ===========================================================================
@@ -519,29 +518,28 @@ unsafe fn info_messagebox(parent: HWND, title: &str, content: &str, icon_info: b
 // ===========================================================================
 
 /// Shared state between the worker thread (writes) and the
-/// `TaskDialogIndirect` callback (reads). `pub` so the
-/// `progress_window` fallback module can read the same fields.
+/// `progress_window` reads via the per-field getters / setters below;
+/// `worker_thread` writes. `pub` so the preview bin in
+/// `examples/progress_preview.rs` can build its own.
 pub struct ProgressShared {
     /// 0..=100 download percent. Set by the worker during phases
-    /// 0/1/2 — the callback reads this and pushes it into the bar
-    /// via `TDM_SET_PROGRESS_BAR_POS`.
+    /// 0/1/2 — the progress window reads this and repaints the bar
+    /// in `WM_PAINT`.
     pub(crate) pct: AtomicU32,
     /// 0 = running, 1 = success, 2 = error, 3 = cancelled.
     pub(crate) done: AtomicI32,
-    /// Captured in `TDN_CREATED`; written by the callback.
-    dialog_hwnd: AtomicI32,
     /// Set on failure.
     error: std::sync::Mutex<Option<String>>,
     /// 0 = downloading, 1 = verifying SHA-256, 2 = extracting.
-    /// Drives the live status text the callback writes into the
-    /// dialog's `TDE_CONTENT` element.
+    /// Drives the live status text the progress window renders in
+    /// `WM_TIMER`.
     pub(crate) phase: AtomicI32,
-    /// Bytes written to the temp zip so far (phase 0). The callback
-    /// uses this to render "X MB / Y MB" in real time.
+    /// Bytes written to the temp zip so far (phase 0). The progress
+    /// window uses this to render "X MB / Y MB" in real time.
     pub(crate) bytes: AtomicU64,
     /// Total bytes from the Adoptium metadata. Captured at init so
-    /// the callback can render percentages even after the worker
-    /// thread has moved on to verify/extract.
+    /// the progress window can render percentages even after the
+    /// worker thread has moved on to verify/extract.
     pub(crate) total_bytes: AtomicU64,
     /// Set to `true` by the progress window when the user clicks
     /// the "Install" button. The worker spins on this at the top of
@@ -549,6 +547,16 @@ pub struct ProgressShared {
     /// the user has explicitly opted in — the progress window
     /// appears in a "ready to install" paused state.
     pub(crate) started: AtomicBool,
+    /// Cancellation latch. Flipped to `true` by the progress window
+    /// when the user clicks Cancel mid-download (and by
+    /// `run_one_install_attempt` when the dialog returns anything
+    /// other than IDOK). `download_to_disk` consults it once per
+    /// read so the in-flight network read aborts within ~256 KB;
+    /// the worker also checks it between phases (verify, extract) so
+    /// post-download phases exit promptly. Lives on `shared` so the
+    /// dialog, which only sees `shared`, can flip it without a
+    /// second Arc.
+    pub(crate) cancel: AtomicBool,
     /// Optional `HBITMAP` handle (cast to `i32`) for a custom mascot
     /// to draw in the 170×170 slot. `0` means "fall back to the EXE's
     /// main icon resource" (the production path). The
@@ -562,13 +570,6 @@ pub struct ProgressShared {
     /// writes this so the caller doesn't have to walk the
     /// extracted tree again.
     home: std::sync::Mutex<Option<PathBuf>>,
-    /// `Instant` at which the worker first reported `done == 2`.
-    /// The callback holds the `PBST_ERROR` bar state for at least
-    /// [`ERROR_HOLD_DURATION`] from this point before dismissing
-    /// the dialog, so the user actually sees the red bar before
-    /// the failure dialog replaces it. `None` while the download
-    /// is still running or hasn't errored yet.
-    error_at: std::sync::Mutex<Option<std::time::Instant>>,
 }
 
 unsafe impl Send for ProgressShared {}
@@ -583,14 +584,13 @@ impl ProgressShared {
         Self {
             pct: AtomicU32::new(0),
             done: AtomicI32::new(0),
-            dialog_hwnd: AtomicI32::new(0),
             error: Mutex::new(None),
             phase: AtomicI32::new(0),
             bytes: AtomicU64::new(0),
             total_bytes: AtomicU64::new(total_bytes),
             home: Mutex::new(None),
-            error_at: Mutex::new(None),
             started: AtomicBool::new(false),
+            cancel: AtomicBool::new(false),
             mascot: AtomicI32::new(0),
         }
     }
@@ -673,190 +673,6 @@ impl ProgressShared {
     /// dialog is open.
     pub fn set_mascot_hbitmap(&self, hbitmap: i32) {
         self.mascot.store(hbitmap, Ordering::SeqCst);
-    }
-}
-
-thread_local! {
-    /// Set just before `show_progress_dialog` is called and cleared
-    /// right after. The `TaskDialogIndirect` callback reads it.
-    static ACTIVE_PROGRESS: std::cell::RefCell<Option<Arc<ProgressShared>>> =
-        std::cell::RefCell::new(None);
-}
-
-unsafe extern "system" fn progress_dialog_callback(
-    hwnd: HWND,
-    msg: windows_sys::Win32::UI::Controls::TASKDIALOG_NOTIFICATIONS,
-    _w: WPARAM,
-    _l: LPARAM,
-    _userdata: isize,
-) -> windows_sys::core::HRESULT {
-    use windows_sys::Win32::UI::Controls::{
-        PBST_ERROR, PBST_NORMAL, PBST_PAUSED, TDN_CREATED, TDN_TIMER, TDE_CONTENT,
-        TDM_CLICK_BUTTON, TDM_SET_ELEMENT_TEXT, TDM_SET_PROGRESS_BAR_POS,
-        TDM_SET_PROGRESS_BAR_RANGE, TDM_SET_PROGRESS_BAR_STATE,
-    };
-    /// How long the `PBST_ERROR` bar state stays visible after the
-    /// worker reports a failure before the dialog dismisses itself.
-    /// Without this hold the red flash would last a single ~200 ms
-    /// tick and most users would never register it before the
-    /// failure dialog replaced the progress dialog.
-    const ERROR_HOLD_DURATION: std::time::Duration =
-        std::time::Duration::from_millis(600);
-    let Some(arc) = ACTIVE_PROGRESS.with(|c| c.borrow().clone()) else {
-        return S_OK;
-    };
-    if msg == TDN_CREATED {
-        arc.dialog_hwnd.store(hwnd as i32, Ordering::SeqCst);
-        log::log("progress dialog TDN_CREATED: initialising progress bar");
-        // Belt-and-braces setup for the bar:
-        //   1. Set range to 0..=100 (default, but some themes ignore it).
-        //   2. Set state to NORMAL (green) — Windows sometimes leaves
-        //      the bar in a "not yet drawn" state without an explicit
-        //      `TDM_SET_PROGRESS_BAR_STATE`.
-        //   3. Pin position to 0 so the bar is visibly empty (rather
-        //      than invisibly uninitialised) on the first paint.
-        //   4. Force a repaint — without this, on some Windows themes
-        //      the bar remains unrendered until the next idle cycle,
-        //      which can be many seconds after `TDN_CREATED`.
-        // The lParam for `TDM_SET_PROGRESS_BAR_RANGE` is
-        // MAKELPARAM(0, 100) = 100 << 16.
-        unsafe {
-            use windows_sys::Win32::Graphics::Gdi::{InvalidateRect, UpdateWindow};
-            SendMessageW(hwnd, TDM_SET_PROGRESS_BAR_RANGE as u32, 0, 0x0064_0000);
-            SendMessageW(
-                hwnd,
-                TDM_SET_PROGRESS_BAR_STATE as u32,
-                PBST_NORMAL as usize,
-                0,
-            );
-            SendMessageW(hwnd, TDM_SET_PROGRESS_BAR_POS as u32, 0, 0);
-            // `lpRect = null` + `bErase = 1` invalidates the whole
-            // client area and forces the background to redraw.
-            InvalidateRect(hwnd, std::ptr::null(), 1);
-            UpdateWindow(hwnd);
-        }
-    } else if msg == TDN_TIMER {
-        let pct = arc.pct.load(Ordering::SeqCst);
-        let phase = arc.phase.load(Ordering::SeqCst);
-        let done = arc.done.load(Ordering::SeqCst);
-        let bytes = arc.bytes.load(Ordering::SeqCst);
-        let total = arc.total_bytes.load(Ordering::SeqCst);
-
-        // Map `(done, phase)` → bar state. The TaskDialog API only
-        // exposes three states; we use them to communicate phase to
-        // the user without changing the layout:
-        //   - Worker errored (`done == 2`)      → ERROR   (red)
-        //   - Verifying SHA-256 (`phase == 1`)  → PAUSED  (yellow) —
-        //     the bar is no longer measuring live download progress,
-        //     and yellow signals "still working, but the meter isn't
-        //     measuring what it was a moment ago."
-        //   - Otherwise                         → NORMAL  (green)
-        let state: u32 = match (done, phase) {
-            (2, _) => PBST_ERROR,
-            (_, 1) => PBST_PAUSED,
-            _ => PBST_NORMAL,
-        };
-        // Pin the instant the worker first reported failure so the
-        // dismissal path can hold the red bar for `ERROR_HOLD_DURATION`
-        // before closing the dialog.
-        let hold_elapsed = {
-            let mut g = arc.error_at.lock().unwrap();
-            if done == 2 && g.is_none() {
-                *g = Some(std::time::Instant::now());
-            }
-            match *g {
-                Some(t) => {
-                    std::time::Instant::now().duration_since(t)
-                        >= ERROR_HOLD_DURATION
-                }
-                None => false,
-            }
-        };
-
-        // Render a live status line. We build the wide string on each
-        // tick (cheap — ~200ms cadence); `TDM_SET_ELEMENT_TEXT` copies
-        // the buffer synchronously before returning.
-        let status = format_status_line(phase, pct, bytes, total);
-        let status_w = wide(&status);
-
-        unsafe {
-            // Re-assert the bar state on every tick. Some Windows
-            // themes (notably High Contrast) reset the state when the
-            // dialog repaints, leaving the bar invisible until the
-            // next paint cycle. The same defensive re-assert applies
-            // regardless of which state we picked — NORMAL, PAUSED,
-            // or ERROR.
-            SendMessageW(
-                hwnd,
-                TDM_SET_PROGRESS_BAR_STATE as u32,
-                state as usize,
-                0,
-            );
-            SendMessageW(hwnd, TDM_SET_PROGRESS_BAR_POS as u32, pct as usize, 0);
-            SendMessageW(
-                hwnd,
-                TDM_SET_ELEMENT_TEXT as u32,
-                TDE_CONTENT as usize,
-                status_w.as_ptr() as isize,
-            );
-            match done {
-                1 => {
-                    SendMessageW(hwnd, TDM_CLICK_BUTTON as u32, IDOK as usize, 0);
-                }
-                // 2 = errored — only dismiss once the red bar has
-                // been visible long enough to register. Without this
-                // gate the bar would flash red for a single ~200 ms
-                // tick and most users wouldn't see it before the
-                // failure dialog replaced the progress dialog.
-                2 if hold_elapsed => {
-                    SendMessageW(hwnd, TDM_CLICK_BUTTON as u32, IDCANCEL as usize, 0);
-                }
-                3 => {
-                    SendMessageW(hwnd, TDM_CLICK_BUTTON as u32, IDCANCEL as usize, 0);
-                }
-                _ => {}
-            }
-        }
-    }
-    S_OK
-}
-
-/// Render the live status line that replaces the dialog's
-/// `TDE_CONTENT` text on every timer tick. Kept here so the
-/// formatting reads consistently whether the user is in the
-/// download phase, the SHA-verify phase, or the extract phase.
-///
-/// All templates come from `dialogs.toml`. Values are pre-formatted
-/// (no `{name:.spec}` in the TOML — format the value in Rust).
-fn format_status_line(phase: i32, pct: u32, bytes: u64, total: u64) -> String {
-    let d = dialogs::dialogs();
-    let pct = pct.to_string();
-    let mib = |n: u64| -> String { format!("{:.1}", n as f64 / 1_048_576.0) };
-    match phase {
-        0 if total > 0 => dialogs::fill(
-            d.jdk_install.progress.status_phase_0_with_size.as_str(),
-            &[
-                ("done_mb", &mib(bytes)),
-                ("total_mb", &mib(total)),
-                ("pct", &pct),
-            ],
-        ),
-        0 => dialogs::fill(
-            d.jdk_install.progress.status_phase_0_no_size.as_str(),
-            &[("pct", &pct)],
-        ),
-        1 => dialogs::fill(
-            d.jdk_install.progress.status_phase_1.as_str(),
-            &[("pct", &pct)],
-        ),
-        2 => dialogs::fill(
-            d.jdk_install.progress.status_phase_2.as_str(),
-            &[("pct", &pct)],
-        ),
-        _ => dialogs::fill(
-            d.jdk_install.progress.status_other.as_str(),
-            &[("pct", &pct)],
-        ),
     }
 }
 
@@ -1056,117 +872,6 @@ pub(crate) fn find_best_icon_hicon(cx: i32, cy: i32) -> Option<HICON> {
 }
 
 
-
-/// Show a modal progress dialog driven by `worker_thread`. The worker
-/// writes `pct`/`done` into the shared state; the dialog reads them
-/// and auto-dismisses on completion.
-///
-/// **Default path** is [`crate::progress_window::show`] — the custom-
-/// paint window matching the user-facing mockup. The legacy
-/// `TaskDialogIndirect` path (comctl32 v6) is opt-in via the
-/// `progress.use_taskdialog_fallback` dialogs.toml flag, kept around
-/// for the rare v6-SxS-crash install class where `TaskDialogIndirect`
-/// crashes inside itself.
-fn show_progress_dialog(
-    parent: HWND,
-    title: &str,
-    main: &str,
-    content: &str,
-    shared: Arc<ProgressShared>,
-) -> i32 {
-    if !dialogs::dialogs().jdk_install.progress.use_taskdialog_fallback {
-        return unsafe { crate::progress_window::show(parent, title, content, shared) };
-    }
-
-    let title_w = wide(title);
-    let main_w = wide(main);
-    let content_w = wide(content);
-
-    // Use the EXE's own icon when available, otherwise fall back to
-    // the standard information icon. `TDF_USE_HICON_MAIN` tells
-    // `TaskDialogIndirect` to treat `pszMainIcon` as an `HICON` cast
-    // rather than a system icon constant.
-    let (main_icon_ptr, dw_flags): (*const u16, i32) =
-        match load_exe_main_icon_hicon() {
-            Some(h) => (
-                // `HICON` is `*mut c_void` in windows-sys 0.59; cast to
-                // the `PCWSTR` slot via a `usize` round-trip so the
-                // bit pattern is preserved exactly. `TDF_USE_HICON_MAIN`
-                // in `dw_flags` is what tells `TaskDialogIndirect` to
-                // treat this slot as an icon handle rather than a
-                // system icon constant.
-                h as usize as *const u16,
-                TDF_SHOW_PROGRESS_BAR
-                    | TDF_CALLBACK_TIMER
-                    | TDF_ALLOW_DIALOG_CANCELLATION
-                    | TDF_USE_HICON_MAIN,
-            ),
-            None => (
-                TD_INFORMATION_ICON_H,
-                TDF_SHOW_PROGRESS_BAR | TDF_CALLBACK_TIMER | TDF_ALLOW_DIALOG_CANCELLATION,
-            ),
-        };
-
-    let cfg = TASKDIALOGCONFIG {
-        cbSize: std::mem::size_of::<TASKDIALOGCONFIG>() as u32,
-        hwndParent: parent,
-        hInstance: std::ptr::null_mut(),
-        dwFlags: dw_flags,
-        dwCommonButtons: 0,
-        pszWindowTitle: title_w.as_ptr(),
-        Anonymous1: TASKDIALOGCONFIG_0 {
-            pszMainIcon: main_icon_ptr,
-        },
-        pszMainInstruction: main_w.as_ptr(),
-        pszContent: content_w.as_ptr(),
-        cButtons: 0,
-        pButtons: std::ptr::null(),
-        nDefaultButton: 0,
-        cRadioButtons: 0,
-        pRadioButtons: std::ptr::null(),
-        nDefaultRadioButton: 0,
-        pszVerificationText: std::ptr::null(),
-        pszExpandedInformation: std::ptr::null(),
-        pszExpandedControlText: std::ptr::null(),
-        pszCollapsedControlText: std::ptr::null(),
-        Anonymous2: TASKDIALOGCONFIG_1 {
-            pszFooterIcon: std::ptr::null(),
-        },
-        pszFooter: std::ptr::null(),
-        pfCallback: Some(progress_dialog_callback),
-        lpCallbackData: 0,
-        // 560 dialog units (vs. 420 previously): the live status
-        // line ("Verifying SHA-256 against the file on disk… (50%)")
-        // used to wrap to two lines on some themes, which pushed the
-        // Cancel area off the bottom of the dialog. The wider box
-        // keeps the status line on one row and the bar comfortably
-        // visible above the dialog footer.
-        cxWidth: 560,
-    };
-
-    ACTIVE_PROGRESS.with(|c| *c.borrow_mut() = Some(shared.clone()));
-    log::log(&format!(
-        "showing progress dialog: title={title:?}, dw_flags=0x{dw_flags:x}"
-    ));
-    let mut button: i32 = 0;
-    let dialog_ok = unsafe { call_task_dialog_indirect(&cfg, &mut button) };
-    log::log(&format!(
-        "TaskDialogIndirect returned: ok={dialog_ok}, button={button}"
-    ));
-    if !dialog_ok {
-        // Fallback path — `TaskDialogIndirect` isn't available (pre-Vista
-        // / comctl32 v5 / SxS crash). Spin up our own Win32 progress
-        // window so the user still gets a live bar and a Cancel button.
-        log::log("falling back to custom progress window (comctl32 msctls_progress32)");
-        ACTIVE_PROGRESS.with(|c| *c.borrow_mut() = None);
-        button = unsafe {
-            crate::progress_window::show(parent, title, content, shared.clone())
-        };
-        return button;
-    }
-    ACTIVE_PROGRESS.with(|c| *c.borrow_mut() = None);
-    button
-}
 
 // ===========================================================================
 //  Stream-to-disk, hash-on-disk, extract
@@ -1384,7 +1089,6 @@ fn worker_thread(
     url: String,
     expected_sha: String,
     total_bytes: u64,
-    cancel: Arc<AtomicBool>,
     shared: Arc<ProgressShared>,
 ) {
     let set_error = |msg: String| {
@@ -1432,7 +1136,7 @@ fn worker_thread(
         }
     };
 
-    match download_to_disk(&url, &tmp_zip, &cancel, total_bytes, on_progress) {
+    match download_to_disk(&url, &tmp_zip, &shared.cancel, total_bytes, on_progress) {
         Ok(written) => {
             log::log(&format!(
                 "phase 0 complete: {} bytes written to {}",
@@ -1447,7 +1151,7 @@ fn worker_thread(
             return;
         }
     }
-    if cancel.load(Ordering::SeqCst) {
+    if shared.cancel.load(Ordering::SeqCst) {
         log::log("phase 0 cancelled by user");
         shared.done.store(3, Ordering::SeqCst);
         return;
@@ -1712,30 +1416,27 @@ fn run_one_install_attempt(
     let _ = std::fs::remove_dir_all(install_dir);
     let _ = std::fs::create_dir_all(install_dir);
 
-    let cancel = Arc::new(AtomicBool::new(false));
     let shared = Arc::new(ProgressShared {
         pct: AtomicU32::new(0),
         done: AtomicI32::new(0),
-        dialog_hwnd: AtomicI32::new(0),
         error: std::sync::Mutex::new(None),
         phase: AtomicI32::new(0),
         bytes: AtomicU64::new(0),
         total_bytes: AtomicU64::new(metadata.size_bytes),
         home: std::sync::Mutex::new(None),
-        error_at: std::sync::Mutex::new(None),
         started: AtomicBool::new(false),
+        cancel: AtomicBool::new(false),
         mascot: AtomicI32::new(0),
     });
 
     let worker = thread::spawn({
         let shared = shared.clone();
-        let cancel = cancel.clone();
         let install_dir = install_dir.to_path_buf();
         let tmp_zip = tmp_zip.to_path_buf();
         let url = metadata.package_link.clone();
         let sha = metadata.sha256.clone();
         let total = metadata.size_bytes;
-        move || worker_thread(install_dir, tmp_zip, url, sha, total, cancel, shared)
+        move || worker_thread(install_dir, tmp_zip, url, sha, total, shared)
     });
 
     let dlg = dialogs::dialogs();
@@ -1749,13 +1450,31 @@ fn run_one_install_attempt(
             ),
         ],
     );
-    let _clicked = show_progress_dialog(
-        parent_hwnd,
-        &dlg.jdk_install.progress.title,
-        &progress_main,
-        &dlg.jdk_install.progress.content_initial,
-        shared.clone(),
-    );
+    let _clicked = unsafe {
+        crate::progress_window::show(
+            parent_hwnd,
+            &dlg.jdk_install.progress.title,
+            &progress_main,
+            shared.clone(),
+        )
+    };
+
+    // If the dialog was dismissed before the worker finished — user
+    // clicked Cancel, closed the window via X / Alt+F4, or the legacy
+    // TaskDialog path returned IDCANCEL — the worker is still alive
+    // and `shared.cancel` is what aborts it. The default
+    // `progress_window` path flips this flag itself in `WM_COMMAND` /
+    // `WM_CLOSE`, but the TaskDialog fallback relies on us doing it
+    // here. Either way, setting it twice is a no-op. Without this
+    // the worker would happily finish downloading and report
+    // `done == 1` (success), and we'd return `AttemptOutcome::Success`
+    // for a download the user explicitly cancelled.
+    if _clicked != IDOK {
+        shared.cancel.store(true, Ordering::SeqCst);
+        if shared.done.load(Ordering::SeqCst) == 0 {
+            shared.done.store(3, Ordering::SeqCst);
+        }
+    }
 
     let _ = worker.join();
 
@@ -1811,34 +1530,20 @@ fn show_retry_dialog(
     let retry_label = d.jdk_install.retry.button_retry.clone();
     let cancel_label = d.jdk_install.retry.button_cancel.clone();
 
-    // 1 = Retry, 2 = Cancel.
-    let choice: i32 = if d.jdk_install.progress.use_taskdialog_fallback {
-        let mut c = Config::new(
+    // The custom-painted prompt window returns 1 for the first
+    // button and 2 for the second, so button #1 maps to "Try again"
+    // and button #2 to "Cancel".
+    let choice: i32 = unsafe {
+        crate::custom_dialog::show_prompt(
             parent,
-            d.jdk_install.retry.title.clone(),
-            d.jdk_install.retry.main.clone(),
-        );
-        c.icon = IconKind::Warning;
-        c.content = content.clone();
-        c.buttons = vec![
-            CustomButton { id: IDYES, text: retry_label.clone() },
-            CustomButton { id: IDCANCEL, text: cancel_label.clone() },
-        ];
-        c.default_button = IDYES;
-        c.show()
-    } else {
-        unsafe {
-            crate::custom_dialog::show_prompt(
-                parent,
-                &d.jdk_install.retry.title,
-                &d.jdk_install.retry.main,
-                &content,
-                &[&retry_label, &cancel_label],
-            )
-        }
+            &d.jdk_install.retry.title,
+            &d.jdk_install.retry.main,
+            &content,
+            &[&retry_label, &cancel_label],
+        )
     };
 
-    choice == IDYES
+    choice == 1
 }
 
 /// "We could not reach Adoptium" dialog. Pops when
@@ -2047,28 +1752,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn format_status_line_phase_0_shows_bytes() {
-        // 50 MiB / 100 MiB at 50%
-        let line = format_status_line(0, 50, 50 * 1_048_576, 100 * 1_048_576);
-        assert!(line.contains("50.0 MB"), "got: {line}");
-        assert!(line.contains("100.0 MB"), "got: {line}");
-        assert!(line.contains("50%"), "got: {line}");
-    }
-
-    #[test]
-    fn format_status_line_phase_1_says_verifying() {
-        let line = format_status_line(1, 95, 100 * 1_048_576, 100 * 1_048_576);
-        assert!(line.contains("Verifying SHA-256"), "got: {line}");
-        assert!(line.contains("95%"), "got: {line}");
-    }
-
-    #[test]
-    fn format_status_line_phase_2_says_extracting() {
-        let line = format_status_line(2, 99, 100 * 1_048_576, 100 * 1_048_576);
-        assert!(line.contains("Extracting"), "got: {line}");
-    }
-
     /// The progress bar must never go backwards across phase
     /// boundaries — the previous `99 → 95 → 99 → 100` sequence made
     /// the bar look like it reset when the user clicked Download.
@@ -2097,15 +1780,6 @@ mod tests {
         // const because we use a literal 100. Asserting against the
         // literal here keeps the invariant explicit.)
         assert!(PHASE_2_PCT_START < 100);
-    }
-
-    #[test]
-    fn format_status_line_handles_unknown_total() {
-        // When Adoptium omits size (some JRE builds do), we still show
-        // a percentage but no byte counts.
-        let line = format_status_line(0, 25, 1024, 0);
-        assert!(line.contains("25%"), "got: {line}");
-        assert!(!line.contains("of 0.0"), "shouldn't render 0/0: {line}");
     }
 
     #[test]
