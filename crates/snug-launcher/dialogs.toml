@@ -97,17 +97,17 @@ title = "Downloading runtime components..."
 main = "Temurin {version} (~{size_mb} MB)"
 content_initial = "Verifying SHA-256 against the file on disk once complete."
 
-heading = "Downloading Runtime Components"
-subtitle = "We are downloading the runtime components so we can run the application"
+heading = "Downloading Runtime..."
+subtitle = "We need to install a runtime so that we can launch the application"
 pct_label = "{pct}%"
-phase_label = "Downloading runtime components (Windows x64)"
+phase_label = "Downloading runtime (Windows x64)"
 detail_with_size = "{done_mb} MB of {total_mb} MB ({speed_mb_s} MB/s)"
 detail_no_size = "Downloading… ({pct}%)"
 detail_eta_seconds = "{n} seconds remaining"
 detail_eta_second = "1 second remaining"
 detail_eta_done = "Almost done"
 info_heading = "This only needs to be downloaded once."
-info_subtext = "We will reuse this runtime for future application launches"
+info_subtext = "This runtime will be used for future application launches"
 
 # The Cancel button on the progress window is dual-purpose:
 # during phase 0 (download) it's labelled "Install" to signal
