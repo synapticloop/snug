@@ -24,11 +24,11 @@
 //! ```
 //!
 //! Everything that the stock common controls can't express on their
-//! own — the white background, the light-blue info box, and the
-//! large mascot area — is painted in `WM_PAINT`. The text and
-//! progress values are pushed into stock `STATIC`, `msctls_progress32`,
-//! and `BUTTON` children via `SetWindowTextW` / `PBM_SETPOS` from the
-//! existing `WM_TIMER` poll, so the data path is identical to the v6
+//! own — the white background, the light-blue info box, the large
+//! mascot area, and the progress bar — is painted in `WM_PAINT`.
+//! The text and progress values are pushed into stock `STATIC` and
+//! `BUTTON` children via `SetWindowTextW` from the existing
+//! `WM_TIMER` poll, so the data path is identical to the v6
 //! `TaskDialogIndirect` path (both consume `ProgressShared`).
 //!
 //! **Mascot asset.** The mockup shows a Java-coffee-jar mascot.
@@ -44,12 +44,13 @@ use std::time::Instant;
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, BITMAP, CreateCompatibleDC, CreateFontW, CreateSolidBrush, DeleteDC, DeleteObject,
-    EndPaint, FillRect, FW_BOLD, GetObjectW, GetStockObject, HBRUSH, HDC, HBITMAP, HFONT,
-    NULL_BRUSH, PAINTSTRUCT, SelectObject, SRCCOPY, StretchBlt,
+    AC_SRC_ALPHA, AC_SRC_OVER, AlphaBlend, BeginPaint, BITMAP, BLENDFUNCTION,
+    CreateCompatibleDC, CreateFontW, CreateRoundRectRgn, CreateSolidBrush, DeleteDC,
+    DeleteObject, EndPaint, FillRect, FillRgn, FW_BOLD, FW_NORMAL, GetObjectW, GetStockObject,
+    HBRUSH, HDC, HBITMAP, HFONT, InvalidateRect, NULL_BRUSH, PAINTSTRUCT, SelectObject,
+    FW_SEMIBOLD, WHITE_BRUSH,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows_sys::Win32::UI::Controls::{PBM_SETBARCOLOR, PBM_SETPOS, PBM_SETRANGE};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, DrawIconEx, GetMessageW,
@@ -95,54 +96,65 @@ const CLASS_NAME: &str = "snug_progress_dialog_v2\0";
 const TIMER_ID: usize = 1;
 const TIMER_MS: u32 = 200;
 
-const WINDOW_W: i32 = 480;
-const WINDOW_H: i32 = 270;
+const WINDOW_W: i32 = 640;
+const WINDOW_H: i32 = 300;
 
 const MARGIN: i32 = 16;
 const MASCOT_X: i32 = MARGIN;
-const MASCOT_Y: i32 = 36;
-const MASCOT_W: i32 = 140;
-const MASCOT_H: i32 = 140;
+const MASCOT_Y: i32 = MARGIN;
+const MASCOT_W: i32 = 154;
+const MASCOT_H: i32 = 154;
 
-const TEXT_X: i32 = MASCOT_X + MASCOT_W + 18;
-const TEXT_W: i32 = WINDOW_W - TEXT_X - MARGIN;
+const TEXT_X: i32 = MASCOT_X + MASCOT_W + MARGIN;
+const TEXT_W: i32 = WINDOW_W - TEXT_X - MARGIN - MARGIN;
 
-const HEADING_Y: i32 = 30;
-const HEADING_H: i32 = 18;
+const HEADING_Y: i32 = 8;
+const HEADING_H: i32 = 48;
 
-const SUBTITLE_Y: i32 = 65;
-const SUBTITLE_H: i32 = 25;
+const SUBTITLE_Y: i32 = 50;
+const SUBTITLE_H: i32 = 50;
 
-const PROGRESS_Y: i32 = 110;
-const PROGRESS_H: i32 = 6;
-const PROGRESS_W: i32 = TEXT_W - 32;
+const PROGRESS_X: i32 = TEXT_X;
+const PROGRESS_Y: i32 = 108;
+const PROGRESS_H: i32 = 18;
+const PROGRESS_W: i32 = TEXT_W - 52;
 const PCT_X: i32 = TEXT_X + PROGRESS_W + 6;
 const PCT_W: i32 = TEXT_X + TEXT_W - PCT_X;
-const PCT_H: i32 = 12;
+const PCT_H: i32 = 20;
 
-const PHASE_Y: i32 = 125;
-const PHASE_H: i32 = 11;
-const DETAIL_Y: i32 = 139;
-const DETAIL_H: i32 = 11;
+const PHASE_Y: i32 = 132;
+const PHASE_H: i32 = 50;
+const DETAIL_Y: i32 = 154;
+const DETAIL_H: i32 = 16;
 
 const INFO_BOX_X: i32 = MARGIN;
-const INFO_BOX_W: i32 = WINDOW_W - MARGIN * 2 - 70;
-const INFO_BOX_Y: i32 = 220;
-const INFO_BOX_H: i32 = 36;
+const INFO_BOX_W: i32 = WINDOW_W - MARGIN * 3;
+const INFO_BOX_Y: i32 = 186;
+const INFO_BOX_H: i32 = 50;
 const INFO_PAD: i32 = 8;
 const INFO_ICON_SIZE: i32 = 12;
-const INFO_TEXT_X: i32 = INFO_BOX_X + INFO_PAD + INFO_ICON_SIZE + 6;
+
+// Vertical offsets inside the info box. Currently the icon is
+// aligned with the heading baseline (`INFO_PAD - 2` nudges up by 2
+// px so the 12 px icon top sits level with the 12 pt heading cap).
+// Set `INFO_ICON_Y_OFFSET` to `(INFO_BOX_H - INFO_ICON_SIZE) / 2`
+// for vertical centering; `INFO_PAD` for top-aligned with full
+// padding; `INFO_BOX_H - INFO_ICON_SIZE - INFO_PAD` for bottom-
+// aligned.
+const INFO_ICON_Y_OFFSET: i32 = INFO_PAD + 2;
+const INFO_HEADING_Y_OFFSET: i32 = INFO_PAD - 2;
+const INFO_SUBTEXT_Y_OFFSET: i32 = INFO_PAD + 20;
+const INFO_TEXT_X: i32 = INFO_BOX_X + INFO_PAD + INFO_ICON_SIZE + 28;
 const INFO_TEXT_W: i32 = INFO_BOX_W - (INFO_TEXT_X - INFO_BOX_X) - INFO_PAD;
 
-const CANCEL_W: i32 = 60;
-const CANCEL_H: i32 = 18;
-const CANCEL_X: i32 = WINDOW_W - MARGIN - CANCEL_W;
+const CANCEL_W: i32 = 80;
+const CANCEL_H: i32 = 25;
+const CANCEL_X: i32 = WINDOW_W - MARGIN * 2 - CANCEL_W - INFO_PAD - INFO_PAD;
 const CANCEL_Y: i32 = INFO_BOX_Y + (INFO_BOX_H - CANCEL_H) / 2;
 
 // Control IDs
 const IDC_HEADING: i32 = 1001;
 const IDC_SUBTITLE: i32 = 1002;
-const IDC_PROGRESS: i32 = 1003;
 const IDC_PCT: i32 = 1004;
 const IDC_PHASE: i32 = 1005;
 const IDC_DETAIL_LEFT: i32 = 1006;
@@ -155,15 +167,77 @@ const IDOK_I32: i32 = 1;
 const IDCANCEL_I32: i32 = 2;
 const GWLP_USERDATA: i32 = -21;
 
-const PROGRESS_CLASS_NAME: &str = "msctls_progress32\0";
 const STATIC_CLASS_NAME: &str = "STATIC\0";
 const BUTTON_CLASS_NAME: &str = "BUTTON\0";
+
+// ===========================================================================
+//  Font configuration
+// ===========================================================================
+//
+// Per-text-element font size and weight. Tweak these to retune
+// typography without touching the control-creation / paint logic.
+//
+// `FONT_FACE` is shared across all elements. Two visual tiers today
+// — "heading" (12pt bold) for the top heading + info-box heading, and
+// "body" (9pt regular) for every other text element — but each
+// element has its own `_PT` / `_WEIGHT` constants so you can split one
+// element away from its tier without touching siblings. Every element
+// gets its own HFONT in `ProgressState` (allocated in `WM_CREATE`,
+// freed in `WM_NCDESTROY`) so the constants actually drive the
+// rendering.
+//
+// `FW_NORMAL` = 400, `FW_BOLD` = 700, per `winuser.h`.
+
+const FONT_FACE: &str = "Segoe UI\0";
+
+// "Downloading Runtime Components" — main heading.
+const HEADING_PT: i32 = 26;
+const HEADING_WEIGHT: i32 = FW_SEMIBOLD as i32;
+
+// "We are downloading the runtime components..." — subtitle.
+const SUBTITLE_PT: i32 = 14;
+const SUBTITLE_WEIGHT: i32 = FW_NORMAL as i32;
+
+// "0%", "47%", etc. — to the right of the progress bar.
+const PCT_PT: i32 = 14;
+const PCT_WEIGHT: i32 = FW_NORMAL as i32;
+
+// "Downloading runtime components (Windows x64)" — below the bar.
+const PHASE_PT: i32 = 9;
+const PHASE_WEIGHT: i32 = FW_NORMAL as i32;
+
+// "102 MB of 149 MB (12.4 MB/s)" — left detail line.
+const DETAIL_LEFT_PT: i32 = 9;
+const DETAIL_LEFT_WEIGHT: i32 = FW_NORMAL as i32;
+
+// "5 sec left" — right detail line.
+const DETAIL_RIGHT_PT: i32 = 9;
+const DETAIL_RIGHT_WEIGHT: i32 = FW_NORMAL as i32;
+
+// "This only needs to be downloaded..." — info-box heading.
+const INFO_HEADING_PT: i32 = 12;
+const INFO_HEADING_WEIGHT: i32 = FW_BOLD as i32;
+
+// "We will reuse this runtime..." — info-box subtext.
+const INFO_SUBTEXT_PT: i32 = 9;
+const INFO_SUBTEXT_WEIGHT: i32 = FW_NORMAL as i32;
 
 // Colours (COLORREF = 0x00BBGGRR).
 const COLOR_BG: u32 = 0x00FFFFFF;
 const COLOR_SUBTITLE: u32 = 0x005F6368;
 const COLOR_PROGRESS_FILL: u32 = 0x00E8731A; // RGB(0x1A, 0x73, 0xE8) — brand blue
+const COLOR_PROGRESS_TRACK: u32 = 0x00E0E0E0; // RGB(0xE0, 0xE0, 0xE0) — neutral light grey
 const COLOR_INFO_BG: u32 = 0x00FEF0E8; // RGB(0xE8, 0xF0, 0xFE) — info-box blue
+
+// Corner rounding for the progress bar. ~`PROGRESS_H / 3` diameter
+// gives a subtle, modern Windows 11 look (radius ~1 px on a 6 px bar).
+// Set to `PROGRESS_H` for full pill ends; `0` for sharp corners.
+const PROGRESS_CORNER_DIAMETER: i32 = PROGRESS_H / 3;
+
+// Corner rounding for the info box. ~`INFO_BOX_H / 4` diameter
+// (radius ~4 px on a 36 px box) — visible without intruding on the
+// info icon / text inside the box.
+const INFO_BOX_CORNER_DIAMETER: i32 = INFO_BOX_H / 4;
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
@@ -176,7 +250,6 @@ struct ProgressState {
     shared: Arc<ProgressShared>,
     hwnd_heading: HWND,
     hwnd_subtitle: HWND,
-    hwnd_progress: HWND,
     hwnd_pct: HWND,
     hwnd_phase: HWND,
     hwnd_detail_left: HWND,
@@ -185,12 +258,31 @@ struct ProgressState {
     hwnd_info_heading: HWND,
     hwnd_info_subtext: HWND,
     hwnd_cancel: HWND,
+    /// One HFONT per text element, all created from the per-element
+    /// `*_PT` / `*_WEIGHT` constants near the top of the file. Today
+    /// heading + info-heading share the same 12pt-bold values, and
+    /// every body element shares 9pt-regular — but each element gets
+    /// its own handle so a future tune that splits one out doesn't
+    /// affect its siblings. Freed in `WM_NCDESTROY`.
     hfont_heading: HFONT,
+    hfont_subtitle: HFONT,
+    hfont_pct: HFONT,
+    hfont_phase: HFONT,
+    hfont_detail_left: HFONT,
+    hfont_detail_right: HFONT,
+    hfont_info_heading: HFONT,
+    hfont_info_subtext: HFONT,
     started_at: Instant,
     /// Last phase value we wrote the cancel button label for. Lets
     /// `WM_TIMER` rewrite the label only on the 0→1 transition
     /// (Install → Cancel) instead of every 200 ms tick.
     last_label_phase: i32,
+    /// Last pct value we invalidated the bar rect for. Lets
+    /// `WM_TIMER` skip the `InvalidateRect` call on ticks where
+    /// the worker hasn't moved the percentage (e.g. during the
+    /// verify phase where `pct` is pinned at 95 for ~1 s while
+    /// SHA-256 runs).
+    last_pct: u32,
 }
 
 // ===========================================================================
@@ -248,8 +340,45 @@ unsafe extern "system" fn progress_wndproc(
             // 480×270 window). Body text uses the default dialog
             // font (hfont = NULL) — keeps DPI behaviour simple and
             // matches the subtitle / info-box copy.
-            let hfont_heading =
-                create_font_pt(12, FW_BOLD as i32, false, "Segoe UI\0");
+            let hfont_heading = create_font_pt(
+                HEADING_PT,
+                HEADING_WEIGHT,
+                false,
+                FONT_FACE,
+            );
+            let hfont_subtitle = create_font_pt(
+                SUBTITLE_PT,
+                SUBTITLE_WEIGHT,
+                false,
+                FONT_FACE,
+            );
+            let hfont_pct = create_font_pt(PCT_PT, PCT_WEIGHT, false, FONT_FACE);
+            let hfont_phase =
+                create_font_pt(PHASE_PT, PHASE_WEIGHT, false, FONT_FACE);
+            let hfont_detail_left = create_font_pt(
+                DETAIL_LEFT_PT,
+                DETAIL_LEFT_WEIGHT,
+                false,
+                FONT_FACE,
+            );
+            let hfont_detail_right = create_font_pt(
+                DETAIL_RIGHT_PT,
+                DETAIL_RIGHT_WEIGHT,
+                false,
+                FONT_FACE,
+            );
+            let hfont_info_heading = create_font_pt(
+                INFO_HEADING_PT,
+                INFO_HEADING_WEIGHT,
+                false,
+                FONT_FACE,
+            );
+            let hfont_info_subtext = create_font_pt(
+                INFO_SUBTEXT_PT,
+                INFO_SUBTEXT_WEIGHT,
+                false,
+                FONT_FACE,
+            );
 
             let hwnd_heading = CreateWindowExW(
                 0,
@@ -281,31 +410,16 @@ unsafe extern "system" fn progress_wndproc(
                 hinst,
                 std::ptr::null(),
             );
+            apply_font(hwnd_subtitle, hfont_subtitle);
 
-            let hwnd_progress = CreateWindowExW(
-                0,
-                wide(PROGRESS_CLASS_NAME).as_ptr(),
-                std::ptr::null(),
-                WS_CHILD | WS_VISIBLE,
-                TEXT_X,
-                PROGRESS_Y,
-                PROGRESS_W,
-                PROGRESS_H,
-                hwnd,
-                IDC_PROGRESS as *mut _,
-                hinst,
-                std::ptr::null(),
-            );
-            SendMessageW(hwnd_progress, PBM_SETRANGE, 0, ((100u32 << 16) | 0u32) as isize);
-            // Brand-blue fill. Note: themed progress bars on
-            // modern Windows sometimes ignore this and use the
-            // system accent colour instead — acceptable fallback.
-            SendMessageW(
-                hwnd_progress,
-                PBM_SETBARCOLOR,
-                0,
-                COLOR_PROGRESS_FILL as isize,
-            );
+            // The progress bar is no longer a `msctls_progress32`
+            // child window — it's custom-painted inside the parent
+            // `WM_PAINT` (see the `// 2. Progress bar` block there),
+            // so we can drive the look without fighting the system
+            // theme. `PROGRESS_X`/`_Y`/`_W`/`_H` below drive both the
+            // track + fill rectangles in WM_PAINT and the
+            // `InvalidateRect` region used by `WM_TIMER` to push a
+            // repaint when the worker thread updates `shared.pct`.
 
             let hwnd_pct = CreateWindowExW(
                 0,
@@ -321,6 +435,7 @@ unsafe extern "system" fn progress_wndproc(
                 hinst,
                 std::ptr::null(),
             );
+            apply_font(hwnd_pct, hfont_pct);
 
             let hwnd_phase = CreateWindowExW(
                 0,
@@ -336,6 +451,7 @@ unsafe extern "system" fn progress_wndproc(
                 hinst,
                 std::ptr::null(),
             );
+            apply_font(hwnd_phase, hfont_phase);
 
             let hwnd_detail_left = CreateWindowExW(
                 0,
@@ -351,6 +467,7 @@ unsafe extern "system" fn progress_wndproc(
                 hinst,
                 std::ptr::null(),
             );
+            apply_font(hwnd_detail_left, hfont_detail_left);
 
             let hwnd_detail_right = CreateWindowExW(
                 0,
@@ -366,6 +483,7 @@ unsafe extern "system" fn progress_wndproc(
                 hinst,
                 std::ptr::null(),
             );
+            apply_font(hwnd_detail_right, hfont_detail_right);
 
             let hwnd_info_icon = CreateWindowExW(
                 0,
@@ -373,7 +491,7 @@ unsafe extern "system" fn progress_wndproc(
                 std::ptr::null(),
                 WS_CHILD | WS_VISIBLE | SS_ICON | SS_CENTER,
                 INFO_BOX_X + INFO_PAD,
-                INFO_BOX_Y + (INFO_BOX_H - INFO_ICON_SIZE) / 2,
+                INFO_BOX_Y + INFO_ICON_Y_OFFSET,
                 INFO_ICON_SIZE,
                 INFO_ICON_SIZE,
                 hwnd,
@@ -396,7 +514,7 @@ unsafe extern "system" fn progress_wndproc(
                 wide(&d.jdk_install.progress.info_heading).as_ptr(),
                 WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP,
                 INFO_TEXT_X,
-                INFO_BOX_Y + INFO_PAD - 2,
+                INFO_BOX_Y + INFO_HEADING_Y_OFFSET,
                 INFO_TEXT_W,
                 22,
                 hwnd,
@@ -404,7 +522,7 @@ unsafe extern "system" fn progress_wndproc(
                 hinst,
                 std::ptr::null(),
             );
-            apply_font(hwnd_info_heading, hfont_heading); // bold for emphasis
+            apply_font(hwnd_info_heading, hfont_info_heading);
 
             let hwnd_info_subtext = CreateWindowExW(
                 0,
@@ -412,7 +530,7 @@ unsafe extern "system" fn progress_wndproc(
                 wide(&d.jdk_install.progress.info_subtext).as_ptr(),
                 WS_CHILD | WS_VISIBLE | SS_LEFT,
                 INFO_TEXT_X,
-                INFO_BOX_Y + INFO_PAD + 20,
+                INFO_BOX_Y + INFO_SUBTEXT_Y_OFFSET,
                 INFO_TEXT_W,
                 22,
                 hwnd,
@@ -420,6 +538,7 @@ unsafe extern "system" fn progress_wndproc(
                 hinst,
                 std::ptr::null(),
             );
+            apply_font(hwnd_info_subtext, hfont_info_subtext);
 
             let hwnd_cancel = CreateWindowExW(
                 0,
@@ -440,7 +559,6 @@ unsafe extern "system" fn progress_wndproc(
 
             (*state).hwnd_heading = hwnd_heading;
             (*state).hwnd_subtitle = hwnd_subtitle;
-            (*state).hwnd_progress = hwnd_progress;
             (*state).hwnd_pct = hwnd_pct;
             (*state).hwnd_phase = hwnd_phase;
             (*state).hwnd_detail_left = hwnd_detail_left;
@@ -450,6 +568,13 @@ unsafe extern "system" fn progress_wndproc(
             (*state).hwnd_info_subtext = hwnd_info_subtext;
             (*state).hwnd_cancel = hwnd_cancel;
             (*state).hfont_heading = hfont_heading;
+            (*state).hfont_subtitle = hfont_subtitle;
+            (*state).hfont_pct = hfont_pct;
+            (*state).hfont_phase = hfont_phase;
+            (*state).hfont_detail_left = hfont_detail_left;
+            (*state).hfont_detail_right = hfont_detail_right;
+            (*state).hfont_info_heading = hfont_info_heading;
+            (*state).hfont_info_subtext = hfont_info_subtext;
             (*state).started_at = Instant::now();
 
             SetTimer(hwnd, TIMER_ID, TIMER_MS, None);
@@ -458,10 +583,10 @@ unsafe extern "system" fn progress_wndproc(
             0
         },
         WM_PAINT => unsafe {
-            // Custom-paint the white background and the light-blue
-            // info box, then draw the mascot icon. Child controls
-            // (heading, subtitle, progress, etc.) are painted by
-            // their own WM_PAINT handlers.
+            // Custom-paint the white background, the progress bar,
+            // the light-blue info box, and the mascot icon. Child
+            // controls (heading, subtitle, percent label, etc.) are
+            // painted by their own WM_PAINT handlers.
             let mut ps: PAINTSTRUCT = std::mem::zeroed();
             let hdc = BeginPaint(hwnd, &mut ps);
 
@@ -473,18 +598,75 @@ unsafe extern "system" fn progress_wndproc(
             FillRect(hdc, &rc, bg_brush);
             DeleteObject(bg_brush as _);
 
-            // 2. Light-blue info box.
-            let info_rc = RECT {
-                left: INFO_BOX_X,
-                top: INFO_BOX_Y,
-                right: INFO_BOX_X + INFO_BOX_W,
-                bottom: INFO_BOX_Y + INFO_BOX_H,
+            // 2. Progress bar — track + fill, custom-painted so the
+            // look doesn't depend on the system theme. Both are
+            // rounded rectangles using `PROGRESS_CORNER_DIAMETER` for
+            // a consistent, subtle curve on track and fill — the fill
+            // gets the same corners at every percentage (no special
+            // case at 100%).
+            //
+            // `pct` is read straight off `shared` so the repaint is
+            // always in sync with whatever the worker wrote last.
+            let raw = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut ProgressState;
+            let pct = if !raw.is_null() {
+                (&(*raw).shared).pct.load(Ordering::SeqCst)
+            } else {
+                0
             };
-            let info_brush = CreateSolidBrush(COLOR_INFO_BG);
-            FillRect(hdc, &info_rc, info_brush);
-            DeleteObject(info_brush as _);
 
-            // 3. Mascot. Prefer an HBITMAP the caller pushed via
+            // Track.
+            let track_rgn = CreateRoundRectRgn(
+                PROGRESS_X,
+                PROGRESS_Y,
+                PROGRESS_X + PROGRESS_W,
+                PROGRESS_Y + PROGRESS_H,
+                PROGRESS_CORNER_DIAMETER,
+                PROGRESS_CORNER_DIAMETER,
+            );
+            if !track_rgn.is_null() {
+                let track_brush = CreateSolidBrush(COLOR_PROGRESS_TRACK);
+                FillRgn(hdc, track_rgn, track_brush);
+                DeleteObject(track_brush as _);
+                DeleteObject(track_rgn as _);
+            }
+
+            // Fill — same corner radius as the track at every pct.
+            let fill_w =
+                (PROGRESS_W as i32 * pct as i32 / 100).max(0).min(PROGRESS_W as i32);
+            if fill_w > 0 {
+                let fill_rgn = CreateRoundRectRgn(
+                    PROGRESS_X,
+                    PROGRESS_Y,
+                    PROGRESS_X + fill_w,
+                    PROGRESS_Y + PROGRESS_H,
+                    PROGRESS_CORNER_DIAMETER,
+                    PROGRESS_CORNER_DIAMETER,
+                );
+                if !fill_rgn.is_null() {
+                    let fill_brush = CreateSolidBrush(COLOR_PROGRESS_FILL);
+                    FillRgn(hdc, fill_rgn, fill_brush);
+                    DeleteObject(fill_brush as _);
+                    DeleteObject(fill_rgn as _);
+                }
+            }
+
+            // 3. Light-blue info box — rounded.
+            let info_rgn = CreateRoundRectRgn(
+                INFO_BOX_X,
+                INFO_BOX_Y,
+                INFO_BOX_X + INFO_BOX_W,
+                INFO_BOX_Y + INFO_BOX_H,
+                INFO_BOX_CORNER_DIAMETER,
+                INFO_BOX_CORNER_DIAMETER,
+            );
+            if !info_rgn.is_null() {
+                let info_brush = CreateSolidBrush(COLOR_INFO_BG);
+                FillRgn(hdc, info_rgn, info_brush);
+                DeleteObject(info_brush as _);
+                DeleteObject(info_rgn as _);
+            }
+
+            // 4. Mascot. Prefer an HBITMAP the caller pushed via
             // `ProgressShared::set_mascot_hbitmap()` — `progress_preview`
             // uses this to draw `assets/snug-icon.png` directly. Falls
             // back to the EXE's main icon resource when no bitmap is
@@ -518,25 +700,46 @@ unsafe extern "system" fn progress_wndproc(
             0
         },
         WM_CTLCOLORSTATIC => unsafe {
-            // Apply the gray subtitle / detail colour to the controls
-            // the mockup shows in lighter weight, and use a
-            // transparent background so the parent's painted
-            // background (white, or the light-blue info box) shows
-            // through behind the text.
+            // Every text-bearing STATIC paints transparent so the
+            // parent's painted background (white for the main body,
+            // light blue for the info box) shows through — except
+            // for the dynamic text controls (percent, detail-left,
+            // detail-right) which update 5×/sec. For those we
+            // return `WHITE_BRUSH` so the control rect is fully
+            // repainted with the dialog fill before the new text
+            // is drawn; otherwise the previous value's pixels stay
+            // visible behind the new value ("12%" becoming "13%"
+            // with a ghost "2" still showing, etc.).
+            //
+            // The info icon is the exception — it's the only STATIC
+            // carrying its own image content (via `STM_SETICON`), so
+            // we let the default brush stand for it.
+            //
+            // Subtitle, phase label, and detail-right line get the
+            // lighter-weight grey text colour. Heading, info heading,
+            // percent label, detail-left, and info subtext keep the
+            // system default (black / COLOR_WINDOWTEXT).
             use windows_sys::Win32::Graphics::Gdi::{
                 SetBkMode, SetTextColor, HDC, TRANSPARENT,
             };
             let hdc: HDC = wparam as HDC;
             let hwnd_child = lparam as HWND;
             let raw = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut ProgressState;
-            if !raw.is_null() {
-                let gray_target = hwnd_child == (*raw).hwnd_subtitle
+            if !raw.is_null() && hwnd_child != (*raw).hwnd_info_icon {
+                let grey_text = hwnd_child == (*raw).hwnd_subtitle
+                    || hwnd_child == (*raw).hwnd_phase
                     || hwnd_child == (*raw).hwnd_detail_right;
-                if gray_target {
+                if grey_text {
                     SetTextColor(hdc, COLOR_SUBTITLE);
-                    SetBkMode(hdc, TRANSPARENT as i32);
-                    return GetStockObject(NULL_BRUSH) as LRESULT;
                 }
+                let dynamic = hwnd_child == (*raw).hwnd_pct
+                    || hwnd_child == (*raw).hwnd_detail_left
+                    || hwnd_child == (*raw).hwnd_detail_right;
+                if dynamic {
+                    return GetStockObject(WHITE_BRUSH) as LRESULT;
+                }
+                SetBkMode(hdc, TRANSPARENT as i32);
+                return GetStockObject(NULL_BRUSH) as LRESULT;
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
@@ -554,7 +757,6 @@ unsafe extern "system" fn progress_wndproc(
             let done = (&(*raw).shared).done.load(Ordering::SeqCst);
             let started = (&(*raw).shared).started.load(Ordering::SeqCst);
             let started_at = (*raw).started_at;
-            let hwnd_progress = (*raw).hwnd_progress;
             let hwnd_pct = (*raw).hwnd_pct;
             let hwnd_detail_left = (*raw).hwnd_detail_left;
             let hwnd_detail_right = (*raw).hwnd_detail_right;
@@ -571,7 +773,21 @@ unsafe extern "system" fn progress_wndproc(
             let elapsed = started_at.elapsed().as_secs_f64();
             let view = format_view(phase, pct, bytes, total, elapsed, &d.jdk_install.progress);
 
-            SendMessageW(hwnd_progress, PBM_SETPOS, pct as WPARAM, 0);
+            // Invalidate just the progress bar rect when pct moved.
+            // Skipping ticks where pct didn't change avoids a
+            // redundant full WM_PAINT (and re-blitting the mascot /
+            // text) on every 200 ms poll.
+            if pct != (*raw).last_pct {
+                (*raw).last_pct = pct;
+                let bar_rc = RECT {
+                    left: PROGRESS_X,
+                    top: PROGRESS_Y,
+                    right: PROGRESS_X + PROGRESS_W,
+                    bottom: PROGRESS_Y + PROGRESS_H,
+                };
+                InvalidateRect(hwnd, &bar_rc, 0);
+            }
+
             set_static_text(hwnd_pct, &view.pct_label);
             set_static_text(hwnd_detail_left, &view.detail_left);
             set_static_text(hwnd_detail_right, &view.detail_right);
@@ -658,6 +874,27 @@ unsafe extern "system" fn progress_wndproc(
             if !raw.is_null() {
                 if !(*raw).hfont_heading.is_null() {
                     DeleteObject((*raw).hfont_heading as _);
+                }
+                if !(*raw).hfont_subtitle.is_null() {
+                    DeleteObject((*raw).hfont_subtitle as _);
+                }
+                if !(*raw).hfont_pct.is_null() {
+                    DeleteObject((*raw).hfont_pct as _);
+                }
+                if !(*raw).hfont_phase.is_null() {
+                    DeleteObject((*raw).hfont_phase as _);
+                }
+                if !(*raw).hfont_detail_left.is_null() {
+                    DeleteObject((*raw).hfont_detail_left as _);
+                }
+                if !(*raw).hfont_detail_right.is_null() {
+                    DeleteObject((*raw).hfont_detail_right as _);
+                }
+                if !(*raw).hfont_info_heading.is_null() {
+                    DeleteObject((*raw).hfont_info_heading as _);
+                }
+                if !(*raw).hfont_info_subtext.is_null() {
+                    DeleteObject((*raw).hfont_info_subtext as _);
                 }
                 let _ = Box::from_raw(raw);
             }
@@ -791,13 +1028,13 @@ unsafe fn apply_window_icon(hwnd: HWND) {
 /// `NULL`.
 ///
 /// The bitmap is assumed to be a 32-bpp top-down DIB section with
-/// BGRA byte order (the format `CreateDIBSection` + `BI_RGB` produces
-/// when the caller writes raw pixel bytes — see `progress_preview`
-/// for the conversion routine). `StretchBlt` with `SRCCOPY` ignores
-/// the alpha channel and treats each 32-bit pixel as opaque, so a
-/// PNG with a transparent background will composite over the dialog's
-/// white background instead of looking correct — that's a known
-/// limitation noted for the follow-up `mascot.png` payload slice.
+/// BGRA byte order and **straight per-pixel alpha** (the format
+/// `CreateDIBSection` + `BI_RGB` produces when the caller writes
+/// raw pixel bytes — see `progress_preview` for the conversion
+/// routine). `AlphaBlend` with `AC_SRC_OVER` + `AC_SRC_ALPHA`
+/// honours the per-pixel alpha so a PNG with a transparent
+/// background composites correctly over the dialog's white fill
+/// rather than rendering its RGB values flat.
 unsafe fn draw_mascot_hbitmap(hdc_dest: HDC, hbitmap: HBITMAP) {
     if hbitmap.is_null() {
         return;
@@ -823,8 +1060,20 @@ unsafe fn draw_mascot_hbitmap(hdc_dest: HDC, hbitmap: HBITMAP) {
         return;
     }
     let old = unsafe { SelectObject(hdc_mem, hbitmap as _) };
+    // BlendOp = AC_SRC_OVER, SourceConstantAlpha = 255 (use the
+    // source's per-pixel alpha as the multiplier), AlphaFormat =
+    // AC_SRC_ALPHA (source 32-bpp DIB has straight alpha in the
+    // high byte). With `BI_RGB` + 32-bpp, GDI treats the alpha as
+    // straight (non-premultiplied), which matches what the PNG
+    // decoder hands us.
+    let blend = BLENDFUNCTION {
+        BlendOp: AC_SRC_OVER as u8,
+        BlendFlags: 0,
+        SourceConstantAlpha: 255,
+        AlphaFormat: AC_SRC_ALPHA as u8,
+    };
     unsafe {
-        StretchBlt(
+        AlphaBlend(
             hdc_dest,
             MASCOT_X,
             MASCOT_Y,
@@ -835,7 +1084,7 @@ unsafe fn draw_mascot_hbitmap(hdc_dest: HDC, hbitmap: HBITMAP) {
             0,
             src_w,
             src_h,
-            SRCCOPY,
+            blend,
         );
         SelectObject(hdc_mem, old);
         DeleteDC(hdc_mem);
@@ -945,7 +1194,6 @@ pub unsafe fn show(
         shared: shared.clone(),
         hwnd_heading: std::ptr::null_mut(),
         hwnd_subtitle: std::ptr::null_mut(),
-        hwnd_progress: std::ptr::null_mut(),
         hwnd_pct: std::ptr::null_mut(),
         hwnd_phase: std::ptr::null_mut(),
         hwnd_detail_left: std::ptr::null_mut(),
@@ -955,11 +1203,19 @@ pub unsafe fn show(
         hwnd_info_subtext: std::ptr::null_mut(),
         hwnd_cancel: std::ptr::null_mut(),
         hfont_heading: std::ptr::null_mut(),
+        hfont_subtitle: std::ptr::null_mut(),
+        hfont_pct: std::ptr::null_mut(),
+        hfont_phase: std::ptr::null_mut(),
+        hfont_detail_left: std::ptr::null_mut(),
+        hfont_detail_right: std::ptr::null_mut(),
+        hfont_info_heading: std::ptr::null_mut(),
+        hfont_info_subtext: std::ptr::null_mut(),
         started_at: Instant::now(),
         // Start in phase 0 — `WM_TIMER`'s first tick will rewrite
         // the cancel button to "Install" when the worker hasn't
         // moved on yet, and to "Cancel" once phase 1 begins.
         last_label_phase: -1,
+        last_pct: 0,
     });
     let state_ptr = Box::into_raw(state_box);
 
