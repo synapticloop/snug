@@ -22,6 +22,7 @@
 // and confined to `#[cfg(windows)]` modules.
 
 pub mod cache;
+pub mod custom_dialog;
 pub mod dialogs;
 pub mod error;
 pub mod jdk_install;

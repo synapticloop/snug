@@ -58,7 +58,7 @@ use windows_sys::Win32::UI::Controls::{
 };
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    HICON, SendMessageW, IDCANCEL, IDNO, IDOK, IDYES, SW_SHOWNORMAL,
+    HICON, SendMessageW, IDCANCEL, IDOK, IDYES, SW_SHOWNORMAL,
 };
 
 // ===========================================================================
@@ -543,6 +543,12 @@ pub struct ProgressShared {
     /// the callback can render percentages even after the worker
     /// thread has moved on to verify/extract.
     pub(crate) total_bytes: AtomicU64,
+    /// Set to `true` by the progress window when the user clicks
+    /// the "Install" button. The worker spins on this at the top of
+    /// `worker_thread` so the download doesn't actually start until
+    /// the user has explicitly opted in — the progress window
+    /// appears in a "ready to install" paused state.
+    pub(crate) started: AtomicBool,
     /// Resolved JAVA_HOME after a successful extract. The worker
     /// writes this so the caller doesn't have to walk the
     /// extracted tree again.
@@ -753,7 +759,7 @@ fn format_status_line(phase: i32, pct: u32, bytes: u64, total: u64) -> String {
 /// icon — `editpe` writes the `--icon` input at that ID. `LoadImageW`
 /// with `LR_SHARED` returns a shared handle that the system manages;
 /// no `DestroyIcon` call is needed.
-fn load_exe_main_icon_hicon() -> Option<HICON> {
+pub(crate) fn load_exe_main_icon_hicon() -> Option<HICON> {
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetSystemMetrics, LoadImageW, IMAGE_ICON, LR_SHARED, SM_CXICON, SM_CYICON,
@@ -787,6 +793,13 @@ fn load_exe_main_icon_hicon() -> Option<HICON> {
 /// Show a modal progress dialog driven by `worker_thread`. The worker
 /// writes `pct`/`done` into the shared state; the dialog reads them
 /// and auto-dismisses on completion.
+///
+/// **Default path** is [`crate::progress_window::show`] — the custom-
+/// paint window matching the user-facing mockup. The legacy
+/// `TaskDialogIndirect` path (comctl32 v6) is opt-in via the
+/// `progress.use_taskdialog_fallback` dialogs.toml flag, kept around
+/// for the rare v6-SxS-crash install class where `TaskDialogIndirect`
+/// crashes inside itself.
 fn show_progress_dialog(
     parent: HWND,
     title: &str,
@@ -794,6 +807,10 @@ fn show_progress_dialog(
     content: &str,
     shared: Arc<ProgressShared>,
 ) -> i32 {
+    if !dialogs::dialogs().jdk_install.progress.use_taskdialog_fallback {
+        return unsafe { crate::progress_window::show(parent, title, content, shared) };
+    }
+
     let title_w = wide(title);
     let main_w = wide(main);
     let content_w = wide(content);
@@ -1109,6 +1126,19 @@ fn worker_thread(
         }
     };
 
+    // Wait for the user to click "Install" before doing anything.
+    // The progress window pops up in a paused state with the bar at
+    // 0% and an "Install" button — only when the user clicks does
+    // the actual download / verify / extract start. We also exit
+    // early if the window is closed (or another reason sets `done`)
+    // before the user opts in.
+    while !shared.started.load(Ordering::SeqCst) {
+        if shared.done.load(Ordering::SeqCst) != 0 {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
     // The bar is split monotonically across the three phases so the user
     // never sees it move backwards:
 //   - phase 0 (download)   : 0 → 95%
@@ -1301,58 +1331,12 @@ pub fn maybe_install(
         }
     };
 
-    let dlg = dialogs::dialogs();
-    let size_mb = format!("{:.0}", metadata.size_bytes as f64 / 1_048_576.0);
-
-    let mut prompt = Config::new(
-        parent_hwnd,
-        dlg.jdk_install.prompt.title.clone(),
-        dlg.jdk_install.prompt.main.clone(),
-    );
-    prompt.icon = IconKind::Shield;
-    prompt.content = dialogs::fill(
-        dlg.jdk_install.prompt.content.as_str(),
-        &[
-            ("version", metadata.version.as_str()),
-            ("size_mb", size_mb.as_str()),
-        ],
-    );
-    prompt.psz_expanded_information = Some(dialogs::fill(
-        dlg.jdk_install.prompt.expanded.as_str(),
-        &[
-            ("url", metadata.package_link.as_str()),
-            ("sha256", metadata.sha256.as_str()),
-        ],
-    ));
-    prompt.psz_expanded_control_text = dlg.jdk_install.prompt.show_details.clone();
-    prompt.psz_collapsed_control_text = dlg.jdk_install.prompt.hide_details.clone();
-    prompt.buttons = vec![
-        CustomButton {
-            id: IDYES,
-            text: dialogs::fill(
-                dlg.jdk_install.prompt.button_download.as_str(),
-                &[("version", metadata.version.as_str())],
-            ),
-        },
-        CustomButton {
-            id: IDNO,
-            text: dlg.jdk_install.prompt.button_open_browser.clone(),
-        },
-        CustomButton {
-            id: IDCANCEL,
-            text: dlg.jdk_install.prompt.button_cancel.clone(),
-        },
-    ];
-    prompt.default_button = IDYES;
-
-    match prompt.show() {
-        x if x == IDYES => {} // fall through to download
-        x if x == IDNO => {
-            open_in_browser(&metadata.package_link)?;
-            return Ok(None);
-        }
-        _ => return Ok(None),
-    }
+    // The "JDK wasn't found" install prompt has been removed per the
+    // current product decision — go straight to the download so the
+    // user sees the progress window immediately. The progress window's
+    // abort button starts labelled "Install" (download is part of the
+    // install flow) and switches to "Cancel" once phase 1 (verify) /
+    // phase 2 (extract) begins — see `progress_window::show`.
 
     // 3. Download with progress + SHA-on-disk + extract, with retries.
     // Install under `<install_root>/<major>/` so re-downloading after a
@@ -1472,6 +1456,7 @@ fn run_one_install_attempt(
         total_bytes: AtomicU64::new(metadata.size_bytes),
         home: std::sync::Mutex::new(None),
         error_at: std::sync::Mutex::new(None),
+        started: AtomicBool::new(false),
     });
 
     let worker = thread::spawn({
@@ -1545,13 +1530,8 @@ fn show_retry_dialog(
     let d = dialogs::dialogs();
     let attempt_str = attempt.to_string();
     let max_str = max_attempts.to_string();
-    let mut c = Config::new(
-        parent,
-        d.jdk_install.retry.title.clone(),
-        d.jdk_install.retry.main.clone(),
-    );
-    c.icon = IconKind::Warning;
-    c.content = dialogs::fill(
+
+    let content = dialogs::fill(
         d.jdk_install.retry.content.as_str(),
         &[
             ("version", version),
@@ -1560,18 +1540,37 @@ fn show_retry_dialog(
             ("error", error),
         ],
     );
-    c.buttons = vec![
-        CustomButton {
-            id: IDYES,
-            text: d.jdk_install.retry.button_retry.clone(),
-        },
-        CustomButton {
-            id: IDCANCEL,
-            text: d.jdk_install.retry.button_cancel.clone(),
-        },
-    ];
-    c.default_button = IDYES;
-    c.show() == IDYES
+    let retry_label = d.jdk_install.retry.button_retry.clone();
+    let cancel_label = d.jdk_install.retry.button_cancel.clone();
+
+    // 1 = Retry, 2 = Cancel.
+    let choice: i32 = if d.jdk_install.progress.use_taskdialog_fallback {
+        let mut c = Config::new(
+            parent,
+            d.jdk_install.retry.title.clone(),
+            d.jdk_install.retry.main.clone(),
+        );
+        c.icon = IconKind::Warning;
+        c.content = content.clone();
+        c.buttons = vec![
+            CustomButton { id: IDYES, text: retry_label.clone() },
+            CustomButton { id: IDCANCEL, text: cancel_label.clone() },
+        ];
+        c.default_button = IDYES;
+        c.show()
+    } else {
+        unsafe {
+            crate::custom_dialog::show_prompt(
+                parent,
+                &d.jdk_install.retry.title,
+                &d.jdk_install.retry.main,
+                &content,
+                &[&retry_label, &cancel_label],
+            )
+        }
+    };
+
+    choice == IDYES
 }
 
 /// "We could not reach Adoptium" dialog. Pops when
