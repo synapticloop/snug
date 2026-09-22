@@ -3,7 +3,14 @@
 use std::fs;
 use std::io::Read;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
+
+/// `Win32` process-creation flag that prevents Windows from allocating a
+/// new console for the child. Without this, spawning a console-subsystem
+/// binary (like `java.exe`) from our GUI-subsystem launcher would flash a
+/// command prompt window briefly before the child exits.
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 use jni::objects::{JObject, JObjectArray, JString, JValue};
 use jni::signature::RuntimeMethodSignature;
@@ -547,7 +554,13 @@ fn read_java_major(java_home: &Path) -> Result<Option<u16>, LauncherError> {
     if !java_exe.is_file() {
         return Ok(None);
     }
-    let output = match std::process::Command::new(&java_exe).arg("-version").output() {
+    // `CREATE_NO_WINDOW` keeps the parent (GUI subsystem) from flashing a
+    // console window for this short-lived `java -version` probe.
+    let output = match std::process::Command::new(&java_exe)
+        .arg("-version")
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+    {
         Ok(o) => o,
         Err(_) => return Ok(None),
     };
