@@ -33,6 +33,7 @@ pub struct JdkInstallDialogs {
     pub progress: ProgressDialog,
     pub success: SuccessDialog,
     pub failure: FailureDialog,
+    pub retry: RetryDialog,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -82,6 +83,18 @@ pub struct FailureDialog {
     pub content: String,
     pub button_ok: String,
     pub button_continue: String,
+}
+
+/// Popped between failed download attempts so the user can choose to
+/// retry up to `MAX_DOWNLOAD_ATTEMPTS` times before the terminal
+/// `failure` dialog takes over.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RetryDialog {
+    pub title: String,
+    pub main: String,
+    pub content: String,
+    pub button_retry: String,
+    pub button_cancel: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

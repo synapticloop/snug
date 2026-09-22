@@ -85,7 +85,7 @@ button_cancel = "Cancel"
 # `TDN_TIMER` callback so the user sees real-time progress.
 
 [jdk_install.progress]
-title = "Downloading Eclipse Temurin…"
+title = "Downloading runtime components..."
 main = "Temurin {version} (~{size_mb} MB)"
 content_initial = "Verifying SHA-256 against the file on disk once complete."
 
@@ -121,6 +121,23 @@ The launch will continue using whichever Java (if any) is already installed on t
 # Generic OK button used by the success / failure dialogs above.
 button_ok = "OK"
 button_continue = "Continue"
+
+
+# --- Retry prompt ---------------------------------------------------------
+# Shown after each non-fatal download/verify/extract failure, up to
+# MAX_DOWNLOAD_ATTEMPTS. Two buttons: Try again / Cancel. The user
+# gets a Retry prompt between every attempt except the last; the
+# final failure pops the terminal `failure` dialog above instead.
+
+[jdk_install.retry]
+title = "Download failed — Try again?"
+main = "Eclipse Temurin download failed"
+content = """\
+Attempt {attempt} of {max_attempts} failed while downloading Eclipse Temurin {version}.\n\n\
+{error}\n\n\
+A common cause is a transient network blip. You can retry, or continue without a bundled Java if you've already installed one manually."""
+button_retry = "Try again"
+button_cancel = "Cancel"
 
 
 # --- Generic error dialog (used by the rest of the launcher) --------------

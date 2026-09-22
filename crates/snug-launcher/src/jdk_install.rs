@@ -46,12 +46,12 @@ use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM, S_OK};
 use windows_sys::Win32::UI::Controls::{
     TD_ERROR_ICON, TD_INFORMATION_ICON, TD_SHIELD_ICON, TD_WARNING_ICON,
     TDF_ALLOW_DIALOG_CANCELLATION, TDF_CALLBACK_TIMER, TDF_ENABLE_HYPERLINKS,
-    TDF_SHOW_PROGRESS_BAR, TDF_USE_COMMAND_LINKS, TASKDIALOG_BUTTON,
-    TASKDIALOGCONFIG, TASKDIALOGCONFIG_0, TASKDIALOGCONFIG_1,
+    TDF_SHOW_PROGRESS_BAR, TDF_USE_COMMAND_LINKS, TDF_USE_HICON_MAIN,
+    TASKDIALOG_BUTTON, TASKDIALOGCONFIG, TASKDIALOGCONFIG_0, TASKDIALOGCONFIG_1,
 };
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    SendMessageW, IDCANCEL, IDNO, IDOK, IDYES, SW_SHOWNORMAL,
+    HICON, SendMessageW, IDCANCEL, IDNO, IDOK, IDYES, SW_SHOWNORMAL,
 };
 
 // ===========================================================================
@@ -540,6 +540,13 @@ pub struct ProgressShared {
     /// writes this so the caller doesn't have to walk the
     /// extracted tree again.
     home: std::sync::Mutex<Option<PathBuf>>,
+    /// `Instant` at which the worker first reported `done == 2`.
+    /// The callback holds the `PBST_ERROR` bar state for at least
+    /// [`ERROR_HOLD_DURATION`] from this point before dismissing
+    /// the dialog, so the user actually sees the red bar before
+    /// the failure dialog replaces it. `None` while the download
+    /// is still running or hasn't errored yet.
+    error_at: std::sync::Mutex<Option<std::time::Instant>>,
 }
 
 unsafe impl Send for ProgressShared {}
@@ -560,10 +567,17 @@ unsafe extern "system" fn progress_dialog_callback(
     _userdata: isize,
 ) -> windows_sys::core::HRESULT {
     use windows_sys::Win32::UI::Controls::{
-        PBST_NORMAL, TDN_CREATED, TDN_TIMER, TDE_CONTENT, TDM_CLICK_BUTTON,
-        TDM_SET_ELEMENT_TEXT, TDM_SET_PROGRESS_BAR_POS, TDM_SET_PROGRESS_BAR_RANGE,
-        TDM_SET_PROGRESS_BAR_STATE,
+        PBST_ERROR, PBST_NORMAL, PBST_PAUSED, TDN_CREATED, TDN_TIMER, TDE_CONTENT,
+        TDM_CLICK_BUTTON, TDM_SET_ELEMENT_TEXT, TDM_SET_PROGRESS_BAR_POS,
+        TDM_SET_PROGRESS_BAR_RANGE, TDM_SET_PROGRESS_BAR_STATE,
     };
+    /// How long the `PBST_ERROR` bar state stays visible after the
+    /// worker reports a failure before the dialog dismisses itself.
+    /// Without this hold the red flash would last a single ~200 ms
+    /// tick and most users would never register it before the
+    /// failure dialog replaced the progress dialog.
+    const ERROR_HOLD_DURATION: std::time::Duration =
+        std::time::Duration::from_millis(600);
     let Some(arc) = ACTIVE_PROGRESS.with(|c| c.borrow().clone()) else {
         return S_OK;
     };
@@ -600,8 +614,40 @@ unsafe extern "system" fn progress_dialog_callback(
     } else if msg == TDN_TIMER {
         let pct = arc.pct.load(Ordering::SeqCst);
         let phase = arc.phase.load(Ordering::SeqCst);
+        let done = arc.done.load(Ordering::SeqCst);
         let bytes = arc.bytes.load(Ordering::SeqCst);
         let total = arc.total_bytes.load(Ordering::SeqCst);
+
+        // Map `(done, phase)` → bar state. The TaskDialog API only
+        // exposes three states; we use them to communicate phase to
+        // the user without changing the layout:
+        //   - Worker errored (`done == 2`)      → ERROR   (red)
+        //   - Verifying SHA-256 (`phase == 1`)  → PAUSED  (yellow) —
+        //     the bar is no longer measuring live download progress,
+        //     and yellow signals "still working, but the meter isn't
+        //     measuring what it was a moment ago."
+        //   - Otherwise                         → NORMAL  (green)
+        let state: u32 = match (done, phase) {
+            (2, _) => PBST_ERROR,
+            (_, 1) => PBST_PAUSED,
+            _ => PBST_NORMAL,
+        };
+        // Pin the instant the worker first reported failure so the
+        // dismissal path can hold the red bar for `ERROR_HOLD_DURATION`
+        // before closing the dialog.
+        let hold_elapsed = {
+            let mut g = arc.error_at.lock().unwrap();
+            if done == 2 && g.is_none() {
+                *g = Some(std::time::Instant::now());
+            }
+            match *g {
+                Some(t) => {
+                    std::time::Instant::now().duration_since(t)
+                        >= ERROR_HOLD_DURATION
+                }
+                None => false,
+            }
+        };
 
         // Render a live status line. We build the wide string on each
         // tick (cheap — ~200ms cadence); `TDM_SET_ELEMENT_TEXT` copies
@@ -613,11 +659,13 @@ unsafe extern "system" fn progress_dialog_callback(
             // Re-assert the bar state on every tick. Some Windows
             // themes (notably High Contrast) reset the state when the
             // dialog repaints, leaving the bar invisible until the
-            // next paint cycle.
+            // next paint cycle. The same defensive re-assert applies
+            // regardless of which state we picked — NORMAL, PAUSED,
+            // or ERROR.
             SendMessageW(
                 hwnd,
                 TDM_SET_PROGRESS_BAR_STATE as u32,
-                PBST_NORMAL as usize,
+                state as usize,
                 0,
             );
             SendMessageW(hwnd, TDM_SET_PROGRESS_BAR_POS as u32, pct as usize, 0);
@@ -627,11 +675,19 @@ unsafe extern "system" fn progress_dialog_callback(
                 TDE_CONTENT as usize,
                 status_w.as_ptr() as isize,
             );
-            match arc.done.load(Ordering::SeqCst) {
+            match done {
                 1 => {
                     SendMessageW(hwnd, TDM_CLICK_BUTTON as u32, IDOK as usize, 0);
                 }
-                2 | 3 => {
+                // 2 = errored — only dismiss once the red bar has
+                // been visible long enough to register. Without this
+                // gate the bar would flash red for a single ~200 ms
+                // tick and most users wouldn't see it before the
+                // failure dialog replaced the progress dialog.
+                2 if hold_elapsed => {
+                    SendMessageW(hwnd, TDM_CLICK_BUTTON as u32, IDCANCEL as usize, 0);
+                }
+                3 => {
                     SendMessageW(hwnd, TDM_CLICK_BUTTON as u32, IDCANCEL as usize, 0);
                 }
                 _ => {}
@@ -680,6 +736,47 @@ fn format_status_line(phase: i32, pct: u32, bytes: u64, total: u64) -> String {
     }
 }
 
+/// Try to load the EXE's main application icon as an `HICON` so the
+/// progress dialog can render with the same icon the user sees in the
+/// title bar / taskbar. Returns `None` when no icon resource is present
+/// (e.g. the bare launcher stub or an EXE built without `--icon`); the
+/// caller should fall back to a standard system icon in that case.
+///
+/// Resource ID `1` is the Windows convention for the main application
+/// icon — `editpe` writes the `--icon` input at that ID. `LoadImageW`
+/// with `LR_SHARED` returns a shared handle that the system manages;
+/// no `DestroyIcon` call is needed.
+fn load_exe_main_icon_hicon() -> Option<HICON> {
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetSystemMetrics, LoadImageW, IMAGE_ICON, LR_SHARED, SM_CXICON, SM_CYICON,
+    };
+
+    unsafe {
+        let hinst = GetModuleHandleW(std::ptr::null());
+        if hinst.is_null() {
+            return None;
+        }
+        let hicon = LoadImageW(
+            hinst,
+            // `MAKEINTRESOURCE(1)` — integer ID stored in the lower 16
+            // bits of an otherwise-zero pointer-sized value. Cast a
+            // `usize` to `*const u16` so the high bits stay zero; Windows
+            // checks the high bits to distinguish from a real pointer.
+            1usize as *const u16,
+            IMAGE_ICON,
+            GetSystemMetrics(SM_CXICON),
+            GetSystemMetrics(SM_CYICON),
+            LR_SHARED,
+        );
+        if hicon.is_null() {
+            None
+        } else {
+            Some(hicon)
+        }
+    }
+}
+
 /// Show a modal progress dialog driven by `worker_thread`. The worker
 /// writes `pct`/`done` into the shared state; the dialog reads them
 /// and auto-dismisses on completion.
@@ -694,9 +791,30 @@ fn show_progress_dialog(
     let main_w = wide(main);
     let content_w = wide(content);
 
-    let dw_flags: i32 = TDF_SHOW_PROGRESS_BAR
-        | TDF_CALLBACK_TIMER
-        | TDF_ALLOW_DIALOG_CANCELLATION;
+    // Use the EXE's own icon when available, otherwise fall back to
+    // the standard information icon. `TDF_USE_HICON_MAIN` tells
+    // `TaskDialogIndirect` to treat `pszMainIcon` as an `HICON` cast
+    // rather than a system icon constant.
+    let (main_icon_ptr, dw_flags): (*const u16, i32) =
+        match load_exe_main_icon_hicon() {
+            Some(h) => (
+                // `HICON` is `*mut c_void` in windows-sys 0.59; cast to
+                // the `PCWSTR` slot via a `usize` round-trip so the
+                // bit pattern is preserved exactly. `TDF_USE_HICON_MAIN`
+                // in `dw_flags` is what tells `TaskDialogIndirect` to
+                // treat this slot as an icon handle rather than a
+                // system icon constant.
+                h as usize as *const u16,
+                TDF_SHOW_PROGRESS_BAR
+                    | TDF_CALLBACK_TIMER
+                    | TDF_ALLOW_DIALOG_CANCELLATION
+                    | TDF_USE_HICON_MAIN,
+            ),
+            None => (
+                TD_INFORMATION_ICON_H,
+                TDF_SHOW_PROGRESS_BAR | TDF_CALLBACK_TIMER | TDF_ALLOW_DIALOG_CANCELLATION,
+            ),
+        };
 
     let cfg = TASKDIALOGCONFIG {
         cbSize: std::mem::size_of::<TASKDIALOGCONFIG>() as u32,
@@ -706,7 +824,7 @@ fn show_progress_dialog(
         dwCommonButtons: 0,
         pszWindowTitle: title_w.as_ptr(),
         Anonymous1: TASKDIALOGCONFIG_0 {
-            pszMainIcon: TD_INFORMATION_ICON_H,
+            pszMainIcon: main_icon_ptr,
         },
         pszMainInstruction: main_w.as_ptr(),
         pszContent: content_w.as_ptr(),
@@ -726,11 +844,13 @@ fn show_progress_dialog(
         pszFooter: std::ptr::null(),
         pfCallback: Some(progress_dialog_callback),
         lpCallbackData: 0,
-        // 0 = auto-size to content. The progress bar is part of the
-        // auto-sized layout, but on some themes the auto-sized dialog
-        // is narrow enough that the bar collapses into a 1-px line.
-        // Forcing a wider dialog gives the bar room to render.
-        cxWidth: 420,
+        // 560 dialog units (vs. 420 previously): the live status
+        // line ("Verifying SHA-256 against the file on disk… (50%)")
+        // used to wrap to two lines on some themes, which pushed the
+        // Cancel area off the bottom of the dialog. The wider box
+        // keeps the status line on one row and the bar comfortably
+        // visible above the dialog footer.
+        cxWidth: 560,
     };
 
     ACTIVE_PROGRESS.with(|c| *c.borrow_mut() = Some(shared.clone()));
@@ -1220,14 +1340,113 @@ pub fn maybe_install(
         _ => return Ok(None),
     }
 
-    // 3. Download with progress + SHA-on-disk + extract.
+    // 3. Download with progress + SHA-on-disk + extract, with retries.
     // Install under `<install_root>/<major>/` so re-downloading after a
     // Temurin point release replaces the previous install instead of
     // leaving stale versions like `25.0.4+101.0.LTS` next to
     // `25.0.5+8.LTS`. Adoptium's zip still carries a nested
     // `jdk-X.Y.Z+1/` inside, so `find_java_home` walks one level deeper
     // to find `bin/java.exe` and reports that as JAVA_HOME.
+    //
+    // On a non-fatal failure we surface a Retry / Cancel TaskDialog
+    // and loop up to `MAX_DOWNLOAD_ATTEMPTS` times. Explicit user
+    // cancellation (`done == 3` from `worker_thread`) exits the loop
+    // immediately without asking.
+    const MAX_DOWNLOAD_ATTEMPTS: u32 = 3;
     let install_dir = install_root.join(min_java_major.to_string());
+    let tmp_zip = install_root.join(format!("{}.zip.tmp", min_java_major));
+
+    for attempt in 1..=MAX_DOWNLOAD_ATTEMPTS {
+        log::log(&format!(
+            "JDK download attempt {attempt}/{MAX_DOWNLOAD_ATTEMPTS}"
+        ));
+        match run_one_install_attempt(parent_hwnd, &metadata, &install_dir, &tmp_zip) {
+            AttemptOutcome::Success(home) => {
+                // No success dialog; the download + verify + extract
+                // was the long part, and the dialog stayed up while
+                // the bar filled, so the user already knows it
+                // succeeded.
+                return Ok(Some(home));
+            }
+            AttemptOutcome::Cancelled => {
+                log::log("user cancelled mid-download; not retrying");
+                return Ok(None);
+            }
+            AttemptOutcome::Failed(err) => {
+                if attempt >= MAX_DOWNLOAD_ATTEMPTS {
+                    log::log(&format!(
+                        "all {MAX_DOWNLOAD_ATTEMPTS} attempts exhausted; showing terminal failure dialog"
+                    ));
+                    let dlg = dialogs::dialogs();
+                    let content = dialogs::fill(
+                        dlg.jdk_install.failure.content.as_str(),
+                        &[
+                            ("version", metadata.version.as_str()),
+                            ("error", err.as_str()),
+                        ],
+                    );
+                    show_error_dialog(
+                        parent_hwnd,
+                        &dlg.jdk_install.failure.title,
+                        &dlg.jdk_install.failure.title,
+                        &content,
+                    );
+                    return Ok(None);
+                }
+                if !show_retry_dialog(
+                    parent_hwnd,
+                    attempt,
+                    MAX_DOWNLOAD_ATTEMPTS,
+                    &metadata.version,
+                    &err,
+                ) {
+                    log::log(&format!("user declined retry at attempt {attempt}"));
+                    return Ok(None);
+                }
+                log::log("user chose retry; looping");
+            }
+        }
+    }
+    // Unreachable: the loop either returns or asks the user whether to
+    // retry. If we somehow fall through, behave like a cancel.
+    log::log("retry loop fell through unexpectedly; returning None");
+    Ok(None)
+}
+
+/// Result of a single download + verify + extract attempt.
+enum AttemptOutcome {
+    /// Worker finished all three phases; value is the resolved JAVA_HOME.
+    Success(PathBuf),
+    /// Worker set `done == 3` — the user closed the progress dialog
+    /// mid-stream. Distinct from "errored and chose to give up";
+    /// never triggers a Retry prompt.
+    Cancelled,
+    /// Worker set `done == 2` (or didn't finish). Value is the
+    /// human-readable error message from the worker, used in the
+    /// Retry / terminal-failure dialog content.
+    Failed(String),
+}
+
+/// Run one download → SHA-256 → extract cycle. Cleans up any partial
+/// state from a previous attempt first (the temp zip and the
+/// extracted-tree directory under `<install_root>/<major>/`).
+///
+/// The progress dialog stays up for the full duration and auto-dismisses
+/// on success (`done == 1`) or error (`done == 2` after the
+/// `ERROR_HOLD_DURATION` red-bar hold). User-cancel (`done == 3`)
+/// short-circuits.
+fn run_one_install_attempt(
+    parent_hwnd: HWND,
+    metadata: &JdkMetadata,
+    install_dir: &Path,
+    tmp_zip: &Path,
+) -> AttemptOutcome {
+    // Start clean: previous attempts may have left a partial zip and a
+    // partial extract on disk.
+    let _ = std::fs::remove_file(tmp_zip);
+    let _ = std::fs::remove_dir_all(install_dir);
+    let _ = std::fs::create_dir_all(install_dir);
+
     let cancel = Arc::new(AtomicBool::new(false));
     let shared = Arc::new(ProgressShared {
         pct: AtomicU32::new(0),
@@ -1238,17 +1457,17 @@ pub fn maybe_install(
         bytes: AtomicU64::new(0),
         total_bytes: AtomicU64::new(metadata.size_bytes),
         home: std::sync::Mutex::new(None),
+        error_at: std::sync::Mutex::new(None),
     });
 
-    let tmp_zip = install_root.join(format!("{}.zip.tmp", min_java_major));
-    let url = metadata.package_link.clone();
-    let sha = metadata.sha256.clone();
-    let total = metadata.size_bytes;
     let worker = thread::spawn({
         let shared = shared.clone();
         let cancel = cancel.clone();
-        let install_dir = install_dir.clone();
-        let tmp_zip = tmp_zip.clone();
+        let install_dir = install_dir.to_path_buf();
+        let tmp_zip = tmp_zip.to_path_buf();
+        let url = metadata.package_link.clone();
+        let sha = metadata.sha256.clone();
+        let total = metadata.size_bytes;
         move || worker_thread(install_dir, tmp_zip, url, sha, total, cancel, shared)
     });
 
@@ -1263,7 +1482,7 @@ pub fn maybe_install(
             ),
         ],
     );
-    let clicked = show_progress_dialog(
+    let _clicked = show_progress_dialog(
         parent_hwnd,
         &dlg.jdk_install.progress.title,
         &progress_main,
@@ -1273,46 +1492,72 @@ pub fn maybe_install(
 
     let _ = worker.join();
 
-    // 4. Show result dialog + return.
     let done = shared.done.load(Ordering::SeqCst);
     if done == 1 {
         if let Ok(g) = shared.home.lock() {
             if let Some(home) = g.clone() {
-                let _ = std::fs::remove_file(&tmp_zip);
-                // No success dialog; the download + verify + extract
-                // was the long part, and the dialog stays up while the
-                // bar fills, so the user already knows it succeeded.
-                return Ok(Some(home));
+                let _ = std::fs::remove_file(tmp_zip);
+                return AttemptOutcome::Success(home);
             }
         }
     }
+    if done == 3 {
+        let _ = std::fs::remove_dir_all(install_dir);
+        let _ = std::fs::remove_file(tmp_zip);
+        return AttemptOutcome::Cancelled;
+    }
+    // Worker errored (or, in the unlikely case `done == 0` after
+    // `worker.join()`, the dialog closed before the worker finished).
+    let err = shared
+        .error
+        .lock()
+        .ok()
+        .and_then(|g| g.clone())
+        .unwrap_or_else(|| format!("Download did not finish (status={done})."));
+    let _ = std::fs::remove_dir_all(install_dir);
+    let _ = std::fs::remove_file(tmp_zip);
+    AttemptOutcome::Failed(err)
+}
 
-    // Failure / cancel.
-    let _ = std::fs::remove_dir_all(&install_dir);
-    let _ = std::fs::remove_file(&tmp_zip);
-    let err = shared.error.lock().ok().and_then(|g| g.clone());
-    let msg = err.unwrap_or_else(|| {
-        if clicked == IDCANCEL {
-            "Download cancelled.".to_string()
-        } else {
-            format!("Download did not finish (status={done}).")
-        }
-    });
-    let dlg = dialogs::dialogs();
-    let content = dialogs::fill(
-        dlg.jdk_install.failure.content.as_str(),
+/// Pop the Retry / Cancel prompt between failed download attempts.
+/// Returns `true` if the user picked Retry.
+fn show_retry_dialog(
+    parent: HWND,
+    attempt: u32,
+    max_attempts: u32,
+    version: &str,
+    error: &str,
+) -> bool {
+    let d = dialogs::dialogs();
+    let attempt_str = attempt.to_string();
+    let max_str = max_attempts.to_string();
+    let mut c = Config::new(
+        parent,
+        d.jdk_install.retry.title.clone(),
+        d.jdk_install.retry.main.clone(),
+    );
+    c.icon = IconKind::Warning;
+    c.content = dialogs::fill(
+        d.jdk_install.retry.content.as_str(),
         &[
-            ("version", metadata.version.as_str()),
-            ("error", msg.as_str()),
+            ("version", version),
+            ("attempt", &attempt_str),
+            ("max_attempts", &max_str),
+            ("error", error),
         ],
     );
-    show_error_dialog(
-        parent_hwnd,
-        &dlg.jdk_install.failure.title,
-        &dlg.jdk_install.failure.title,
-        &content,
-    );
-    Ok(None)
+    c.buttons = vec![
+        CustomButton {
+            id: IDYES,
+            text: d.jdk_install.retry.button_retry.clone(),
+        },
+        CustomButton {
+            id: IDCANCEL,
+            text: d.jdk_install.retry.button_cancel.clone(),
+        },
+    ];
+    c.default_button = IDYES;
+    c.show() == IDYES
 }
 
 /// "We could not reach Adoptium" dialog. Pops when
