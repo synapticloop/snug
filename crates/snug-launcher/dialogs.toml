@@ -80,25 +80,19 @@ button_cancel = "Cancel"
 
 
 # --- Live progress dialog --------------------------------------------------
-# Title / main / initial content stay put while the bar fills.
-# `status_*` lines are rewritten in place every ~200 ms by the
-# `TDN_TIMER` callback so the user sees real-time progress.
-#
-# The `heading_*` / `subtitle` / `info_*` / `*_with_size` / `*_no_size`
-# strings are used by the custom-painted v5-fallback window
-# (`progress_window.rs`). They mirror the user-facing mockup and
-# carry a richer set of fields (transfer speed, ETA, info box text)
-# that `TaskDialogIndirect`'s stock `TDE_CONTENT` slot doesn't
-# accommodate. Both paths are driven off the same `ProgressShared`,
-# so changing one set doesn't desync the other.
+# Rendered by the custom-painted window in `progress_window.rs`. Title,
+# main, and content_initial are set at creation; `heading` / `subtitle`
+# / `info_*` / `*_with_size` / `*_no_size` mirror the user-facing
+# mockup and carry the richer fields (transfer speed, ETA, info-box
+# copy) that a stock TaskDialog `TDE_CONTENT` slot doesn't accommodate.
 
 [jdk_install.progress]
-title = "Downloading runtime components..."
-main = "Temurin {version} (~{size_mb} MB)"
+title = "Install runtime...?"
+main = "Runtime {version} (~{size_mb} MB)"
 content_initial = "Verifying SHA-256 against the file on disk once complete."
 
-heading = "Downloading Runtime..."
-subtitle = "We need to install a runtime so that we can launch the application"
+heading = "Install Runtime...?"
+subtitle = "We need to install a runtime so that the application can launch"
 pct_label = "{pct}%"
 phase_label = "Downloading runtime (Windows x64)"
 detail_with_size = "{done_mb} MB of {total_mb} MB ({speed_mb_s} MB/s)"
@@ -117,22 +111,6 @@ info_subtext = "This runtime will be used for future application launches"
 # user sees a familiar word when there's an in-flight install to
 # abort. The "Cancel" label is reused from `prompt.button_cancel`.
 cancel_button_during_download = "Install"
-
-# Set to `true` to use the legacy `TaskDialogIndirect` path instead
-# of the custom-paint `progress_window::show`. Default `false` —
-# the mockup design wins on every modern Windows install. Flip on
-# only for the rare v6-SxS-crash install class where TaskDialog
-# crashes inside itself; see the module doc on `progress_window`.
-use_taskdialog_fallback = false
-
-# `status_*` lines below are TaskDialog-only (v6 path). They remain
-# the live content line that the TDN_TIMER callback rewrites every
-# tick. The custom v5 fallback uses `detail_*` / `pct_label` above.
-status_phase_0_with_size = "Downloaded {done_mb} MB of {total_mb} MB ({pct}%)"
-status_phase_0_no_size  = "Downloading… ({pct}%)"
-status_phase_1          = "Verifying SHA-256 against the file on disk… ({pct}%)"
-status_phase_2          = "Extracting… ({pct}%)"
-status_other            = "Working… ({pct}%)"
 
 
 # --- Post-install success dialog ------------------------------------------
@@ -170,11 +148,11 @@ button_continue = "Continue"
 
 [jdk_install.retry]
 title = "Download failed — Try again?"
-main = "Eclipse Temurin download failed"
+main = "Runtime download failed"
 content = """\
-Attempt {attempt} of {max_attempts} failed while downloading Eclipse Temurin {version}.\n\n\
+Attempt {attempt} of {max_attempts} failed while downloading runtime {version}.\n\n\
 {error}\n\n\
-A common cause is a transient network blip. You can retry, or continue without a bundled Java if you've already installed one manually."""
+A common cause is a transient network blip. You can retry, or continue if a runtme is available on your computer."""
 button_retry = "Try again"
 button_cancel = "Cancel"
 

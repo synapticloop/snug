@@ -826,13 +826,29 @@ unsafe extern "system" fn progress_wndproc(
                         let started = (&(*raw).shared).started.load(Ordering::SeqCst);
                         if started {
                             // Already running — cancel the in-flight
-                            // download / verify / extract.
+                            // download / verify / extract. Flip the
+                            // shared cancellation latch so the
+                            // worker's `download_to_disk` aborts
+                            // within one 256 KB read; the worker
+                            // then sees `cancel == true` between
+                            // phases and exits promptly. Without
+                            // flipping `cancel`, the worker would
+                            // ignore `done == 3` mid-stream and
+                            // keep streaming the zip to disk until
+                            // the download finished naturally.
+                            (&(*raw).shared).cancel.store(true, Ordering::SeqCst);
                             (&(*raw).shared).done.store(3, Ordering::SeqCst); // 3 = cancelled
+                            PostQuitMessage(0);
                         } else {
                             // First click — kick off the install.
                             // The worker is spinning on `started` at
                             // the top of `worker_thread`; setting it
                             // unblocks the download within ~50 ms.
+                            // The window stays open so the user can
+                            // watch the progress bar advance and click
+                            // "Cancel" to abort mid-download; `WM_TIMER`
+                            // dismisses via `PostQuitMessage` once
+                            // `done != 0`.
                             (&(*raw).shared).started.store(true, Ordering::SeqCst);
                             // Flip the button label to "Cancel"
                             // immediately so the user sees the
@@ -847,7 +863,6 @@ unsafe extern "system" fn progress_wndproc(
                             SetWindowTextW((*raw).hwnd_cancel, s.as_ptr());
                         }
                     }
-                    PostQuitMessage(0);
                 }
             }
             0
@@ -857,9 +872,15 @@ unsafe extern "system" fn progress_wndproc(
             // exits cleanly — its wait loop on `started` only checks
             // `started` and `done`, so we set done=3 here to wake it
             // up. Without this the worker would spin forever if the
-            // user closed the window before clicking Install.
+            // user closed the window before clicking Install. We
+            // also flip the shared `cancel` latch so the worker
+            // aborts the in-flight download and exits between
+            // verify / extract phases — otherwise it would happily
+            // finish the download, hash it, and extract it for a
+            // user who already closed the window.
             let raw = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut ProgressState;
             if !raw.is_null() {
+                (&(*raw).shared).cancel.store(true, Ordering::SeqCst);
                 (&(*raw).shared).done.store(3, Ordering::SeqCst); // 3 = cancelled
                 // Also unblock the worker in case it's mid-download;
                 // the cancel callback in `download_to_disk` checks

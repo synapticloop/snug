@@ -86,21 +86,6 @@ pub struct ProgressDialog {
     /// `prompt.button_cancel` once the verify / extract phases
     /// start.
     pub cancel_button_during_download: String,
-    /// When `true`, the JDK download flow uses `TaskDialogIndirect`
-    /// instead of `progress_window::show`. Default `false` so the
-    /// user-facing mockup design wins on every modern Windows
-    /// install; flip on for the rare v6-SxS-crash install class.
-    #[serde(default)]
-    pub use_taskdialog_fallback: bool,
-
-    // Strings used by the TaskDialogIndirect v6 path
-    // (`jdk_install::progress_dialog_callback`). The `status_*` line
-    // is the live content rewritten each TDN_TIMER tick.
-    pub status_phase_0_with_size: String,
-    pub status_phase_0_no_size: String,
-    pub status_phase_1: String,
-    pub status_phase_2: String,
-    pub status_other: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -180,11 +165,6 @@ mod tests {
         assert!(!d.jdk_install.prompt.title.is_empty());
         assert!(!d.jdk_install.prompt.button_download.is_empty());
         assert!(d.jdk_install.prompt.content.contains("{version}"));
-        assert!(d
-            .jdk_install
-            .progress
-            .status_phase_0_with_size
-            .contains("{pct}"));
     }
 
     #[test]
@@ -200,17 +180,5 @@ mod tests {
     fn fill_leaves_unknown_placeholders_alone() {
         let s = fill("hello {name}, you are {age}", &[("name", "world")]);
         assert_eq!(s, "hello world, you are {age}");
-    }
-
-    #[test]
-    fn status_phase_0_renders_with_formatted_values() {
-        let d = dialogs();
-        let line = fill(
-            d.jdk_install.progress.status_phase_0_with_size.as_str(),
-            &[("done_mb", "47.2"), ("total_mb", "141.0"), ("pct", "33")],
-        );
-        assert!(line.contains("47.2"));
-        assert!(line.contains("141.0"));
-        assert!(line.contains("33%"));
     }
 }
