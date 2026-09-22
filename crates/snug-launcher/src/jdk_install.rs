@@ -31,10 +31,17 @@
 #![cfg(windows)]
 
 use std::io::{Read, Write};
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
+
+/// `Win32` process-creation flag that prevents Windows from allocating a
+/// new console for the child. Without this, spawning a console-subsystem
+/// binary (like `java.exe`) from our GUI-subsystem launcher would flash a
+/// command prompt window briefly before the child exits.
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 use crate::dialogs;
 use crate::log;
@@ -1050,7 +1057,14 @@ fn find_cached_jdk(min_java_major: u16, install_root: &Path) -> Option<PathBuf> 
             continue;
         };
         let java = home.join("bin").join("java.exe");
-        let Ok(out) = std::process::Command::new(&java).arg("-version").output() else {
+        // `CREATE_NO_WINDOW` keeps the parent (GUI subsystem) from
+        // flashing a console window for this short-lived `java -version`
+        // probe while scanning cached Temurin installs.
+        let Ok(out) = std::process::Command::new(&java)
+            .arg("-version")
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+        else {
             continue;
         };
         let combined = format!(
