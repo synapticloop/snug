@@ -250,7 +250,7 @@ pub struct CustomButton {
     pub text: String,
 }
 
-struct Config {
+pub struct Config {
     parent: HWND,
     title: String,
     main: String,
@@ -265,7 +265,7 @@ struct Config {
 }
 
 impl Config {
-    fn new(parent: HWND, title: impl Into<String>, main: impl Into<String>) -> Self {
+    pub fn new(parent: HWND, title: impl Into<String>, main: impl Into<String>) -> Self {
         Self {
             parent,
             title: title.into(),
@@ -360,7 +360,7 @@ impl Config {
 
     /// Show the dialog modally and return the user's chosen button id.
     /// Falls back to `MessageBoxW` on pre-Vista systems.
-    fn show(&self) -> i32 {
+    pub fn show(&self) -> i32 {
         let cfg = self.to_taskdialogconfig();
         let mut button: i32 = 0;
         let dialog_ok = unsafe { call_task_dialog_indirect(&cfg, &mut button) };
@@ -1507,7 +1507,7 @@ fn run_one_install_attempt(
 
 /// Pop the Retry / Cancel prompt between failed download attempts.
 /// Returns `true` if the user picked Retry.
-fn show_retry_dialog(
+pub fn show_retry_dialog(
     parent: HWND,
     attempt: u32,
     max_attempts: u32,
@@ -1557,7 +1557,7 @@ fn show_retry_dialog(
 /// the user to a Temurin release-filtered page so they can still
 /// install manually) and **Cancel**. Returns the button id so the
 /// caller can act on the choice.
-fn show_metadata_failed_dialog(parent: HWND, min_java: u16, error_detail: &str) -> i32 {
+pub fn show_metadata_failed_dialog(parent: HWND, min_java: u16, error_detail: &str) -> i32 {
     let d = dialogs::dialogs();
     let major = min_java.to_string();
     let mut c = Config::new(
@@ -1584,7 +1584,7 @@ fn show_metadata_failed_dialog(parent: HWND, min_java: u16, error_detail: &str) 
     c.show()
 }
 
-fn show_error_dialog(parent: HWND, title: &str, main: &str, content: &str) {
+pub fn show_error_dialog(parent: HWND, title: &str, main: &str, content: &str) {
     let d = dialogs::dialogs();
     let mut c = Config::new(parent, title, main);
     c.icon = IconKind::Error;
