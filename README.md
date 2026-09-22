@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/snug-splash.png" alt="snug" width="512">
+<img src="assets/snug-splash.png" alt="snug" width="640">
 
 # snug
 
