@@ -991,12 +991,8 @@ pub(crate) fn find_best_icon_hicon(cx: i32, cy: i32) -> Option<HICON> {
             best_id, best_w, best_h, cx, cy
         ));
 
-        // `editpe` stores the RT_ICON data as raw `BITMAPINFOHEADER` +
-        // pixels + AND mask (`icon[14..]` after stripping the ICO header),
-        // NOT as a full .ico file. `LoadImageW` with `IMAGE_ICON`
-        // expects .ico-format bytes and returns NULL on this layout.
-        // `CreateIconFromResourceEx` accepts the raw bitmap bytes
-        // directly, which is exactly what `editpe` writes.
+        // RT_ICON contains either PNG-compressed pixels or a DIB, not
+        // a complete ICO file. Let Windows decode either representation.
         let hres_icon = FindResourceW(
             hinst,
             best_id as usize as *const u16,
@@ -1059,76 +1055,7 @@ pub(crate) fn find_best_icon_hicon(cx: i32, cy: i32) -> Option<HICON> {
     }
 }
 
-/// Walk the running EXE's resource directory and return just the
-/// RT_ICON id whose bitmap dimensions are closest to `(cx, cy)`. Used by
-/// the production mascot draw path so it can read the raw
-/// `BITMAPINFOHEADER` + pixel bytes from `RT_ICON[id]` and AlphaBlend
-/// them directly (bypassing `DrawIconEx`, which doesn't honour 32-bit
-/// alpha for these icons).
-///
-/// Returns `None` if the EXE has no icon group at all, or if every
-/// ICONDIR entry's id is zero.
-pub(crate) fn best_icon_id_for_size(
-    hinst: windows_sys::Win32::Foundation::HINSTANCE,
-    cx: i32,
-    cy: i32,
-) -> Option<u16> {
-    use windows_sys::Win32::System::LibraryLoader::{FindResourceW, GetModuleHandleW, LoadResource, LockResource};
 
-    const RT_GROUP_ICON: u16 = 14;
-
-    unsafe {
-        // Try the "MAINICON" name first (which is what `editpe`
-        // writes), then fall back to id=1 (Windows convention, used
-        // by `rcedit` and similar tools).
-        let name_w: Vec<u16> = "MAINICON".encode_utf16().chain(std::iter::once(0)).collect();
-        let hres = FindResourceW(hinst, name_w.as_ptr(), RT_GROUP_ICON as *const u16);
-        let hres = if hres.is_null() {
-            FindResourceW(hinst, 1usize as *const u16, RT_GROUP_ICON as *const u16)
-        } else {
-            hres
-        };
-        if hres.is_null() {
-            return None;
-        }
-        let hmem = LoadResource(hinst, hres);
-        let pdata = if !hmem.is_null() {
-            LockResource(hmem)
-        } else {
-            std::ptr::null_mut()
-        };
-        if pdata.is_null() {
-            return None;
-        }
-
-        let pbytes = pdata as *const u8;
-        let count = (pbytes.add(4) as *const u16).read_unaligned() as usize;
-        if count == 0 {
-            return None;
-        }
-
-        let mut best_id: u16 = 0;
-        let mut best_diff: u32 = u32::MAX;
-        for i in 0..count {
-            let entry = pbytes.add(6 + i * 14); // 14-byte stride (`editpe` layout)
-            let w_raw = entry.read() as u32;
-            let h_raw = entry.add(1).read() as u32;
-            let w = if w_raw == 0 { 256 } else { w_raw };
-            let h = if h_raw == 0 { 256 } else { h_raw };
-            let id = (entry.add(12) as *const u16).read_unaligned();
-            let diff = ((w as i32 - cx).abs() + (h as i32 - cy).abs()) as u32;
-            if diff < best_diff {
-                best_diff = diff;
-                best_id = id;
-            }
-        }
-        if best_id == 0 {
-            None
-        } else {
-            Some(best_id)
-        }
-    }
-}
 
 /// Show a modal progress dialog driven by `worker_thread`. The worker
 /// writes `pct`/`done` into the shared state; the dialog reads them
