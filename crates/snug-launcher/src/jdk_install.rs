@@ -866,37 +866,266 @@ fn format_status_line(phase: i32, pct: u32, bytes: u64, total: u64) -> String {
 /// (e.g. the bare launcher stub or an EXE built without `--icon`); the
 /// caller should fall back to a standard system icon in that case.
 ///
-/// Resource ID `1` is the Windows convention for the main application
-/// icon — `editpe` writes the `--icon` input at that ID. `LoadImageW`
-/// with `LR_SHARED` returns a shared handle that the system manages;
-/// no `DestroyIcon` call is needed.
+/// Picks the system small-icon size (typically16 / 32 px depending on
+/// DPI) so the title bar / taskbar end up with their natural pixel
+/// target. Delegates to [`find_best_icon_hicon`] which walks the
+/// resource tree rather than guessing at a fixed resource id.
 pub(crate) fn load_exe_main_icon_hicon() -> Option<HICON> {
-    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetSystemMetrics, LoadImageW, IMAGE_ICON, LR_SHARED, SM_CXICON, SM_CYICON,
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXICON, SM_CYICON};
+
+    let cx = unsafe { GetSystemMetrics(SM_CXICON) };
+    let cy = unsafe { GetSystemMetrics(SM_CYICON) };
+    find_best_icon_hicon(cx, cy)
+}
+
+/// Walk the running EXE's resource directory, find the icon group
+/// `editpe` stamped (`RT_GROUP_ICON` entry named `"MAINICON"` — also
+/// tries id=1 as a fallback for EXEs built by other tools), and load
+/// the entry whose bitmap dimensions are closest to `(cx, cy)`.
+/// Returns `None` if the EXE has no icon group at all.
+///
+/// This is the workaround for `editpe` v0.2 not stamping at integer
+/// id 1: it picks the icon group's sub-table by **name**, then reads
+/// the actual RT_ICON ids from the ICONDIR and `LoadImageW`s against
+/// one of those. The returned handle is `LR_SHARED` — the system owns
+/// it, no `DestroyIcon` needed.
+pub(crate) fn find_best_icon_hicon(cx: i32, cy: i32) -> Option<HICON> {
+    use windows_sys::Win32::System::LibraryLoader::{
+        FindResourceW, GetModuleHandleW, LoadResource, LockResource, SizeofResource,
     };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{CreateIconFromResourceEx, LR_SHARED};
+
+    const RT_GROUP_ICON: u16 = 14;
+    const RT_ICON: u16 = 3;
 
     unsafe {
         let hinst = GetModuleHandleW(std::ptr::null());
         if hinst.is_null() {
+            crate::log::log("find_best_icon_hicon: GetModuleHandleW returned NULL");
             return None;
         }
-        let hicon = LoadImageW(
+
+        // Try the "MAINICON" name first (which is what `editpe`
+        // writes), then fall back to id=1 (Windows convention, used
+        // by `rcedit` and similar tools).
+        let name_w: Vec<u16> = "MAINICON".encode_utf16().chain(std::iter::once(0)).collect();
+        let hres_named = FindResourceW(hinst, name_w.as_ptr(), RT_GROUP_ICON as *const u16);
+        let hres_id = if hres_named.is_null() {
+            let r = FindResourceW(hinst, 1usize as *const u16, RT_GROUP_ICON as *const u16);
+            crate::log::log(&format!(
+                "find_best_icon_hicon: FindResourceW('MAINICON', RT_GROUP_ICON) returned NULL; id=1 fallback returned {}",
+                if r.is_null() { "NULL" } else { "non-NULL" }
+            ));
+            r
+        } else {
+            crate::log::log("find_best_icon_hicon: FindResourceW('MAINICON', RT_GROUP_ICON) succeeded");
+            hres_named
+        };
+        let hres = if hres_named.is_null() { hres_id } else { hres_named };
+        if hres.is_null() {
+            crate::log::log("find_best_icon_hicon: no RT_GROUP_ICON entry found; EXE has no icon");
+            return None;
+        }
+
+        let hmem = LoadResource(hinst, hres);
+        if hmem.is_null() {
+            crate::log::log("find_best_icon_hicon: LoadResource returned NULL");
+            return None;
+        }
+        let pdata = LockResource(hmem);
+        if pdata.is_null() {
+            crate::log::log("find_best_icon_hicon: LockResource returned NULL");
+            return None;
+        }
+
+        // ICONDIR layout per `editpe`'s `IconDirectory` / `IconDirectoryEntry`:
+        //   header: reserved:u16, type_:u16, count:u16  (6 bytes)
+        //   count × ICONDIRENTRY (14 bytes each, repr(C, packed(2))):
+        //     width:u8, height:u8, color_count:u8, reserved:u8
+        //     planes:u16, bit_count:u16, bytes:u32, id:u16
+        // Note: `editpe` replaces the standard Windows 4-byte `image_offset`
+        // with a 2-byte RT_ICON id; the entry is therefore 14 bytes, not
+        // the 16-byte ICONDIRENTRY Windows uses for .ico files on disk.
+        let pbytes = pdata as *const u8;
+        let reserved = (pbytes as *const u16).read_unaligned();
+        let icon_type = (pbytes.add(2) as *const u16).read_unaligned();
+        let count = (pbytes.add(4) as *const u16).read_unaligned() as usize;
+        crate::log::log(&format!(
+            "find_best_icon_hicon: ICONDIR reserved={} type={} count={}",
+            reserved, icon_type, count
+        ));
+        if count == 0 {
+            return None;
+        }
+
+        let mut best_id: u16 = 0;
+        let mut best_w: u32 = 0;
+        let mut best_h: u32 = 0;
+        let mut best_diff: u32 = u32::MAX;
+        for i in 0..count {
+            let entry = pbytes.add(6 + i * 14); // 14-byte stride for `editpe`'s layout
+            let w_raw = entry.read() as u32;
+            let h_raw = entry.add(1).read() as u32;
+            let w = if w_raw == 0 { 256 } else { w_raw };
+            let h = if h_raw == 0 { 256 } else { h_raw };
+            let id = (entry.add(12) as *const u16).read_unaligned();
+            let diff = ((w as i32 - cx).abs() + (h as i32 - cy).abs()) as u32;
+            crate::log::log(&format!(
+                "find_best_icon_hicon: entry[{}] {}x{} id={}",
+                i, w, h, id
+            ));
+            if diff < best_diff {
+                best_diff = diff;
+                best_id = id;
+                best_w = w;
+                best_h = h;
+            }
+        }
+        if best_id == 0 {
+            crate::log::log("find_best_icon_hicon: no usable entry in ICONDIR");
+            return None;
+        }
+
+        crate::log::log(&format!(
+            "find_best_icon_hicon: picking RT_ICON id={} ({}x{}) for target {}x{}",
+            best_id, best_w, best_h, cx, cy
+        ));
+
+        // `editpe` stores the RT_ICON data as raw `BITMAPINFOHEADER` +
+        // pixels + AND mask (`icon[14..]` after stripping the ICO header),
+        // NOT as a full .ico file. `LoadImageW` with `IMAGE_ICON`
+        // expects .ico-format bytes and returns NULL on this layout.
+        // `CreateIconFromResourceEx` accepts the raw bitmap bytes
+        // directly, which is exactly what `editpe` writes.
+        let hres_icon = FindResourceW(
             hinst,
-            // `MAKEINTRESOURCE(1)` — integer ID stored in the lower 16
-            // bits of an otherwise-zero pointer-sized value. Cast a
-            // `usize` to `*const u16` so the high bits stay zero; Windows
-            // checks the high bits to distinguish from a real pointer.
-            1usize as *const u16,
-            IMAGE_ICON,
-            GetSystemMetrics(SM_CXICON),
-            GetSystemMetrics(SM_CYICON),
+            best_id as usize as *const u16,
+            RT_ICON as *const u16,
+        );
+        if hres_icon.is_null() {
+            crate::log::log(&format!(
+                "find_best_icon_hicon: FindResourceW(RT_ICON id={}) returned NULL",
+                best_id
+            ));
+            return None;
+        }
+        let bytes = SizeofResource(hinst, hres_icon);
+        if bytes == 0 {
+            crate::log::log(&format!(
+                "find_best_icon_hicon: SizeofResource(RT_ICON id={}) returned 0",
+                best_id
+            ));
+            return None;
+        }
+        let hmem_icon = LoadResource(hinst, hres_icon);
+        if hmem_icon.is_null() {
+            crate::log::log(&format!(
+                "find_best_icon_hicon: LoadResource(RT_ICON id={}) returned NULL",
+                best_id
+            ));
+            return None;
+        }
+        let pbits = LockResource(hmem_icon);
+        if pbits.is_null() {
+            crate::log::log("find_best_icon_hicon: LockResource on RT_ICON returned NULL");
+            return None;
+        }
+
+        // `CreateIconFromResourceEx` flags: `fIcon=1` (true) for icons,
+        // `dwVer=0x00030000` for Win3.0+ format. `LR_SHARED` returns a
+        // shared handle the system manages — no `DestroyIcon` needed.
+        let hicon = CreateIconFromResourceEx(
+            pbits as *const u8,
+            bytes,
+            1,
+            0x00030000,
+            cx,
+            cy,
             LR_SHARED,
         );
         if hicon.is_null() {
+            crate::log::log(&format!(
+                "find_best_icon_hicon: CreateIconFromResourceEx(id={}, {}x{}, {} bytes) returned NULL",
+                best_id, cx, cy, bytes
+            ));
             None
         } else {
+            crate::log::log(&format!(
+                "find_best_icon_hicon: CreateIconFromResourceEx succeeded (id={}, {}x{}, {} bytes)",
+                best_id, cx, cy, bytes
+            ));
             Some(hicon)
+        }
+    }
+}
+
+/// Walk the running EXE's resource directory and return just the
+/// RT_ICON id whose bitmap dimensions are closest to `(cx, cy)`. Used by
+/// the production mascot draw path so it can read the raw
+/// `BITMAPINFOHEADER` + pixel bytes from `RT_ICON[id]` and AlphaBlend
+/// them directly (bypassing `DrawIconEx`, which doesn't honour 32-bit
+/// alpha for these icons).
+///
+/// Returns `None` if the EXE has no icon group at all, or if every
+/// ICONDIR entry's id is zero.
+pub(crate) fn best_icon_id_for_size(
+    hinst: windows_sys::Win32::Foundation::HINSTANCE,
+    cx: i32,
+    cy: i32,
+) -> Option<u16> {
+    use windows_sys::Win32::System::LibraryLoader::{FindResourceW, GetModuleHandleW, LoadResource, LockResource};
+
+    const RT_GROUP_ICON: u16 = 14;
+
+    unsafe {
+        // Try the "MAINICON" name first (which is what `editpe`
+        // writes), then fall back to id=1 (Windows convention, used
+        // by `rcedit` and similar tools).
+        let name_w: Vec<u16> = "MAINICON".encode_utf16().chain(std::iter::once(0)).collect();
+        let hres = FindResourceW(hinst, name_w.as_ptr(), RT_GROUP_ICON as *const u16);
+        let hres = if hres.is_null() {
+            FindResourceW(hinst, 1usize as *const u16, RT_GROUP_ICON as *const u16)
+        } else {
+            hres
+        };
+        if hres.is_null() {
+            return None;
+        }
+        let hmem = LoadResource(hinst, hres);
+        let pdata = if !hmem.is_null() {
+            LockResource(hmem)
+        } else {
+            std::ptr::null_mut()
+        };
+        if pdata.is_null() {
+            return None;
+        }
+
+        let pbytes = pdata as *const u8;
+        let count = (pbytes.add(4) as *const u16).read_unaligned() as usize;
+        if count == 0 {
+            return None;
+        }
+
+        let mut best_id: u16 = 0;
+        let mut best_diff: u32 = u32::MAX;
+        for i in 0..count {
+            let entry = pbytes.add(6 + i * 14); // 14-byte stride (`editpe` layout)
+            let w_raw = entry.read() as u32;
+            let h_raw = entry.add(1).read() as u32;
+            let w = if w_raw == 0 { 256 } else { w_raw };
+            let h = if h_raw == 0 { 256 } else { h_raw };
+            let id = (entry.add(12) as *const u16).read_unaligned();
+            let diff = ((w as i32 - cx).abs() + (h as i32 - cy).abs()) as u32;
+            if diff < best_diff {
+                best_diff = diff;
+                best_id = id;
+            }
+        }
+        if best_id == 0 {
+            None
+        } else {
+            Some(best_id)
         }
     }
 }
