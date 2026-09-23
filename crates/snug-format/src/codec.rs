@@ -131,6 +131,7 @@ mod tests {
                 app: AppMetadata {
                     name: "Test".into(),
                     company: "Acme".into(),
+                    update_check_url: None,
                     version: "1.0.0".into(),
                     description: None,
                     copyright: None,

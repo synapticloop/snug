@@ -32,6 +32,7 @@ fn finds_payload_as_rcdata_resource_on_real_stub() {
             app: AppMetadata {
                 name: "End-to-end".into(),
                 company: "Snug Test".into(),
+                update_check_url: None,
                 version: "1.0.0".into(),
                 description: None,
                 copyright: None,

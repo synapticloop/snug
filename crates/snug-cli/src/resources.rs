@@ -235,6 +235,7 @@ mod tests {
             version: version.into(),
             description: None,
             copyright: None,
+            update_check_url: None,
         }
     }
 
@@ -294,6 +295,7 @@ mod tests {
             version: "1.0.0".into(),
             description: Some("Does things".into()),
             copyright: Some("© 2026 Co".into()),
+            update_check_url: None,
         };
         let info = build_version_info(&app);
         let table = &info.strings[0];

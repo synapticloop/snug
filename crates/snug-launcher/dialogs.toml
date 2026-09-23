@@ -63,19 +63,18 @@ hide_details = "Hide details"
 # forward even without the download flow.
 
 [jdk_install.metadata_failed]
+# Rendered by `metadata_failed_window::show`. Layout / colours /
+# fonts are `pub const` in that file — only the strings live here
+# so copy changes don't require recompiling layout.
 title = "Could not reach Adoptium — Snug"
-main = "Snug could not reach api.adoptium.net to look up a download link for Java {major}."
+heading = "We couldn't reach Adoptium"
+subheading = "Java {major} requires a download link from Adoptium, but our request didn't reach the server."
 content = """\
-Either this host has no internet access, a firewall or proxy is blocking the \
-request, or the Adoptium API is temporarily unavailable.\n\n\
-You can still install Eclipse Temurin {major} manually:\n\
-  - Open the download page below and run the installer, or\n\
-  - Download the .zip and extract it under\n\
-    %LOCALAPPDATA%\\snug\\jdk\\<version>\\ and re-launch this app.\n\n\
-URL: https://adoptium.net/temurin/releases/?version={major}\n\n\
-Technical detail:\n\
+Technical detail:
 {error}"""
-button_open_browser = "Open the download page in my browser"
+info_heading = "Why did this happen?"
+info_subtext = "Your network connection may be down, or Adoptium's API is temporarily unreachable."
+button_open_browser = "Open the download page"
 button_cancel = "Cancel"
 
 
@@ -129,15 +128,19 @@ Snug will continue launching."""
 # hits an unrecoverable error after the cleanup phase.
 
 [jdk_install.failure]
-title = "Could not download or install Eclipse Temurin"
+# Rendered by `error_window::show`. Layout / colours / fonts are
+# `pub const` in that file — only the strings live here so copy
+# changes don't require recompiling layout. `content` accepts
+# placeholders the launcher fills before showing
+# (`{version}`, `{error}`).
+title = "Runtime Installation Failure...!"
+heading = "Install runtime failure...!"
+subheading = "All download attempts were exhausted, we will attempt to launch the application."
 content = """\
-Snug could not download or install Eclipse Temurin {version}.\n\n\
-{error}\n\n\
-The launch will continue using whichever Java (if any) is already installed on this machine."""
-
-# Generic OK button used by the success / failure dialogs above.
-button_ok = "OK"
-button_continue = "Continue"
+"""
+info_heading = "What can I do?"
+info_subtext = "Check your network, or download the runtime manually from adoptium.net."
+button_label = "OK"
 
 
 # --- Retry prompt ---------------------------------------------------------
@@ -147,12 +150,16 @@ button_continue = "Continue"
 # final failure pops the terminal `failure` dialog above instead.
 
 [jdk_install.retry]
+# Rendered by `retry_window::show`. Layout / colours / fonts are
+# `pub const` in that file — only the strings live here so copy
+# changes don't require recompiling layout.
 title = "Download failed — Try again?"
-main = "Runtime download failed"
+heading = "The runtime download didn't complete"
+subheading = "Attempt {attempt} of {max_attempts} failed while downloading Eclipse Temurin {version}."
 content = """\
-Attempt {attempt} of {max_attempts} failed while downloading runtime {version}.\n\n\
-{error}\n\n\
-A common cause is a transient network blip. You can retry, or continue if a runtme is available on your computer."""
+{error}"""
+info_heading = "Why did this happen?"
+info_subtext = "A common cause is a transient network blip. You can retry, or cancel and try again later."
 button_retry = "Try again"
 button_cancel = "Cancel"
 
@@ -165,3 +172,29 @@ button_cancel = "Cancel"
 [generic]
 error_dialog_ok = "OK"
 info_dialog_continue = "Continue"
+
+
+# --- Launcher-runtime error dialog ---------------------------------------
+# Shown when something goes wrong on the **Java launch path** (JVM not
+# found, JNI_CreateJavaVM failed, Main-Class not found, Java `main`
+# threw an exception, etc.). Same custom-painted layout as
+# `[jdk_install.failure]` but with copy aimed at a stacktrace / runtime
+# error rather than a download flow.
+#
+# Layout-wise this is the same window; only the strings differ. When
+# the wrapped app's `AppMetadata.update_check_url` is non-empty, the
+# launcher paints a clickable "Check for a newer version: <url>" line
+# below the info box and opens the URL via `ShellExecuteW(..., "open", ...)`.
+# `update_check_label` is the leading text before the URL; the URL
+# itself comes from the embedded payload, not this TOML.
+
+[launcher.error]
+title = "Application failed to launch — Snug"
+heading = "Application failed to launch"
+subheading = "Something went wrong while starting the embedded application."
+content = """\
+{error}"""
+info_heading = "What happened?"
+info_subtext = "The launcher reached the embedded application but it failed to start. Check the log file in your local AppData folder for full details."
+button_label = "Close"
+update_check_label = "Check for a newer version:"

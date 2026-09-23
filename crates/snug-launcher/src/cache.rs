@@ -129,6 +129,7 @@ mod tests {
         AppMetadata {
             name: name.into(),
             company: company.into(),
+            update_check_url: None,
             version: "0.0.0".into(),
             description: None,
             copyright: None,

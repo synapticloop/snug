@@ -9,6 +9,7 @@
 //! cargo run -p snug-launcher --example dialogs_preview -- --kind metadata-failed
 //! cargo run -p snug-launcher --example dialogs_preview -- --kind retry
 //! cargo run -p snug-launcher --example dialogs_preview -- --kind error
+//! cargo run -p snug-launcher --example dialogs_preview -- --kind java-error
 //! cargo run -p snug-launcher --example dialogs_preview -- --kind early-bail
 //! ```
 //!
@@ -22,8 +23,9 @@
 //!
 //! - `progress`        — `progress_window::show` (the mockup-aligned
 //!                        download bar window). Accepts `--static`,
-//!                        `--pause`, `--no-mascot`, `<size_mb>`,
-//!                        `<speed_mb_s>` like `progress_preview`.
+//!                        `--pause`, `<size_mb>`, `<speed_mb_s>` like
+//!                        `progress_preview`. `--no-mascot` is
+//!                        accepted as a no-op for CLI compat.
 //! - `metadata-failed` — `jdk_install::show_metadata_failed_dialog`.
 //!                        Renders the "Couldn't reach Adoptium" prompt
 //!                        with a fake network error in the expanded
@@ -37,6 +39,12 @@
 //! - `early-bail`      — `MessageBoxW` from `src/main.rs`. The fallback
 //!                        shown when the launcher can't even load its
 //!                        embedded payload.
+//! - `java-error`      — `error_window::show` invoked from `main.rs`
+//!                        when a [`LauncherError`] (Java stacktrace,
+//!                        `MainClassNotFound`, `JniCreate`, etc.)
+//!                        surfaces. Same window as `error`, but with
+//!                        copy from `[launcher.error]` in `dialogs.toml`
+//!                        and the optional update-check link visible.
 //!
 //! `--icon normal|warning|error|info` overrides the icon-kind for the
 //! `error` kind. The other kinds pin to whatever the production code
@@ -52,6 +60,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use snug_launcher::error_window;
 use snug_launcher::jdk_install::{self, ProgressShared};
 use snug_launcher::progress_window;
 
@@ -70,7 +79,8 @@ fn main() {
         Kind::Progress => run_progress(opts),
         Kind::MetadataFailed => run_metadata_failed(),
         Kind::Retry => run_retry(),
-        Kind::Error => run_error(),
+        Kind::Error => run_error(opts),
+        Kind::JavaError => run_java_error(),
         Kind::EarlyBail => run_early_bail(),
     };
 
@@ -89,6 +99,7 @@ enum Kind {
     MetadataFailed,
     Retry,
     Error,
+    JavaError,
     EarlyBail,
 }
 
@@ -99,6 +110,7 @@ impl Kind {
             "metadata-failed" => Some(Self::MetadataFailed),
             "retry" => Some(Self::Retry),
             "error" => Some(Self::Error),
+            "java-error" => Some(Self::JavaError),
             "early-bail" => Some(Self::EarlyBail),
             _ => None,
         }
@@ -110,6 +122,7 @@ impl Kind {
             Self::MetadataFailed => "metadata-failed",
             Self::Retry => "retry",
             Self::Error => "error",
+            Self::JavaError => "java-error",
             Self::EarlyBail => "early-bail",
         }
     }
@@ -122,9 +135,6 @@ struct Options {
     /// `--pause`: start the worker but wait for the user to click
     /// Install before the simulated download begins.
     pause_mode: bool,
-    /// `--no-mascot`: skip the `assets/snug-icon.png` decode and let
-    /// the mascot slot fall back to the EXE icon.
-    skip_mascot: bool,
     /// Simulated file size in MB (progress only). Default 150.
     size_mb: u64,
     /// Simulated download speed in MB/s (progress only). Default 10.
@@ -136,7 +146,6 @@ impl Options {
         let mut kind: Option<Kind> = None;
         let mut static_mode = false;
         let mut pause_mode = false;
-        let mut skip_mascot = false;
         let mut size_mb: u64 = 150;
         let mut speed_mb_s: f64 = 10.0;
 
@@ -167,7 +176,11 @@ impl Options {
                     i += 1;
                 }
                 "--no-mascot" => {
-                    skip_mascot = true;
+                    // No-op: the dialog's mascot slot is now backed
+                    // by the EXE's `MAINICON` resource (stamped from
+                    // `assets/snug-icon.png` via `build.rs`). We
+                    // still accept the flag so older invocations
+                    // don't fail to parse.
                     i += 1;
                 }
                 _ => {
@@ -193,7 +206,6 @@ impl Options {
             kind,
             static_mode,
             pause_mode,
-            skip_mascot,
             size_mb,
             speed_mb_s,
         })
@@ -208,12 +220,13 @@ fn print_help() {
     eprintln!("  metadata-failed  Could not reach Adoptium prompt (show_metadata_failed_dialog)");
     eprintln!("  retry            Try again / Cancel prompt (show_retry_dialog)");
     eprintln!("  error            Terminal post-install-failure dialog (show_error_dialog)");
+    eprintln!("  java-error       Launcher-runtime error dialog (show_launcher_error)");
     eprintln!("  early-bail       MessageBoxW from src/main.rs (show_error_box)");
     eprintln!();
     eprintln!("options:");
     eprintln!("  --static         (progress only) pin at 50%, no animation");
     eprintln!("  --pause          (progress only) wait for user to click Install");
-    eprintln!("  --no-mascot      (progress only) skip PNG mascot decode");
+    eprintln!("  --no-mascot      no-op; mascot uses the EXE's MAINICON resource");
     eprintln!("  <size_mb>        (progress only) simulated file size, default 150");
     eprintln!("  <speed_mb_s>     (progress only) simulated download speed, default 10");
 }
@@ -231,19 +244,11 @@ fn run_progress(opts: Options) -> Option<i32> {
 
     let shared = Arc::new(ProgressShared::new(total_bytes));
 
-    if !opts.skip_mascot {
-        match load_mascot_from_png(include_bytes!("../../../assets/snug-icon.png")) {
-            Ok((hbitmap, w, h)) => {
-                shared.set_mascot_hbitmap(hbitmap as i32);
-                eprintln!("dialogs_preview: mascot loaded {w}x{h}");
-            }
-            Err(e) => {
-                eprintln!(
-                    "dialogs_preview: mascot PNG decode failed: {e} — falling back to EXE icon"
-                );
-            }
-        }
-    }
+    // The mascot slot is now backed by the EXE's `MAINICON` resource
+    // (stamped from `assets/snug-icon.png` via `build.rs`), so
+    // there's no PNG to decode here. `--no-mascot` is documented
+    // as a no-op in `--help`; we still consume the flag so older
+    // invocations don't fail to parse.
 
     if !opts.static_mode {
         let shared = shared.clone();
@@ -327,12 +332,6 @@ fn run_progress(opts: Options) -> Option<i32> {
         started_at.elapsed()
     );
 
-    let hbmp = shared.mascot_hbitmap();
-    if hbmp != 0 {
-        unsafe {
-            windows_sys::Win32::Graphics::Gdi::DeleteObject(hbmp as _);
-        }
-    }
     None
 }
 
@@ -371,22 +370,87 @@ fn run_retry() -> Option<i32> {
     Some(if retry_again { 1 } else { 2 })
 }
 
-fn run_error() -> Option<i32> {
-    jdk_install::show_error_dialog(
-        std::ptr::null_mut(),
-        "Could not download or install Eclipse Temurin — Snug",
-        "Eclipse Temurin 25.0.1+8.LTS",
-        "All 3 download attempts failed.\n\n\
-         Most recent error:\n\
-         Connection reset by peer (HTTP 0 after 47.2 MB)\n\n\
-         The launch will continue using whichever Java (if any) is already \
-         installed on this machine.",
-    );
+fn run_error(_opts: Options) -> Option<i32> {
+    // Mirrors `error_window::show` invocation from
+    // `show_error_dialog`. The heading / subheading /
+    // info-heading / info-subtext / button-label come from
+    // `[jdk_install.failure]` in `dialogs.toml` — the caller
+    // only supplies the title and the multi-line error content.
+    //
+    // The mascot slot is left to the EXE-icon fallback: `build.rs`
+    // stamps `assets/snug-icon.png` as `MAINICON` so
+    // `find_best_icon_hicon` succeeds without any PNG decoding on
+    // our side. The `--no-mascot` flag is now a no-op (was used
+    // to skip the example-side PNG decode — no longer needed).
+    //
+    // Update-check URL is wired here so the preview visibly shows
+    // the clickable link row at the bottom — exercises the
+    // `update_check_url` paint + hit-test path the production
+    // launcher takes.
+    let fake_update_url = "https://example.com/myapp/releases";
+    let result = unsafe {
+        error_window::show(
+            std::ptr::null_mut(),
+            error_window::ErrorDialog {
+                title: "",
+                heading: "",
+                subheading: "",
+                error_content: "",
+                info_icon: error_window::InfoIcon::Error,
+                info_heading: None,
+                info_subtext: None,
+                button_label: None,
+                mascot_hbitmap: 0,
+                update_check_url: Some(fake_update_url),
+                update_check_label: None,
+            },
+        )
+    };
     eprintln!(
-        "dialogs_preview: kind={} dismissed",
+        "dialogs_preview: kind={} button={result}",
         Kind::Error.as_str()
     );
-    None
+    Some(result)
+}
+
+fn run_java_error() -> Option<i32> {
+    // Mirrors `main.rs::show_launcher_error` — what the user sees
+    // when a `LauncherError` (Java stacktrace, `MainClassNotFound`,
+    // `JniCreate` failure, etc.) bubbles out of the platform
+    // launcher. Copy comes from `[launcher.error]` in
+    // `dialogs.toml` and the optional `update_check_url` paints a
+    // clickable link below the info box. `ShellExecuteW` opens
+    // the URL in the user's default browser on click.
+    let dlg = snug_launcher::dialogs::dialogs();
+    let fake_err = "Cannot read configuration file at /etc/myapp/config.yaml: No such file or directory (ENOENT)";
+    let content = snug_launcher::dialogs::fill(
+        &dlg.launcher.error.content,
+        &[("error", fake_err)],
+    );
+    let fake_update_url = "https://example.com/myapp/releases";
+    let result = unsafe {
+        error_window::show(
+            std::ptr::null_mut(),
+            error_window::ErrorDialog {
+                title: &dlg.launcher.error.title,
+                heading: &dlg.launcher.error.heading,
+                subheading: &dlg.launcher.error.subheading,
+                error_content: &content,
+                info_icon: error_window::InfoIcon::Error,
+                info_heading: Some(&dlg.launcher.error.info_heading),
+                info_subtext: Some(&dlg.launcher.error.info_subtext),
+                button_label: Some(&dlg.launcher.error.button_label),
+                mascot_hbitmap: 0,
+                update_check_url: Some(fake_update_url),
+                update_check_label: None,
+            },
+        )
+    };
+    eprintln!(
+        "dialogs_preview: kind={} button={result}",
+        Kind::JavaError.as_str()
+    );
+    Some(result)
 }
 
 fn run_early_bail() -> Option<i32> {
@@ -424,64 +488,10 @@ fn run_early_bail() -> Option<i32> {
 //  Mascot PNG → DIB section
 // =============================================================================
 //
-// Same loader as `progress_preview`. Duplicated rather than shared so
-// each example stays self-contained — neither imports the other.
-
-fn load_mascot_from_png(png_bytes: &[u8]) -> Result<(isize, u32, u32), String> {
-    use windows_sys::Win32::Graphics::Gdi::{
-        BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CreateDIBSection, DIB_RGB_COLORS,
-    };
-
-    let img = image::load_from_memory_with_format(png_bytes, image::ImageFormat::Png)
-        .map_err(|e| format!("decode PNG: {e}"))?;
-    let (w, h) = (img.width(), img.height());
-    if w == 0 || h == 0 {
-        return Err(format!("PNG decoded to {w}x{h}"));
-    }
-    let mut pixels = img.into_rgba8().into_raw();
-
-    // Swap R and B per pixel; leave the alpha byte alone.
-    for chunk in pixels.chunks_exact_mut(4) {
-        chunk.swap(0, 2);
-    }
-
-    let bmi = BITMAPINFO {
-        bmiHeader: BITMAPINFOHEADER {
-            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: w as i32,
-            biHeight: -(h as i32),
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: BI_RGB,
-            biSizeImage: 0,
-            biXPelsPerMeter: 0,
-            biYPelsPerMeter: 0,
-            biClrUsed: 0,
-            biClrImportant: 0,
-        },
-        bmiColors: [unsafe { std::mem::zeroed() }; 1],
-    };
-
-    let mut bits_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
-    let hbmp = unsafe {
-        CreateDIBSection(
-            std::ptr::null_mut(),
-            &bmi,
-            DIB_RGB_COLORS,
-            &mut bits_ptr,
-            std::ptr::null_mut(),
-            0,
-        )
-    };
-    if hbmp.is_null() || bits_ptr.is_null() {
-        return Err(format!(
-            "CreateDIBSection failed (hbmp={hbmp:p}, bits={bits_ptr:p})"
-        ));
-    }
-
-    unsafe {
-        std::ptr::copy_nonoverlapping(pixels.as_ptr(), bits_ptr as *mut u8, pixels.len());
-    }
-
-    Ok((hbmp as isize, w, h))
-}
+// The dialogs draw their mascot from the EXE's `MAINICON` resource,
+// stamped at build time from `assets/snug-icon.png` (see
+// `crates/snug-launcher/build.rs`). This example no longer decodes
+// a PNG of its own — `--no-mascot` is a no-op (documented in the
+// `--help` text). If you want to iterate on a custom mascot, build
+// a DIB section in a one-off helper and push it via
+// `error_window::ErrorDialog::mascot_hbitmap`.

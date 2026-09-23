@@ -57,6 +57,26 @@ pub struct AppMetadata {
     /// Optional `LegalCopyright` string.
     #[serde(default)]
     pub copyright: Option<String>,
+
+    /// Optional URL the launcher's error dialog surfaces as a clickable
+    /// "Check for a newer version" link. When `None` or empty, the
+    /// link row is hidden. Useful for "this build is broken, grab the
+    /// latest" messages without forcing users to read the error text.
+    #[serde(default)]
+    pub update_check_url: Option<String>,
+}
+
+impl Default for AppMetadata {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            company: String::new(),
+            version: String::new(),
+            description: None,
+            copyright: None,
+            update_check_url: None,
+        }
+    }
 }
 
 /// Optional native splash shown by the launcher before the JVM is loaded.

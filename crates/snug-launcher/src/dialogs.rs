@@ -24,6 +24,31 @@ use serde::Deserialize;
 pub struct Dialogs {
     pub jdk_install: JdkInstallDialogs,
     pub generic: GenericDialogs,
+    pub launcher: LauncherDialogs,
+}
+
+/// Launcher-runtime error strings (Java launch failures, JNI errors,
+/// Main-Class not found, Java `main` exceptions, etc.). Same physical
+/// window as `[jdk_install.failure]` — different copy.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LauncherDialogs {
+    pub error: LauncherErrorDialogs,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LauncherErrorDialogs {
+    pub title: String,
+    pub heading: String,
+    pub subheading: String,
+    pub content: String,
+    pub info_heading: String,
+    pub info_subtext: String,
+    pub button_label: String,
+    /// Leading label rendered before the optional "Check for a
+    /// newer version" link (e.g. `"Check for a newer version:"`).
+    /// The URL itself comes from the embedded payload's
+    /// `AppMetadata.update_check_url`, not the TOML.
+    pub update_check_label: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -52,9 +77,23 @@ pub struct InstallPromptDialog {
 #[derive(Debug, Clone, Deserialize)]
 pub struct MetadataFailedDialog {
     pub title: String,
-    pub main: String,
+    /// Heading — large bold line at the top of the dialog body.
+    pub heading: String,
+    /// Subheading — smaller grey line below the heading.
+    pub subheading: String,
+    /// Error content — multi-line body text. The launcher's
+    /// caller fills placeholders like `{major}` / `{error}`
+    /// before showing.
     pub content: String,
+    /// Info-box heading line (light-blue box, bottom-left).
+    pub info_heading: String,
+    /// Info-box subtext (second line in the light-blue box).
+    pub info_subtext: String,
+    /// Primary button label — opens the Adoptium download page in
+    /// the user's browser.
     pub button_open_browser: String,
+    /// Secondary button label — dismisses the dialog, install
+    /// flow returns `Ok(None)` and the launcher aborts.
     pub button_cancel: String,
 }
 
@@ -97,10 +136,22 @@ pub struct SuccessDialog {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct FailureDialog {
+    /// Title-bar text.
     pub title: String,
+    /// Heading — large bold line at the top of the dialog body.
+    pub heading: String,
+    /// Subheading — smaller grey line below the heading.
+    pub subheading: String,
+    /// Error content — multi-line body text. The launcher's caller
+    /// `fill`s placeholders like `{version}` / `{error}` before
+    /// passing to the dialog renderer.
     pub content: String,
-    pub button_ok: String,
-    pub button_continue: String,
+    /// Info-box heading line (light-blue box, bottom-left).
+    pub info_heading: String,
+    /// Info-box subtext (second line in the light-blue box).
+    pub info_subtext: String,
+    /// Single-button label on the dialog. Default `"OK"`.
+    pub button_label: String,
 }
 
 /// Popped between failed download attempts so the user can choose to
@@ -109,9 +160,21 @@ pub struct FailureDialog {
 #[derive(Debug, Clone, Deserialize)]
 pub struct RetryDialog {
     pub title: String,
-    pub main: String,
+    /// Heading — large bold line at the top of the dialog body.
+    pub heading: String,
+    /// Subheading — smaller grey line below the heading.
+    pub subheading: String,
+    /// Error content — multi-line body text. The launcher fills
+    /// placeholders like `{attempt}` / `{max_attempts}` /
+    /// `{version}` / `{error}` before showing.
     pub content: String,
+    /// Info-box heading line (light-blue box, bottom-left).
+    pub info_heading: String,
+    /// Info-box subtext (second line in the light-blue box).
+    pub info_subtext: String,
+    /// Primary button label — retries the install.
     pub button_retry: String,
+    /// Secondary button label — aborts the install.
     pub button_cancel: String,
 }
 

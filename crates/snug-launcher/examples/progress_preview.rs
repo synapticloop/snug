@@ -29,9 +29,10 @@
 //!   download begins. Useful for verifying the Install → Cancel label
 //!   flip.
 //!
-//! - `--no-mascot` skips the `assets/snug-icon.png` decode + DIB
-//!   section, leaving the mascot slot empty so you can see how the
-//!   fallback path (EXE icon) renders.
+//! The mascot slot uses the `MAINICON` resource that `build.rs` stamps
+//! into the binary from `assets/snug-icon.png` — no PNG decoding on
+//! this side. To test a custom mascot, build a small DIB section and
+//! push it with `shared.set_mascot_hbitmap()`.
 
 #![cfg(windows)]
 
@@ -49,7 +50,6 @@ fn main() {
     // ------------------------------------------------------------------
     let mut static_mode = false;
     let mut pause_mode = false;
-    let mut skip_mascot = false;
     let mut size_mb: u64 = 150;
     let mut speed_mb_s: f64 = 10.0;
 
@@ -57,21 +57,24 @@ fn main() {
         match arg.as_str() {
             "--static" => static_mode = true,
             "--pause" => pause_mode = true,
-            "--no-mascot" => skip_mascot = true,
+            "--no-mascot" => {
+                // Retained for CLI compat — the mascot slot is now
+                // backed by the EXE's MAINICON resource (see
+                // build.rs), so this flag is a no-op.
+                eprintln!("progress_preview: --no-mascot is a no-op; mascot comes from the EXE's MAINICON resource.");
+            }
             "--help" | "-h" => {
                 eprintln!(
-                    "usage: progress-preview [--static | --pause | --no-mascot] [<size_mb>] [<speed_mb_s>]"
+                    "usage: progress-preview [--static | --pause] [<size_mb>] [<speed_mb_s>]"
                 );
                 eprintln!("  --static     don't animate; render at 50% for layout inspection");
                 eprintln!("  --pause      simulate but wait for the user to click Install");
-                eprintln!("  --no-mascot  skip the mascot PNG decode (EXE-icon fallback)");
+                eprintln!("  --no-mascot  (no-op; mascot uses the EXE's MAINICON resource)");
                 eprintln!("  size_mb      simulated file size in MB (default 150)");
                 eprintln!("  speed_mb_s   simulated download speed in MB/s (default 10)");
                 return;
             }
             _ => {
-                // First positional is size, second is speed. Parse
-                // defensively so a typo doesn't silently fall through.
                 if let Ok(n) = arg.parse::<u64>() {
                     if size_mb == 150 {
                         size_mb = n;
@@ -89,24 +92,6 @@ fn main() {
     let bytes_per_ms: u64 = ((speed_mb_s * 1_048_576.0) / 1000.0).round() as u64;
 
     let shared = Arc::new(ProgressShared::new(total_bytes));
-
-    // Decode the mascot PNG and push the resulting DIB section into
-    // the shared state. `progress_window::WM_PAINT` reads
-    // `shared.mascot_hbitmap()` and prefers it over the EXE-icon
-    // fallback when non-zero.
-    if !skip_mascot {
-        match load_mascot_from_png(include_bytes!("../../../assets/snug-icon.png")) {
-            Ok((hbitmap, w, h)) => {
-                shared.set_mascot_hbitmap(hbitmap as i32);
-                eprintln!("progress_preview: mascot loaded {w}x{h}");
-            }
-            Err(e) => {
-                eprintln!(
-                    "progress_preview: mascot PNG decode failed: {e} — falling back to EXE icon"
-                );
-            }
-        }
-    }
 
     // ------------------------------------------------------------------
     // Worker thread: drive the simulation.
@@ -196,90 +181,9 @@ fn main() {
     // ------------------------------------------------------------------
     let started_at = Instant::now();
     let result = unsafe { progress_window::show(std::ptr::null_mut(), "Snug — progress dialog preview", "", shared.clone()) };
-    let elapsed = started_at.elapsed();
-
     eprintln!(
         "progress_preview: dialog returned {} after {:?}",
-        result, elapsed
+        result,
+        started_at.elapsed()
     );
-
-    // Free the mascot DIB section to avoid a one-off GDI handle leak
-    // each preview run. Done after `show()` returns so the dialog
-    // never sees a dangling HBITMAP mid-paint.
-    let hbmp = shared.mascot_hbitmap();
-    if hbmp != 0 {
-        unsafe {
-            windows_sys::Win32::Graphics::Gdi::DeleteObject(hbmp as _);
-        }
-    }
-}
-
-/// Decode `png_bytes` into a 32-bpp top-down DIB section suitable for
-/// `StretchBlt` straight into the mascot slot. Returns `(hbitmap,
-/// width, height)` on success.
-///
-/// RGBA → BGRA swap is done in place because GDI's `BI_RGB` 32-bpp
-/// layout treats each 4-byte pixel as `B, G, R, X`. Alpha is ignored
-/// by the `SRCCOPY` raster op used in `draw_mascot_hbitmap`, so a
-/// transparent PNG will composite flat over the dialog's white
-/// background — same caveat noted in the dialog code.
-fn load_mascot_from_png(png_bytes: &[u8]) -> Result<(isize, u32, u32), String> {
-    use windows_sys::Win32::Graphics::Gdi::{
-        BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CreateDIBSection, DIB_RGB_COLORS,
-    };
-
-    let img = image::load_from_memory_with_format(png_bytes, image::ImageFormat::Png)
-        .map_err(|e| format!("decode PNG: {e}"))?;
-    let (w, h) = (img.width(), img.height());
-    if w == 0 || h == 0 {
-        return Err(format!("PNG decoded to {w}x{h}"));
-    }
-    let mut pixels = img.into_rgba8().into_raw();
-
-    // Swap R and B per pixel; leave the alpha byte alone.
-    for chunk in pixels.chunks_exact_mut(4) {
-        chunk.swap(0, 2);
-    }
-
-    let bmi = BITMAPINFO {
-        bmiHeader: BITMAPINFOHEADER {
-            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: w as i32,
-            biHeight: -(h as i32), // negative = top-down rows
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: BI_RGB,
-            biSizeImage: 0,
-            biXPelsPerMeter: 0,
-            biYPelsPerMeter: 0,
-            biClrUsed: 0,
-            biClrImportant: 0,
-        },
-        bmiColors: [unsafe { std::mem::zeroed() }; 1],
-    };
-
-    let mut bits_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
-    let hbmp = unsafe {
-        CreateDIBSection(
-            std::ptr::null_mut(),
-            &bmi,
-            DIB_RGB_COLORS,
-            &mut bits_ptr,
-            std::ptr::null_mut(),
-            0,
-        )
-    };
-    if hbmp.is_null() || bits_ptr.is_null() {
-        return Err(format!(
-            "CreateDIBSection failed (hbmp={hbmp:p}, bits={bits_ptr:p})"
-        ));
-    }
-
-    unsafe {
-        std::ptr::copy_nonoverlapping(pixels.as_ptr(), bits_ptr as *mut u8, pixels.len());
-    }
-    // `pixels` (Vec) drops here, releasing the staging buffer. The
-    // DIB section owns its own copy now.
-
-    Ok((hbmp as isize, w, h))
 }

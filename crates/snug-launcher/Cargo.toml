@@ -32,17 +32,17 @@ windows-sys = { workspace = true }
 jni = { workspace = true }
 editpe = { workspace = true }
 
+# `build.rs` (this file's sibling) wraps `assets/snug-icon.png` as
+# a single-entry ICO and embeds it as `MAINICON` via `embed-resource`
+# so `find_best_icon_hicon` in `jdk_install.rs` finds the icon when
+# the dialogs need an EXE-icon fallback for the mascot slot.
+[build-dependencies]
+embed-resource = { version = "3", default-features = false }
+image = { workspace = true }
+
 # A precompiled stub launcher is cross-compiled from macOS / Linux via
 # `cargo zigbuild` and committed at bin/launcher-stub.exe. Snug-cli's
 # builder (slice 3) embeds it via include_bytes!() and appends the
 # encoded payload.
 [package.metadata.cargo-zigbuild]
 # Reserved for future use.
-
-# Dev-only: the `progress_preview` bin uses this to decode
-# `assets/snug-icon.png` into a DIB section that the dialog paints
-# into the mascot slot. Keeping `image` here (not in `[dependencies]`)
-# means the production launcher-stub and the embedded icon-resource
-# path are unaffected.
-[dev-dependencies]
-image = { version = "0.25", default-features = false, features = ["png"] }
