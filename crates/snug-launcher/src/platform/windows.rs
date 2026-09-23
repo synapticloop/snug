@@ -169,15 +169,38 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
             }
             Ok(None) => {
                 log::log("JDK install flow: user cancelled or opened browser");
-                // User cancelled or opened the download page. Fall
-                // through to the standard "no JVM" error below.
-                // For `Force`, this means we never had a JVM and
-                // the user declined — same outcome as `Auto` would
-                // have produced.
+                // User cancelled or opened the download page in their
+                // browser. For `Force` we skipped discovery upfront, so
+                // re-run it now as a courtesy — the user may have a
+                // compatible JDK elsewhere on the machine (GraalVM,
+                // Zulu, Corretto, Oracle, custom install path, etc.)
+                // that just isn't reachable via the registry keys or
+                // common install dirs we check first. For `Auto`
+                // discovery already returned `None`, so this is a
+                // cheap no-op.
+                if jvm_dir.is_none() {
+                    log::log("post-cancel fallback: re-running discovery");
+                    jvm_dir = discover_jvm(
+                        &config.behavior.jvm_discovery,
+                        config.min_java,
+                    )?;
+                }
             }
             Err(e) => {
                 log::log(&format!("JDK install flow failed: {e}"));
                 eprintln!("snug-launcher: JDK install flow failed: {e}");
+                // Install failed for some non-user reason (network down,
+                // Adoptium 5xx, SHA-256 mismatch, etc.). Same courtesy
+                // fallback as the cancel arm — don't strand the user
+                // on a usable local JDK just because the download
+                // flow hiccupped.
+                if jvm_dir.is_none() {
+                    log::log("post-error fallback: re-running discovery");
+                    jvm_dir = discover_jvm(
+                        &config.behavior.jvm_discovery,
+                        config.min_java,
+                    )?;
+                }
             }
         }
     }
@@ -378,13 +401,26 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
                     Err(LauncherError::NoMainMethod(main_class_name_for_err.clone()))
                 }
                 Err(e) => {
+                    // Emit the full stacktrace to stderr before
+                    // clearing — preserves rich detail for log-file
+                    // debugging in console runs. The GUI subsystem
+                    // build swallows stderr, so this is best-effort.
                     if env.exception_check() {
-                        env.exception_describe();
-                        env.exception_clear();
+                        let _ = env.exception_describe();
                     }
-                    Err(LauncherError::JavaException(format!(
-                        "{main_class_name_for_err}: {e}"
-                    )))
+
+                    // Extract just the user-facing detail message
+                    // via `Throwable.getMessage()`. Falls back to
+                    // `"No error message"` when getMessage() returns
+                    // null/empty. Falls back to the raw JNI error
+                    // string when no Java exception is pending (rare;
+                    // covers genuine JNI failures like OOM inside a
+                    // call).
+                    let detail = take_exception_message(env).unwrap_or_else(|| {
+                        format!("{main_class_name_for_err}: {e}")
+                    });
+
+                    Err(LauncherError::JavaException(detail))
                 }
             }
         })?;
@@ -412,7 +448,84 @@ fn jdk_install_root() -> PathBuf {
     }
 }
 
-/// Resolve the `jvm.dll` path inside a Java home. We prefer the
+/// Extract the pending Java exception's `getMessage()` — i.e. the
+/// detail message passed to the exception's constructor — for use as
+/// the user-facing error text.
+///
+/// Returns:
+///
+/// - `Some(message)` when a Java exception is pending. `message` is
+///   the result of `Throwable.getMessage()`, or the literal
+///   `"No error message"` if the exception has no detail message
+///   (`getMessage()` returned `null` or an empty string).
+/// - `None` when no Java exception is pending. The caller should
+///   fall back to formatting the raw `jni::errors::Error` in that
+///   case — those are genuine JNI failures (e.g. OOM inside a JNI
+///   call) with no Java-side cause.
+///
+/// The pending exception is cleared as a side effect. Call
+/// `env.exception_describe()` *before* this helper if you want the
+/// full stacktrace printed to stderr for log-file debugging.
+///
+/// In jni 0.22 the `attach_current_thread` closure receives
+/// `&mut jni::Env`. We take `&mut` here too because
+/// `exception_occurred` / `call_method` need exclusive access. The
+/// non-mutating helpers (`cast_local`, `exception_clear`) reborrow
+/// `&*env` internally.
+fn take_exception_message(env: &mut jni::Env<'_>) -> Option<String> {
+    use jni::objects::JString;
+
+    // Snapshot the pending exception. `exception_occurred` returns
+    // it without clearing, so we can extract its message first.
+    let exception = match env.exception_occurred() {
+        Some(e) if !e.is_null() => e,
+        _ => return None,
+    };
+
+    // Throwable.getMessage() — `()Ljava/lang/String;`. Returns
+    // `null` for exceptions constructed without a detail message
+    // (very common — e.g. `NullPointerException` thrown from a
+    // native method, or user code that did `throw new MyException()`).
+    let detail_msg: Option<String> = (|| -> Option<String> {
+        let sig = RuntimeMethodSignature::from_str("()Ljava/lang/String;").ok()?;
+        env.call_method(
+            &exception,
+            JNIString::new("getMessage"),
+            sig.method_signature(),
+            &[],
+        )
+        .ok()
+        .and_then(|v| v.l().ok())
+        .and_then(|obj| {
+            if obj.is_null() {
+                None
+            } else {
+                // Downcast `JObject` → `JString`. `cast_local` does
+                // an `IsInstanceOf` check at runtime; we know from
+                // the method signature that getMessage returns a
+                // String (or null), so the cast always succeeds when
+                // the object isn't null. `to_string()` here is the
+                // `Display::to_string` blanket impl (returns owned
+                // `String`).
+                let jstring: JString = (&*env).cast_local::<JString>(obj).ok()?;
+                Some(jstring.to_string())
+            }
+        })
+    })();
+
+    // Always clear the pending exception so subsequent JNI calls
+    // (including the `attach_current_thread` return path) aren't
+    // poisoned.
+    (&*env).exception_clear();
+
+    let detail = detail_msg.unwrap_or_default();
+    let trimmed = detail.trim();
+    Some(if trimmed.is_empty() {
+        "No error message".to_string()
+    } else {
+        trimmed.to_string()
+    })
+}
 /// server VM when both server and client directories exist; the JVM
 /// itself picks a tier automatically, but the server tier is the
 /// modern default on x86_64.

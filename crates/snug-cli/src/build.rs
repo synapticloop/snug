@@ -128,6 +128,7 @@ pub fn build_payload(cli: &Cli) -> Result<SnugPayload> {
         version,
         description: cli.description.clone(),
         copyright: cli.copyright.clone(),
+        update_check_url: cli.update_url.clone(),
     };
 
     let config = LauncherConfig {

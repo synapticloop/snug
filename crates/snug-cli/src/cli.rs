@@ -108,6 +108,18 @@ pub struct Cli {
     #[arg(long = "copyright", value_name = "TEXT")]
     pub copyright: Option<String>,
 
+    /// URL surfaced as a clickable "Check for a newer version" link
+    /// on the launcher's error dialog (e.g. the project's GitHub
+    /// releases page). When `None` or empty, the link row is hidden.
+    ///
+    /// Clicking the link invokes the user's default browser via
+    /// `ShellExecuteW(..., "open", url, ...)`. Whitelisted only in
+    /// that it's your own EXE pointing at your own URL — no URL
+    /// validation is performed at build time, so be careful what you
+    /// bake in.
+    #[arg(long = "update-url", value_name = "URL")]
+    pub update_url: Option<String>,
+
     /// Minimum required Java major version.
     ///
     /// Defaults to `25` (the project's development target).

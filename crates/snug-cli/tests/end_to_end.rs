@@ -58,6 +58,7 @@ fn build_payload_for_test(cli: &Cli) -> snug_format::SnugPayload {
     let app = AppMetadata {
         name: cli.name.clone().unwrap_or_else(|| "Demo".into()),
         company: cli.company.clone().unwrap_or_else(|| "SynapticLoop".into()),
+        update_check_url: None,
         version: cli.version.clone().unwrap_or_else(|| "0.1.0".into()),
         description: cli.description.clone(),
         copyright: cli.copyright.clone(),

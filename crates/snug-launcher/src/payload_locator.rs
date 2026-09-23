@@ -65,6 +65,7 @@ mod tests {
                 app: AppMetadata {
                     name: "Stub Test".into(),
                     company: "Test Co".into(),
+                    update_check_url: None,
                     version: "0.1.0".into(),
                     description: None,
                     copyright: None,

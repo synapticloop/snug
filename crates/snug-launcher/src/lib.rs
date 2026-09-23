@@ -25,11 +25,14 @@ pub mod cache;
 pub mod custom_dialog;
 pub mod dialogs;
 pub mod error;
+pub mod error_window;
 pub mod jdk_install;
 pub mod log;
 pub mod manifest;
+pub mod metadata_failed_window;
 pub mod payload_locator;
 pub mod progress_window;
+pub mod retry_window;
 pub mod splash;
 
 pub mod platform;

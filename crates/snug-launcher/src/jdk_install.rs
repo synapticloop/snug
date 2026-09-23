@@ -496,23 +496,6 @@ unsafe fn prompt_messagebox(
     }
 }
 
-/// Fallback info/error dialog using `MessageBoxW` (always available).
-unsafe fn info_messagebox(parent: HWND, title: &str, content: &str, icon_info: bool) {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        MessageBoxW, MB_ICONERROR, MB_ICONINFORMATION, MB_OK,
-    };
-    let title_w = wide(title);
-    let text_w = wide(content);
-    let _ = unsafe {
-        MessageBoxW(
-            parent,
-            text_w.as_ptr(),
-            title_w.as_ptr(),
-            MB_OK | (if icon_info { MB_ICONINFORMATION } else { MB_ICONERROR }),
-        )
-    };
-}
-
 // ===========================================================================
 //  Progress dialog: callback + thread-local shared state
 // ===========================================================================
@@ -1518,6 +1501,11 @@ pub fn show_retry_dialog(
     let attempt_str = attempt.to_string();
     let max_str = max_attempts.to_string();
 
+    // Format content / subheading / content with the per-attempt
+    // placeholders. Bind the resulting Strings to locals first so
+    // their borrows are valid when `retry_window::show` reads them
+    // (avoids the dangling-`dialogs::fill(...).as_str()` trap that
+    // bit `show_metadata_failed_dialog`).
     let content = dialogs::fill(
         d.jdk_install.retry.content.as_str(),
         &[
@@ -1527,23 +1515,32 @@ pub fn show_retry_dialog(
             ("error", error),
         ],
     );
-    let retry_label = d.jdk_install.retry.button_retry.clone();
-    let cancel_label = d.jdk_install.retry.button_cancel.clone();
+    let subheading = dialogs::fill(
+        d.jdk_install.retry.subheading.as_str(),
+        &[
+            ("version", version),
+            ("attempt", &attempt_str),
+            ("max_attempts", &max_str),
+        ],
+    );
 
-    // The custom-painted prompt window returns 1 for the first
-    // button and 2 for the second, so button #1 maps to "Try again"
-    // and button #2 to "Cancel".
-    let choice: i32 = unsafe {
-        crate::custom_dialog::show_prompt(
+    let result = unsafe {
+        crate::retry_window::show(
             parent,
-            &d.jdk_install.retry.title,
-            &d.jdk_install.retry.main,
-            &content,
-            &[&retry_label, &cancel_label],
+            crate::retry_window::RetryDialog {
+                title: d.jdk_install.retry.title.as_str(),
+                heading: d.jdk_install.retry.heading.as_str(),
+                subheading: subheading.as_str(),
+                error_content: content.as_str(),
+                info_heading: None,
+                info_subtext: None,
+                primary_label: d.jdk_install.retry.button_retry.as_str(),
+                secondary_label: d.jdk_install.retry.button_cancel.as_str(),
+                mascot_hbitmap: 0,
+            },
         )
     };
-
-    choice == 1
+    result == crate::retry_window::IDYES_I32
 }
 
 /// "We could not reach Adoptium" dialog. Pops when
@@ -1560,45 +1557,76 @@ pub fn show_retry_dialog(
 pub fn show_metadata_failed_dialog(parent: HWND, min_java: u16, error_detail: &str) -> i32 {
     let d = dialogs::dialogs();
     let major = min_java.to_string();
-    let mut c = Config::new(
-        parent,
-        d.jdk_install.metadata_failed.title.clone(),
-        dialogs::fill(d.jdk_install.metadata_failed.main.as_str(), &[("major", &major)]),
-    );
-    c.icon = IconKind::Warning;
-    c.content = dialogs::fill(
+
+    // The dialog reads heading / subheading / info_heading /
+    // info_subtext / button labels from `[jdk_install.metadata_failed]`.
+    // The launcher formats `content` itself (with `{major}` and
+    // `{error}` filled) before passing it in.
+    //
+    // `MetadataFailedDialog` borrows `&str`s — every formatted
+    // string lives in a local `String` below; never inline
+    // `dialogs::fill(...).as_str()` (its temporary drops before
+    // the dialog reads it — see `metadata_failed_window::show`'s
+    // `wide(dlg.title)` call).
+    let error_content = dialogs::fill(
         d.jdk_install.metadata_failed.content.as_str(),
         &[("major", &major), ("error", error_detail)],
     );
-    c.buttons = vec![
-        CustomButton {
-            id: IDYES,
-            text: d.jdk_install.metadata_failed.button_open_browser.clone(),
-        },
-        CustomButton {
-            id: IDCANCEL,
-            text: d.jdk_install.metadata_failed.button_cancel.clone(),
-        },
-    ];
-    c.default_button = IDYES;
-    c.show()
+    let subheading = dialogs::fill(
+        d.jdk_install.metadata_failed.subheading.as_str(),
+        &[("major", &major)],
+    );
+    let result = unsafe {
+        crate::metadata_failed_window::show(
+            parent,
+            crate::metadata_failed_window::MetadataFailedDialog {
+                title: d.jdk_install.metadata_failed.title.as_str(),
+                heading: d.jdk_install.metadata_failed.heading.as_str(),
+                subheading: subheading.as_str(),
+                error_content: error_content.as_str(),
+                info_heading: None,
+                info_subtext: None,
+                primary_label: d.jdk_install.metadata_failed.button_open_browser.as_str(),
+                secondary_label: d.jdk_install.metadata_failed.button_cancel.as_str(),
+                mascot_hbitmap: 0,
+            },
+        )
+    };
+    // Map the new module's return values onto the legacy
+    // `IDYES` / `IDCANCEL` contract that the rest of the
+    // install flow (and the post-install-error logic) expects.
+    if result == crate::metadata_failed_window::IDYES_I32 {
+        IDYES
+    } else {
+        IDCANCEL
+    }
 }
 
-pub fn show_error_dialog(parent: HWND, title: &str, main: &str, content: &str) {
-    let d = dialogs::dialogs();
-    let mut c = Config::new(parent, title, main);
-    c.icon = IconKind::Error;
-    c.content = format!("{main}\n\n{content}");
-    c.buttons = vec![CustomButton {
-        id: IDOK,
-        text: d.generic.error_dialog_ok.clone(),
-    }];
-    let mut button: i32 = 0;
-    let ok = unsafe { call_task_dialog_indirect(&c.to_taskdialogconfig(), &mut button) };
-    if !ok {
-        unsafe {
-            info_messagebox(parent, title, &format!("{main}\n\n{content}"), false)
-        };
+pub fn show_error_dialog(parent: HWND, title: &str, _main: &str, content: &str) {
+    // `title` is the title-bar text; the dialog body reads
+    // `failure.heading` / `failure.subheading` from
+    // dialogs.toml (or the caller-supplied overrides). `content`
+    // is the multi-line error description the launcher already
+    // formatted with placeholders filled.
+    let _ = title;
+    let _ = content;
+    unsafe {
+        crate::error_window::show(
+            parent,
+            crate::error_window::ErrorDialog {
+                title,
+                heading: "",
+                subheading: "",
+                error_content: content,
+                info_icon: crate::error_window::InfoIcon::Error,
+                info_heading: None,
+                info_subtext: None,
+                button_label: None,
+                mascot_hbitmap: 0,
+                update_check_url: None,
+                update_check_label: None,
+            },
+        );
     }
 }
 

@@ -11,6 +11,7 @@ fn sample_config() -> LauncherConfig {
         app: AppMetadata {
             name: "Demo App".into(),
             company: "SynapticLoop".into(),
+            update_check_url: Some("https://example.com/releases".into()),
             version: "0.3.1".into(),
             description: Some("A friendly demo".into()),
             copyright: Some("(c) 2026 Julian".into()),
