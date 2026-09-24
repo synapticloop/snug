@@ -1,0 +1,134 @@
+# ============================================================================
+#  snug-localisations.en.txt — built-in English baseline
+# ============================================================================
+#
+#  This file is the canonical English baseline for every runtime string the
+#  Windows launcher emits. The snug CLI embeds it into every build, so a
+#  freshly built EXE works in English without any extra configuration.
+#
+#  Format
+#  ------
+#    key = value                # one entry per line
+#    # comment                  # anything after `#` is ignored
+#                                # blank lines are ignored too
+#
+#    value-side escapes:
+#      \n  newline
+#      \t  tab
+#      \r  carriage return
+#      \\  literal backslash
+#      \#  literal hash (so you can put one in a value)
+#      \=  literal equals
+#
+#    placeholder syntax (filled at lookup time):
+#      {name}  replaced with the named value the caller passes.
+#              Format specifiers like {name:.2} are NOT supported — apply
+#              them to the value in Rust before calling.
+#              Unknown placeholders are left as-is so a typo doesn't
+#              silently swallow text.
+#
+#  File naming
+#  -----------
+#    The locale tag (the part after the last `.` in the filename) is
+#    parsed by the launcher at runtime: `snug-localisations.en.txt` is the
+#    primary English tag, `snug-localisations.en-US.txt` is the US regional
+#    variant (overrides keys on top of `en`). Regional tags fall back to
+#    the primary subtag when the user's Windows UI language is `en-GB`,
+#    `en-AU`, etc.
+#
+#  Adding a new language
+#  ---------------------
+#    1. Copy this file to `snug-localisations.<your-tag>.txt` (e.g.
+#       `snug-localisations.de.txt`, `snug-localisations.fr.txt`).
+#    2. Translate every `value` field. Keep the keys identical — the
+#       launcher matches on key, not on line order.
+#    3. Pass it on the build line:  `snug app.jar --localization de.txt -o App.exe`
+#       (repeat `--localization` for multiple languages).
+#    4. The CLI warns at build time about any keys you missed compared
+#       to this English baseline — keep the list in sync.
+#
+#    Overriding only some keys in a regional variant is fine: keys you
+#    don't override fall through to the primary subtag and then to `en`,
+#    so you can ship `pt-BR.txt` with three changes on top of `pt.txt`
+#    without duplicating the whole bundle.
+# ============================================================================
+
+
+# ----------------------------------------------------------------------------
+# Launcher-runtime errors (`snug_launcher::LauncherError`)
+# ----------------------------------------------------------------------------
+err.zip = ZIP error: {0}
+err.self_path = Could not determine current executable path: {0}
+err.io = I/O error: {0}
+err.jvm_not_found = Could not locate a Java {min_java}+ JVM in any of the configured discovery locations
+err.jvm_too_old = Located JVM at {path} but its major version {found} is below the required minimum {min_java}
+err.library_load = Failed to load {library}: {message}
+err.symbol_not_found = `{symbol}` not found in {library}
+err.invalid_state = Internal error: {0}
+err.jni_init = Could not build JNI init args: {0}
+err.jni_create = JNI_CreateJavaVM failed: {0}
+err.jni_attach = AttachCurrentThread failed: {0}
+err.jni_invoke = JNI invocation failed: {0}
+err.no_main_class = No Main-Class found in JAR manifest and no --main-class override
+err.main_class_not_found = Main-Class `{0}` could not be found or loaded by the JVM
+err.no_main_method = Main-Class `{0}` does not have a `main(String[])` method
+err.java_exception = Java `main` threw an exception: {0}
+err.unsupported_platform = Unsupported platform: snug-launcher currently only runs on Windows
+err.format = Embedded payload: {0}
+
+
+# ----------------------------------------------------------------------------
+# Splash errors (`snug_launcher::splash::SplashError`)
+# ----------------------------------------------------------------------------
+splash.err.overflow = Splash dimensions overflow usize
+splash.err.buffer_length = Splash pixel buffer length mismatch: expected {expected} bytes (width × height × 4), got {actual}
+splash.err.empty = Splash width or height is zero
+splash.err.thread_spawn = Spawn splash thread: {0}
+splash.err.bitmap = Create DIB section for splash
+splash.err.window = Create splash window
+splash.err.update_layered = UpdateLayeredWindow
+
+# Splash window internal error log lines (eprintln-only, but still user-facing
+# when stderr is captured).
+splash.err.create_compatible_dc = CreateCompatibleDC returned NULL
+splash.err.create_dib_section = CreateDIBSection returned NULL
+splash.err.create_window = CreateWindowExW returned NULL
+splash.err.update_layered_window = UpdateLayeredWindow returned 0
+
+# Splash window title (the text Windows shows when the splash is focused).
+splash.title = Snug Splash
+
+
+# ----------------------------------------------------------------------------
+# JDK install errors (`snug_launcher::jdk_install::JdkError`)
+# ----------------------------------------------------------------------------
+jdk.err.metadata_fetch = Adoptium API: {0}
+jdk.err.no_metadata_for_version = No JDK {0} GA found on Adoptium
+jdk.err.bad_metadata_shape = Unexpected Adoptium response: {0}
+jdk.err.bad_field = Bad metadata field {name}: {value}
+jdk.err.download = Download: {0}
+jdk.err.sha256_mismatch = SHA-256 mismatch — declared {declared}, computed {computed}
+jdk.err.extract = Extract zip: {0}
+jdk.err.no_java_exe = Extracted JDK at {0} has no bin\java.exe — unusual zip layout?
+jdk.err.io = I/O: {0}
+jdk.err.dialog = Dialog: {0}
+
+
+# ----------------------------------------------------------------------------
+# Launcher entry-point fallback (`snug_launcher::main`)
+# ----------------------------------------------------------------------------
+# Title shown in the MessageBoxW used when even the custom error window
+# can't run (no payload available, or self-path lookup failed).
+launcher.fallback_messagebox.title = snug launcher
+
+# Bare-stub diagnostic — emitted to stderr when the EXE was built without
+# a payload. Also used by the messagebox fallback.
+launcher.bare_stub.no_payload = No SNUGEMBD payload found in {path}
+launcher.bare_stub.hint = This is the bare stub binary. Build it with `snug` to embed a payload:
+launcher.bare_stub.command = snug your-app.jar -o app.exe
+
+# Launcher-error dialog content. The dialog title / heading / subheading /
+# info-box copy / button label / update-check label stay in dialogs.toml
+# for now; only the error body (which interpolates {error}) is keyed here
+# so that localized error text flows into the dialog body.
+launcher.error.content = {error}

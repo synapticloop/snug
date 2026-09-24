@@ -1,9 +1,30 @@
-# snug.options — default flags for `snug` builds in this workspace.
+###############################################################################
+#                                                                             #
+#                          .-----.-----.--.--.-----.                          #
+#                          |__ --|     |  |  |  _  |                          #
+#                          |_____|__|__|_____|___  |                          #
+#                                            |_____|                          #
+#                                                                             #
+###############################################################################
+
 #
-# Loaded automatically when `snug` runs from this directory.
-# CLI flags always override file values. `#`-prefixed lines are comments.
-# Each line is parsed as shell-like tokens, so quote any value with
-# whitespace, e.g. `--name "My App"`.
+# This is the snug options file that provides the default command line options
+# for the snug jar -> exe builder/launcher.
+#
+#  - This file will be loaded automatically when `snug` runs from this
+#    directory.
+#  - CLI flags will __ALWAYS__ override values in this file.
+#  - `#`-prefixed lines are comments and are ignored
+#  - Each line is parsed as shell-like tokens, so you __MUST__ quote any value
+#    with whitespace, e.g. `--name "My App"`.
+
+# You may also pass through a command line option which points to this file
+# location - for example:
+#
+#    snug --options /path/to/snug.options
+#
+# Note: The file does not need to be named snug.options - it can be called
+# anything you would like
 
 --name "Snug JavaFX Demo"
 --company "SynapticLoop"

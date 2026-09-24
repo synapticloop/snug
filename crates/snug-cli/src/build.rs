@@ -8,6 +8,7 @@ use editpe::Image;
 use image::GenericImageView;
 
 use crate::cli::Cli;
+use crate::localization;
 use crate::manifest::read_main_class;
 use crate::resources::ResourcePlan;
 use crate::stub::STUB_BYTES;
@@ -147,7 +148,24 @@ pub fn build_payload(cli: &Cli) -> Result<SnugPayload> {
         config,
         jars,
         icon,
+        localizations: collect_localizations(cli)?,
     })
+}
+
+/// Load, parse, and bundle every user-supplied localization file plus
+/// the always-embedded built-in English baseline. Two CLI builds of
+/// the same inputs must produce byte-identical `localizations`
+/// vectors, so we sort by canonicalised path before insertion — this
+/// matters because `snug.options` accumulates `--localization` lines
+/// in arbitrary order, and a `--localization X` on the CLI vs. one
+/// in the file shouldn't reorder the rest of the chain.
+fn collect_localizations(cli: &Cli) -> Result<Vec<snug_format::Localization>> {
+    let mut paths: Vec<std::path::PathBuf> = cli.localizations.clone();
+    paths.sort_by(|a, b| a.cmp(b));
+    let bundles = localization::collect(&paths)?;
+    localization::ensure_unique_tags(&bundles)
+        .context("validating localization bundle tags")?;
+    Ok(bundles)
 }
 
 /// Resolve `[JAR]` vs `--input <JAR|DIR>` and return the resolved

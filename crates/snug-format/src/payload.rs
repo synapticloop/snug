@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::LauncherConfig;
+use crate::{LauncherConfig, Localization};
 
 /// An embedded binary artefact (fat JAR, icon, splash image) plus its
 /// SHA-256 digest.
@@ -48,4 +48,19 @@ pub struct SnugPayload {
     /// mode is used.
     #[serde(default)]
     pub icon: Option<EmbeddedFile>,
+
+    /// Localization bundles for the launcher's runtime strings
+    /// (error dialogs, splash errors, JDK-install errors, bare-stub
+    /// fallback, etc.).
+    ///
+    /// Bundles are merged in priority order at runtime: full BCP 47
+    /// tag → primary subtag → built-in English baseline. Missing
+    /// keys fall through. An empty vector is valid — the launcher
+    /// then uses only its compiled-in English baseline.
+    ///
+    /// Every well-formed build embeds at least the built-in English
+    /// bundle (`snug-cli` always injects one), so the vector is
+    /// non-empty in practice.
+    #[serde(default)]
+    pub localizations: Vec<Localization>,
 }

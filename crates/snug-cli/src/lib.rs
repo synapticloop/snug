@@ -5,6 +5,8 @@
 
 pub mod build;
 pub mod cli;
+pub mod init_options;
+pub mod localization;
 pub mod manifest;
 pub mod options_file;
 pub mod resources;

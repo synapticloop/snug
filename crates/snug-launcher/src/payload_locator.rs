@@ -78,6 +78,7 @@ mod tests {
             },
             jars: vec![embedded_file(b"jar-bytes".to_vec())],
             icon: None,
+            localizations: Vec::new(),
         };
         let embedded = SnugEmbedded::new(payload);
         let encoded = snug_format::encode(&embedded).unwrap();

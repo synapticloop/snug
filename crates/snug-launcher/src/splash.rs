@@ -73,18 +73,40 @@ pub enum SplashError {
 
 impl std::fmt::Display for SplashError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SplashError::Overflow => write!(f, "splash dimensions overflow usize"),
-            SplashError::BufferLength { expected, actual } => write!(
-                f,
-                "splash pixel buffer length mismatch: expected {expected} bytes (width × height × 4), got {actual}"
-            ),
-            SplashError::Empty => write!(f, "splash width or height is zero"),
-            SplashError::ThreadSpawn(e) => write!(f, "spawn splash thread: {e}"),
-            SplashError::Bitmap => write!(f, "create DIB section for splash"),
-            SplashError::Window => write!(f, "create splash window"),
-            SplashError::UpdateLayered => write!(f, "UpdateLayeredWindow"),
-        }
+        // Localized via the `splash.err.*` keys in the
+        // `snug-localisations.<tag>.txt` bundle. The English baseline
+        // ships the same wording as the original literals, so the
+        // user-visible text is unchanged when no other locale is
+        // bundled.
+        let s = crate::localize::t_positional(
+            match self {
+                SplashError::Overflow => "splash.err.overflow",
+                SplashError::BufferLength { .. } => "splash.err.buffer_length",
+                SplashError::Empty => "splash.err.empty",
+                SplashError::ThreadSpawn(_) => "splash.err.thread_spawn",
+                SplashError::Bitmap => "splash.err.bitmap",
+                SplashError::Window => "splash.err.window",
+                SplashError::UpdateLayered => "splash.err.update_layered",
+            },
+            &[],
+        );
+        // Fill named placeholders for the variants that have them.
+        let rendered: String = match self {
+            SplashError::BufferLength { expected, actual } => {
+                let expected_str = expected.to_string();
+                let actual_str = actual.to_string();
+                crate::localize::fill_placeholders(
+                    &s,
+                    &[("expected", &expected_str), ("actual", &actual_str)],
+                )
+            }
+            SplashError::ThreadSpawn(e) => {
+                let msg = e.to_string();
+                crate::localize::fill_placeholders(&s, &[("0", &msg)])
+            }
+            _ => s,
+        };
+        f.write_str(&rendered)
     }
 }
 
@@ -212,7 +234,7 @@ fn run_splash_thread(
     let mem_dc = unsafe { CreateCompatibleDC(screen_dc) };
     unsafe { ReleaseDC(std::ptr::null_mut(), screen_dc) };
     if mem_dc.is_null() {
-        eprintln!("snug-splash: CreateCompatibleDC returned NULL");
+        eprintln!("snug-splash: {}", crate::localize::lookup("splash.err.create_compatible_dc"));
         return;
     }
 
@@ -229,7 +251,7 @@ fn run_splash_thread(
     };
     if bitmap.is_null() || bits_ptr.is_null() {
         unsafe { DeleteDC(mem_dc) };
-        eprintln!("snug-splash: CreateDIBSection returned NULL");
+        eprintln!("snug-splash: {}", crate::localize::lookup("splash.err.create_dib_section"));
         return;
     }
 
@@ -265,7 +287,9 @@ fn run_splash_thread(
     let x = (screen_w - width as i32) / 2;
     let y = (screen_h - height as i32) / 2;
 
-    let title_w: Vec<u16> = "Snug Splash\0".encode_utf16().collect();
+    let title_w: Vec<u16> = format!("{}\0", crate::localize::lookup("splash.title"))
+        .encode_utf16()
+        .collect();
 
     let hwnd = unsafe {
         CreateWindowExW(
@@ -289,7 +313,7 @@ fn run_splash_thread(
             DeleteObject(bitmap);
             DeleteDC(mem_dc);
         }
-        eprintln!("snug-splash: CreateWindowExW returned NULL");
+        eprintln!("snug-splash: {}", crate::localize::lookup("splash.err.create_window"));
         return;
     }
 
@@ -325,7 +349,7 @@ fn run_splash_thread(
             DeleteObject(bitmap);
             DeleteDC(mem_dc);
         }
-        eprintln!("snug-splash: UpdateLayeredWindow returned 0");
+        eprintln!("snug-splash: {}", crate::localize::lookup("splash.err.update_layered_window"));
         return;
     }
 

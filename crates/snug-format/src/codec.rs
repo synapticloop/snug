@@ -144,6 +144,7 @@ mod tests {
             },
             jars: vec![jar],
             icon: None,
+            localizations: Vec::new(),
         }
     }
 

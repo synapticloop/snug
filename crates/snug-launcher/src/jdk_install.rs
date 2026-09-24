@@ -80,25 +80,63 @@ pub enum JdkError {
 
 impl std::fmt::Display for JdkError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            JdkError::MetadataFetch(m) => write!(f, "Adoptium API: {m}"),
-            JdkError::NoMetadataForVersion(v) => write!(f, "no JDK {v} GA found on Adoptium"),
-            JdkError::BadMetadataShape(m) => write!(f, "unexpected Adoptium response: {m}"),
-            JdkError::BadField { name, value } => write!(f, "bad metadata field {name}: {value}"),
-            JdkError::Download(m) => write!(f, "download: {m}"),
-            JdkError::Sha256Mismatch { declared, computed } => write!(
-                f,
-                "SHA-256 mismatch — declared {declared}, computed {computed}"
-            ),
-            JdkError::Extract(m) => write!(f, "extract zip: {m}"),
-            JdkError::NoJavaExe(p) => write!(
-                f,
-                "extracted JDK at {} has no bin\\java.exe — unusual zip layout?",
-                p.display()
-            ),
-            JdkError::Io(e) => write!(f, "I/O: {e}"),
-            JdkError::Dialog(m) => write!(f, "dialog: {m}"),
-        }
+        // Localized via the `jdk.err.*` keys in the
+        // `snug-localisations.<tag>.txt` bundle. The English baseline
+        // ships the same wording as the original literals, so the
+        // user-visible text is unchanged when no other locale is
+        // bundled.
+        let s = match self {
+            JdkError::MetadataFetch(_) => crate::localize::lookup("jdk.err.metadata_fetch"),
+            JdkError::NoMetadataForVersion(_) => {
+                crate::localize::lookup("jdk.err.no_metadata_for_version")
+            }
+            JdkError::BadMetadataShape(_) => {
+                crate::localize::lookup("jdk.err.bad_metadata_shape")
+            }
+            JdkError::BadField { .. } => crate::localize::lookup("jdk.err.bad_field"),
+            JdkError::Download(_) => crate::localize::lookup("jdk.err.download"),
+            JdkError::Sha256Mismatch { .. } => crate::localize::lookup("jdk.err.sha256_mismatch"),
+            JdkError::Extract(_) => crate::localize::lookup("jdk.err.extract"),
+            JdkError::NoJavaExe(_) => crate::localize::lookup("jdk.err.no_java_exe"),
+            JdkError::Io(_) => crate::localize::lookup("jdk.err.io"),
+            JdkError::Dialog(_) => crate::localize::lookup("jdk.err.dialog"),
+        };
+        let rendered: String = match self {
+            JdkError::MetadataFetch(m) => {
+                crate::localize::fill_placeholders(&s, &[("0", &m.to_string())])
+            }
+            JdkError::NoMetadataForVersion(v) => {
+                crate::localize::fill_placeholders(&s, &[("0", &v.to_string())])
+            }
+            JdkError::BadMetadataShape(m) => {
+                crate::localize::fill_placeholders(&s, &[("0", &m.to_string())])
+            }
+            JdkError::BadField { name, value } => {
+                crate::localize::fill_placeholders(&s, &[("name", name), ("value", value)])
+            }
+            JdkError::Download(m) => {
+                crate::localize::fill_placeholders(&s, &[("0", &m.to_string())])
+            }
+            JdkError::Sha256Mismatch { declared, computed } => {
+                crate::localize::fill_placeholders(
+                    &s,
+                    &[("declared", declared), ("computed", computed)],
+                )
+            }
+            JdkError::Extract(m) => {
+                crate::localize::fill_placeholders(&s, &[("0", &m.to_string())])
+            }
+            JdkError::NoJavaExe(p) => {
+                crate::localize::fill_placeholders(&s, &[("0", &p.display().to_string())])
+            }
+            JdkError::Io(e) => {
+                crate::localize::fill_placeholders(&s, &[("0", &e.to_string())])
+            }
+            JdkError::Dialog(m) => {
+                crate::localize::fill_placeholders(&s, &[("0", &m.to_string())])
+            }
+        };
+        f.write_str(&rendered)
     }
 }
 

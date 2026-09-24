@@ -26,6 +26,7 @@ pub mod codec;
 pub mod config;
 pub mod embedded;
 pub mod error;
+pub mod localization;
 pub mod payload;
 
 pub use codec::{decode, decode_payload, embedded_file, encode, encode_payload, sha256};
@@ -35,4 +36,5 @@ pub use config::{
 };
 pub use embedded::{SnugEmbedded, FORMAT_VERSION, MAGIC};
 pub use error::FormatError;
+pub use localization::{Localization, LocalizationParseError};
 pub use payload::{EmbeddedFile, SnugPayload};
