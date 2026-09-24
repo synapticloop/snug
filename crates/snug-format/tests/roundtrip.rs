@@ -62,6 +62,7 @@ fn sample_payload() -> SnugPayload {
             sha256: [0u8; 32],
             bytes: b"\x00\x00\x01\x00fake-ico".to_vec(),
         }),
+        localizations: Vec::new(),
     }
 }
 

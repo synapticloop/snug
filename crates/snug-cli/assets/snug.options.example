@@ -1,0 +1,161 @@
+# ============================================================================
+#  snug.options — example template
+# ============================================================================
+#
+#  This is the example `snug.options` file that `snug --init-options`
+#  writes to disk. Drop it in your project root and edit any flag below:
+#
+#      snug --init-options            # writes ./snug.options (refuses to
+#                                    #   overwrite without --force)
+#      snug --init-options --force    # overwrite an existing file
+#      snug --init-options build.cfg  # write to a custom path
+#      snug --init-options --stdout   # print to stdout (for piping or
+#                                    #   version control)
+#
+#  Format
+#  ------
+#  - One option per line, parsed as if it were supplied on the command
+#    line. So `--name "My App"` works — quoting and shell-style escapes
+#    are honoured (the file is read with the `shell-words` tokenizer).
+#  - Lines starting with `#` are comments.
+#  - Command-line flags always override file values.
+#  - Repeatable flags (`--jvm-arg`, `--localization`) accumulate from
+#    both sources.
+#
+#  Most lines below are commented out — uncomment the ones you need and
+#  replace the placeholder values. Anything left commented is ignored.
+# ============================================================================
+
+
+# ----------------------------------------------------------------------------
+# Input / output
+# ----------------------------------------------------------------------------
+#
+# Either a single fat-JAR file or a directory containing JAR files.
+# `--input` and the positional `[JAR]` argument are mutually exclusive;
+# supply one or the other. The positional form is also accepted:
+#
+#     MyApp.jar
+#
+# --input /path/to/jar-or-directory-of-jars
+
+
+# --output MyApp.exe
+# --name "My App"
+# --company "SynapticLoop"
+# --version 1.2.3
+# --description "A short description of My App"
+# --copyright "© 2026 SynapticLoop"
+
+
+# ----------------------------------------------------------------------------
+# Java entry point
+# ----------------------------------------------------------------------------
+#
+# Default: read from the JAR manifest's `Main-Class` header. Override
+# when the manifest is missing, when the fat JAR is multi-JAR and you
+# want to pin a specific class, or when the JAR ships a different
+# `Main-Class` than the one you want users to see.
+#
+# --main-class com.example.Main
+
+
+# ----------------------------------------------------------------------------
+# Minimum Java version + JVM arguments
+# ----------------------------------------------------------------------------
+#
+# Defaults to 25. Raise or lower to match your actual runtime target.
+#
+# --min-java 25
+
+# Repeatable. Anything you'd put after `java -jar`. Common picks:
+#
+# --jvm-arg -Xms256m
+# --jvm-arg -Xmx2g
+# --jvm-arg -Dfile.encoding=UTF-8
+# --jvm-arg -Djava.library.path=./native
+
+
+# ----------------------------------------------------------------------------
+# Windows metadata (version resource, icon, manifest)
+# ----------------------------------------------------------------------------
+#
+# Accepts `.png` or `.ico`. PNGs are converted to ICO at build time via
+# the `image` crate. Square images ≥ 256x256 look sharpest at every DPI.
+#
+# --icon assets/icon.png
+
+# Optional application manifest (XML). Used to declare DPI-awareness,
+# side-by-side assembly identity, or `requestedExecutionLevel` for UAC.
+#
+# --manifest manifest.xml
+
+
+# ----------------------------------------------------------------------------
+# Splash
+# ----------------------------------------------------------------------------
+#
+# PNG shown by the native launcher before the JVM starts. Recommended
+# size 480x270..640x360. Anything larger triggers a build-time warning.
+#
+# --splash assets/splash.png
+# --splash-ms 1500
+# --splash-max 640x360
+
+
+# ----------------------------------------------------------------------------
+# JDK download flow
+# ----------------------------------------------------------------------------
+#
+# Pop a TaskDialog on first run if no compatible JVM is on the system,
+# offering to download Eclipse Temurin from api.adoptium.net. The
+# launcher verifies SHA-256, extracts to
+# `%LOCALAPPDATA%\snug\jdk\<version>\`, and retries.
+#
+# Modes:
+#   omitted — no download flow at all (developer build).
+#   --download-jdk       — `auto`: prompt only if discovery fails.
+#   --download-jdk=auto  — same as above, explicit.
+#   --download-jdk=force — always prompt, bypassing JVM discovery
+#                          (portable end-user build).
+#
+# --download-jdk=auto
+
+
+# ----------------------------------------------------------------------------
+# Localization
+# ----------------------------------------------------------------------------
+#
+# Repeatable. Each `snug-localisations.<tag>.txt` file is embedded in
+# the launcher; the user's Windows UI language picks the matching
+# bundle. The built-in English baseline is always embedded, so a build
+# with no `--localization` still ships a fully localized (English)
+# launcher.
+#
+# Filename convention: `snug-localisations.<tag>.txt`, where `<tag>`
+# is a BCP 47 locale (`en`, `en-US`, `pt-BR`, `de`, `ja`, ...).
+# BCP 47 with regional variants is supported: `snug-localisations.en.txt`
+# covers `en-US`, `en-GB`, etc.; `snug-localisations.en-US.txt` adds
+# region-specific overrides on top.
+#
+# --localization i18n/snug-localisations.de.txt
+# --localization i18n/snug-localisations.fr.txt
+
+
+# ----------------------------------------------------------------------------
+# Advanced
+# ----------------------------------------------------------------------------
+#
+# --emit-payload
+#   Write the encoded payload bytes to stdout instead of building an
+#   EXE. Useful for piping into other tools or for diffing payloads.
+#
+# --dry-run
+#   Validate inputs and print what would be built, but write nothing.
+#
+# --options /path/to/another/options
+#   Read a different options file instead of `./snug.options`.
+#
+# --snug-version
+#   Print snug's own version (distinct from `--version`, which sets
+#   the wrapped app's version).

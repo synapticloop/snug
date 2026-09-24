@@ -38,7 +38,13 @@ pub const MAGIC: &[u8; 8] = b"SNUGEMBD";
 /// Temurin regardless of what's on PATH / JAVA_HOME. v4 payloads with
 /// the old bool field are no longer decodable — both ends ship
 /// together in the workspace.
-pub const FORMAT_VERSION: u16 = 5;
+///
+/// v6 (2026-09): Added `SnugPayload.localizations: Vec<Localization>`
+/// for embedding runtime-string localization bundles (see
+/// [`crate::Localization`]). The vector is `#[serde(default)]`-empty
+/// for backwards compatibility, so v5 payloads still decode cleanly.
+/// New builds always populate at least the English baseline.
+pub const FORMAT_VERSION: u16 = 6;
 
 /// A snug payload wrapped with the metadata needed to locate, validate, and
 /// version-check it at runtime.

@@ -197,7 +197,7 @@ fn collect_long_flag_names(args: &[String]) -> std::collections::HashSet<String>
 ///
 /// Repeated occurrences of these flags must NOT be deduped at merge
 /// time — both file and CLI contributions are collected and appended.
-const REPEATABLE_FLAGS: &[&str] = &["jvm-arg"];
+const REPEATABLE_FLAGS: &[&str] = &["jvm-arg", "localization"];
 
 /// Strip any long flag (and its separate value token) from `tokens`
 /// whose name is in `cli_flags` *and* is not in [`REPEATABLE_FLAGS`].
