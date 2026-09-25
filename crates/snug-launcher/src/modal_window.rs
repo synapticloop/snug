@@ -50,7 +50,7 @@ use windows_sys::Win32::Graphics::Gdi::{
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, DrawIconEx, DI_NORMAL,
+    CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyWindow, DispatchMessageW, DrawIconEx, DI_NORMAL,
     GetMessageW, GetSystemMetrics, GetWindowLongPtrW, HICON, IDCANCEL, IDI_ERROR,
     IDI_INFORMATION, IDI_WARNING, LoadCursorW, LoadIconW, MSG, PostQuitMessage,
     RegisterClassExW, SendMessageW, SetCursor, SetWindowLongPtrW, SM_CXSCREEN, SM_CYSCREEN,
@@ -369,6 +369,7 @@ pub unsafe fn show<'a>(parent: HWND, dlg: &'a ModalDialog<'a>) -> i32 {
         link_hover: false,
         info_icon_kind: dlg.info_icon,
         mascot_hbitmap: dlg.mascot_hbitmap as i32,
+        mascot_hicon: std::ptr::null_mut(),
     });
     let state_ptr = Box::into_raw(state);
 
@@ -478,6 +479,17 @@ struct State {
     link_hover: bool,
     info_icon_kind: InfoIcon,
     mascot_hbitmap: i32,
+    /// Cached `HICON` for the mascot slot — loaded **once** in
+    /// `WM_CREATE` (when the caller didn't supply an `HBITMAP`) and
+    /// reused across every `WM_PAINT`. `std::ptr::null_mut()` when
+    /// the caller pushed a bitmap (we never need the icon then) or
+    /// when icon loading failed at startup.
+    ///
+    /// Caching is the whole point: `find_best_icon_hicon` walks
+    /// `FindResourceW → LoadResource → CreateIconFromResourceEx`,
+    /// which used to spam the log at ~20 Hz during the progress-bar
+    /// animation (the old code reloaded on every paint).
+    mascot_hicon: HICON,
 }
 
 // ============================================================================
@@ -610,6 +622,20 @@ unsafe extern "system" fn wndproc(
                         right: LINK_TEXT_X + label_w + url_w,
                         bottom: LINK_Y + url_h,
                     };
+                }
+            }
+
+            // ----- Mascot icon (cached for paint) -----
+            // Only load the EXE-icon fallback when the caller didn't
+            // supply an `HBITMAP`. Doing this here, **once**, rather
+            // than inside `WM_PAINT`, keeps the
+            // `FindResourceW → LoadResource → CreateIconFromResourceEx`
+            // pipeline from running at every repaint — the old code
+            // spammed the log at ~20 Hz during the progress-bar
+            // animation.
+            if (*state).mascot_hbitmap == 0 {
+                if let Some(hicon) = find_best_icon_hicon(MASCOT_LOAD_CX, MASCOT_LOAD_CY) {
+                    (*state).mascot_hicon = hicon;
                 }
             }
 
@@ -839,23 +865,22 @@ unsafe extern "system" fn wndproc(
                 DeleteObject(info_rgn as _);
             }
 
-            // 3. Mascot. Bitmap if non-zero, else EXE main icon.
+            // 3. Mascot. Bitmap if non-zero, else EXE main icon (cached
+            //    on State during WM_CREATE — see State::mascot_hicon).
             let raw = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut State;
-            let mascot_hbitmap = if !raw.is_null() {
-                (*raw).mascot_hbitmap
+            let (mascot_hbitmap, mascot_hicon) = if !raw.is_null() {
+                ((*raw).mascot_hbitmap, (*raw).mascot_hicon)
             } else {
-                0
+                (0, std::ptr::null_mut())
             };
             if mascot_hbitmap != 0 {
                 draw_mascot_hbitmap(hdc, mascot_hbitmap as _);
-            } else if let Some(hicon) =
-                find_best_icon_hicon(MASCOT_LOAD_CX, MASCOT_LOAD_CY)
-            {
+            } else if !mascot_hicon.is_null() {
                 if DrawIconEx(
                     hdc,
                     MASCOT_X,
                     MASCOT_Y,
-                    hicon,
+                    mascot_hicon,
                     MASCOT_W,
                     MASCOT_H,
                     0,
@@ -1086,6 +1111,9 @@ unsafe extern "system" fn wndproc(
                 }
                 if !(*raw).hfont_link_url.is_null() {
                     DeleteObject((*raw).hfont_link_url as _);
+                }
+                if !(*raw).mascot_hicon.is_null() {
+                    DestroyIcon((*raw).mascot_hicon);
                 }
                 drop(Box::from_raw(raw));
             }
