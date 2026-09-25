@@ -1,0 +1,129 @@
+﻿flowchart TD
+  Start([User double-clicks App.exe]) --> SelfPath
+  SelfPath["<b>self_path</b><br/>std::env::current_exe"] -->|fail| E_SelfPath
+  SelfPath --> Scan
+  Scan["<b>find_in_file</b><br/>parse PE, walk resource tree<br/>to RT_RCDATA 'SNUGEMBD'"] -->|no payload| BareStub
+  Scan -->|decode fail| E_Format
+  Scan --> Decode
+
+  Decode["<b>decode payload</b> postcard<br/>localize::init bundles"] --> CacheStep
+  CacheStep["<b>cache::ensure_cached</b><br/>extract every JAR to<br/>%LOCALAPPDATA%\snug\CO\APP\SHA256\app.jar"] -->|io error| E_Io
+  CacheStep --> LogStep
+  LogStep["<b>log::init</b><br/>open snug.log next to JAR<br/>(best-effort)"] --> MainClassStep
+
+  MainClassStep{"<b>Resolve Main-Class</b><br/>config.main_class vs.<br/>JAR manifest"} -->|none| E_NoMainClass
+  MainClassStep --> ModeSwitch
+
+  ModeSwitch{"<b>behavior.download_jdk</b>"} -->|Off / Auto| Discover
+  ModeSwitch -->|Force| SkipDisc
+  SkipDisc["jvm_dir = None<br/>(skip discovery)"] --> Offer
+
+  subgraph Discovery ["JVM discovery (Off + Auto only)"]
+    direction TB
+    Discover["<b>discover_jvm</b>(strategy, min_java)"] --> D_Explicit
+    D_Explicit["1. <b>explicit override</b><br/>(used by post-install retry)"] --> D_JAVA_HOME
+    D_JAVA_HOME["2. <b>JAVA_HOME</b> env var"] --> D_JDK_HOME
+    D_JDK_HOME["3. <b>JDK_HOME</b> env var"] --> D_PATH
+    D_PATH["4. <b>PATH</b> dirs split by ;<br/>(use parent of each entry)"] --> D_Reg
+    D_Reg["5. <b>Registry HKLM\SOFTWARE\</b><br/>JavaSoft\JDK<br/>JavaSoft\JRE<br/>Eclipse Adoptium\JDK<br/>Eclipse Foundation\JDK<br/>Microsoft\JDK"] --> D_Common
+    D_Common["6. <b>common install paths</b><br/>Program Files\Eclipse Adoptium<br/>Program Files\Java<br/>Program Files\Microsoft\jdk-*<br/>..."] --> Discovered
+  end
+
+  Discovered["<b>check_candidate</b><br/>has bin\java.exe or javaw.exe<br/>parse major from release file<br/>or java -version (CREATE_NO_WINDOW)"] --> Offer
+  D_Explicit -.->|<i>major below min_java</i>| E_JvmTooOld
+  D_JAVA_HOME -.->|same| E_JvmTooOld
+  D_JDK_HOME -.->|same| E_JvmTooOld
+  D_PATH -.->|same| E_JvmTooOld
+  D_Reg -.->|same| E_JvmTooOld
+  D_Common -.->|same| E_JvmTooOld
+
+  Offer{"<b>should_offer_install?</b><br/>Off &rarr; never<br/>Auto &rarr; only if jvm_dir was None<br/>Force &rarr; always"} -->|no| FinalCheck
+  Offer -->|yes| InstallStart
+
+  subgraph Install["JDK install: maybe_install flow"]
+    direction TB
+    InstallStart["<b>maybe_install</b>(min_java, %LOCALAPPDATA%\snug\jdk\)"] --> CheckCache
+    CheckCache["<b>find_cached_jdk</b><br/>walk %LOCALAPPDATA%\snug\jdk\<br/>for subdir whose java -version &ge; min_java"] -->|hit| Installed
+    CheckCache -->|miss| FetchMeta
+    FetchMeta["<b>fetch_metadata</b><br/>GET api.adoptium.net/v3/assets/latest/{major}/jdk<br/>parse binaries.link, checksum, size"] -->|fail| E_Meta
+    FetchMeta -->|no GA for major| E_NoMeta
+    FetchMeta -->|ok| ShowPrompt
+    ShowPrompt["<b>TaskDialogIndirect</b><br/>Download / Open in browser / Cancel<br/>+ hyperlink to download URL<br/>(no 'don't show again')"] -->|Cancel| Cancelled
+    ShowPrompt -->|Open browser| Browser
+    ShowPrompt -->|Download| Worker
+    Browser["ShellExecuteW the URL<br/>return Ok(None)"] --> Cancelled
+    Cancelled["<b>Ok(None)</b><br/>courtesy re-run discovery"] --> ReDisc
+    Worker["<b>Worker thread</b><br/>stream zip to disk<br/>SHA-256 verify on file<br/>extract %LOCALAPPDATA%\snug\jdk\VER\"] -->|sha mismatch| E_Sha
+    Worker -->|extract fail| E_Extract
+    Worker -->|no java.exe in tree| E_NoJava
+    Worker -->|ok| Installed
+    Installed["<b>Ok(Some new_home)</b><br/>unsafe set JAVA_HOME=new_home<br/>retry discovery with explicit=new_home"] --> ReDisc
+    ReDisc["<b>discover_jvm</b> with explicit=new_home"] --> PostCheck
+    PostCheck{"found now?"} --> InstallDone
+  end
+
+  E_Meta -.->|fallback| ReDisc
+  E_NoMeta -.->|fallback| ReDisc
+  E_Sha -.->|fallback| ReDisc
+  E_Extract -.->|fallback| ReDisc
+  E_NoJava -.->|fallback| ReDisc
+
+  InstallDone["<b>Install outcome</b><br/>Ok Some &rarr; jvm_dir = new_home<br/>Ok None &rarr; jvm_dir still None<br/>Err &rarr; logged, courtesy re-run"] --> FinalCheck
+  FinalCheck{"<b>jvm_dir still set?</b>"} -->|no| E_JvmNotFound
+  FinalCheck --> LocateDll
+
+  LocateDll["<b>locate_jvm_dll</b><br/>prefer bin\server\jvm.dll<br/>fallback bin\client\jvm.dll"] -->|missing| E_LibLoad
+  LocateDll --> InitArgs
+  InitArgs["<b>InitArgsBuilder</b><br/>version = JNIVersion::V21<br/>option each config.jvm_args<br/>option -Djava.class.path=cached1;cached2;..."] -->|build fail| E_JniInit
+  InitArgs --> SplashStep
+  SplashStep{"splash configured?"} -->|yes| ShowSplash
+  SplashStep -->|no| LoadJvm
+  ShowSplash["<b>splash::show</b> (best-effort)<br/>native window, auto-dismiss<br/>in attach closure"] --> LoadJvm
+  LoadJvm["<b>JavaVM::with_libjvm</b><br/>LoadLibraryW(jvm.dll)<br/>resolve JNI_CreateJavaVM<br/>JNI_CreateJavaVM(init_args)"] -->|fail| E_JniCreate
+  LoadJvm --> Attach
+  Attach["<b>attach_current_thread</b><br/>dismiss splash inside closure"] -->|attach fail| E_JniAttach
+  Attach --> FindClass
+  FindClass["<b>find_class</b>(Main-Class)<br/>dots &rarr; slashes"] -->|not found| E_NoMainClass2
+  FindClass --> ArgsArr
+  ArgsArr["<b>JObjectArray[JString]</b><br/>argv from EXE if behavior.forward_args<br/>else empty placeholder"] --> GetMain
+  GetMain["<b>get_static_method_id</b>(main, '([Ljava/lang/String;)V')"] -->|not found| CheckFx
+  GetMain -->|found| CallMain
+  CheckFx{"is_assignable_from<br/><b>javafx.application.Application</b>?"} -->|yes| LaunchFx
+  CheckFx -->|no| E_NoMainMethod
+  CallMain["<b>call_static_method</b> main(args)"] --> Result
+  LaunchFx["<b>call_static_method</b><br/>Application.launch(class, args)"] --> Result
+  Result{"call result"} -->|MethodNotFound| E_NoMainMethod2
+  Result -->|Java exception pending| E_JavaExc
+  Result -->|ok| OkDone
+  OkDone["<b>Ok(0)</b><br/>splash dismissed in attach closure"] --> DestroyJvm
+  DestroyJvm["best-effort <b>vm.destroy()</b><br/>return exit_code as u32"] --> End([process exits])
+
+  BareStub["<b>stdout</b>: 'bare stub, build with snug'<br/><b>exit code 2</b>"] --> End
+  E_SelfPath["<b>MessageBoxW fallback</b><br/>err.self_path<br/>(payload not yet decodable)"] --> End
+  E_Format["<b>MessageBoxW fallback</b><br/>err.format"] --> End
+  E_Io["<b>error_window</b><br/>err.io"] --> End
+  E_NoMainClass["<b>error_window</b><br/>err.no_main_class<br/>(no jars at all)"] --> End
+  E_JvmTooOld["<b>error_window</b><br/>err.jvm_too_old<br/>(short-circuits from check_candidate)"] --> End
+  E_Meta["<b>error_window</b><br/>jdk.err.metadata_fetch"] --> End
+  E_NoMeta["<b>error_window</b><br/>jdk.err.no_metadata_for_version"] --> End
+  E_Sha["<b>error_window</b><br/>jdk.err.sha256_mismatch"] --> End
+  E_Extract["<b>error_window</b><br/>jdk.err.extract"] --> End
+  E_NoJava["<b>error_window</b><br/>jdk.err.no_java_exe"] --> End
+  E_JvmNotFound["<b>error_window</b><br/>err.jvm_not_found"] --> End
+  E_LibLoad["<b>error_window</b><br/>err.library_load"] --> End
+  E_JniInit["<b>error_window</b><br/>err.jni_init"] --> End
+  E_JniCreate["<b>error_window</b><br/>err.jni_create"] --> End
+  E_JniAttach["<b>error_window</b><br/>err.jni_attach"] --> End
+  E_NoMainClass2["<b>error_window</b><br/>err.main_class_not_found"] --> End
+  E_NoMainMethod["<b>error_window</b><br/>err.no_main_method<br/>(class is not Application)"] --> End
+  E_NoMainMethod2["<b>error_window</b><br/>err.no_main_method<br/>(post-call MethodNotFound)"] --> End
+  E_JavaExc["<b>error_window</b><br/>err.java_exception<br/>detail = Throwable.getMessage<br/>via take_exception_message"] --> End
+
+  classDef err     fill:#fde7e7,stroke:#b06367,color:#5c2528,stroke-width:1px
+  classDef fatal   fill:#fbe6e0,stroke:#c97b3f,color:#5c3520,stroke-width:1px
+  classDef ok      fill:#e3efe9,stroke:#2f6f5e,color:#1f4a3e,stroke-width:1px
+  classDef phase   fill:#f1ece1,stroke:#a89d85,color:#3a3a30,stroke-width:1px
+  class E_SelfPath,E_Format,E_Io,E_NoMainClass,E_JvmTooOld,E_Meta,E_NoMeta,E_Sha,E_Extract,E_NoJava,E_JvmNotFound,E_LibLoad,E_JniInit,E_JniCreate,E_JniAttach,E_NoMainClass2,E_NoMainMethod,E_NoMainMethod2,E_JavaExc err
+  class BareStub fatal
+  class OkDone,DestroyJvm ok
+  class Start,End phase
