@@ -52,7 +52,7 @@ use windows_sys::Win32::Graphics::Gdi::{
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, DrawIconEx, DI_NORMAL, GetMessageW,
+    CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyWindow, DispatchMessageW, DrawIconEx, DI_NORMAL, GetMessageW, HICON,
     GetSystemMetrics, KillTimer, LoadIconW, MSG, PostQuitMessage,
     RegisterClassExW, SendMessageW, SetTimer, SetWindowTextW, SetWindowLongPtrW,
     GetWindowLongPtrW, TranslateMessage, CW_USEDEFAULT, IDCANCEL, ICON_BIG, IDI_INFORMATION,
@@ -293,6 +293,10 @@ struct ProgressState {
     /// verify phase where `pct` is pinned at 95 for ~1 s while
     /// SHA-256 runs).
     last_pct: u32,
+    /// Cached `HICON` for the mascot slot — loaded **once** in
+    /// `WM_CREATE` and reused across every `WM_PAINT`. See the
+    /// matching comment on `modal_window::State::mascot_hicon`.
+    mascot_hicon: HICON,
 }
 
 // ===========================================================================
@@ -389,6 +393,15 @@ unsafe extern "system" fn progress_wndproc(
                 false,
                 FONT_FACE,
             );
+
+            // Cache the mascot icon **once**, here, instead of
+            // re-running `find_best_icon_hicon` on every `WM_PAINT`
+            // (the progress bar repaints at the `WM_TIMER` rate —
+            // ~5 Hz by default — and the icon never changes between
+            // paints).
+            if let Some(hicon) = find_best_icon_hicon(MASCOT_LOAD_CX, MASCOT_LOAD_CY) {
+                (*state).mascot_hicon = hicon;
+            }
 
             let hwnd_heading = CreateWindowExW(
                 0,
@@ -682,10 +695,13 @@ unsafe extern "system" fn progress_wndproc(
             // back to the EXE's main icon resource when no bitmap is
             // set (production path).
             let raw = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut ProgressState;
-            let mascot_hbitmap = if !raw.is_null() {
-                (&(*raw).shared).mascot_hbitmap()
+            let (mascot_hbitmap, mascot_hicon) = if !raw.is_null() {
+                (
+                    (&(*raw).shared).mascot_hbitmap(),
+                    (*raw).mascot_hicon,
+                )
             } else {
-                0
+                (0, std::ptr::null_mut())
             };
             if mascot_hbitmap != 0 {
                 crate::log::log(&format!(
@@ -695,10 +711,14 @@ unsafe extern "system" fn progress_wndproc(
                 draw_mascot_hbitmap(hdc, mascot_hbitmap as _);
             } else {
                 // Decode the icon through Windows: RT_ICON can contain PNG
-                // bytes as well as a DIB. DI_NORMAL preserves 32-bit alpha.
-                if let Some(hicon) = find_best_icon_hicon(MASCOT_LOAD_CX, MASCOT_LOAD_CY) {
+                // bytes as well as a DIB. DI_NORMAL preserves 32-bit
+                // alpha. The HICON is cached on `State::mascot_hicon`
+                // during `WM_CREATE` so this branch doesn't re-run
+                // `FindResourceW → LoadResource → CreateIconFromResourceEx`
+                // on every paint.
+                if !mascot_hicon.is_null() {
                     if DrawIconEx(
-                        hdc, MASCOT_X, MASCOT_Y, hicon, MASCOT_W, MASCOT_H,
+                        hdc, MASCOT_X, MASCOT_Y, mascot_hicon, MASCOT_W, MASCOT_H,
                         0, std::ptr::null_mut(), DI_NORMAL,
                     ) == 0 {
                         log::log("WM_PAINT mascot: DrawIconEx failed");
@@ -928,6 +948,9 @@ unsafe extern "system" fn progress_wndproc(
                 }
                 if !(*raw).hfont_info_subtext.is_null() {
                     DeleteObject((*raw).hfont_info_subtext as _);
+                }
+                if !(*raw).mascot_hicon.is_null() {
+                    DestroyIcon((*raw).mascot_hicon);
                 }
                 let _ = Box::from_raw(raw);
             }
@@ -1220,6 +1243,12 @@ pub unsafe fn show(
         // moved on yet, and to "Cancel" once phase 1 begins.
         last_label_phase: -1,
         last_pct: 0,
+        // Loaded **once** in `WM_CREATE` (when the caller didn't push
+        // an `HBITMAP`) so the
+        // `FindResourceW → LoadResource → CreateIconFromResourceEx`
+        // pipeline doesn't run on every repaint — used to spam the
+        // log at ~20 Hz during the progress-bar animation.
+        mascot_hicon: std::ptr::null_mut(),
     });
     let state_ptr = Box::into_raw(state_box);
 
