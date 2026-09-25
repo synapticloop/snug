@@ -4,6 +4,13 @@
 //! [`crate::jdk_install::show_error_dialog`] and
 //! [`crate::main::show_launcher_error`] don't change.
 //!
+//! [`show_launcher_error`] is the public, ergonomic entry point used by
+//! both `main.rs` (when a `LauncherError` bubbles out of the platform
+//! runtime) and the external `snug_preview` binary (one-click dialog
+//! testing). It composes the `[launcher.error]` copy from
+//! `dialogs.toml` with a caller-supplied localized error string, then
+//! delegates to [`show`].
+//!
 //! All layout / paint / WndProc logic now lives in
 //! [`crate::modal_window`] — this module only resolves the per-dialog
 //! TOML fallback for info / button copy (the cross-cutting link-label
@@ -142,5 +149,55 @@ pub unsafe fn show(parent: HWND, dlg: ErrorDialog<'_>) -> i32 {
                 link_label: dlg.update_check_label,
             },
         )
+    }
+}
+
+/// Ergonomic public entry point for the launcher-runtime error dialog.
+///
+/// Composes the `[launcher.error]` copy from `dialogs.toml` with a
+/// caller-supplied `localized_error` string (which `main.rs` builds via
+/// `error::localize_launcher_error`, but external callers — e.g. the
+/// `snug_preview` bin — can pass any already-localized string) and
+/// delegates to [`show`].
+///
+/// `update_check_url`, when `Some` and non-empty, renders the
+/// "Check for a newer version: <url>" link row below the info box.
+/// `None` skips the row entirely — matches the production path when
+/// the embedded payload was unreadable (so the URL field isn't
+/// knowable).
+///
+/// Blocks until the user dismisses the dialog. Returns the same
+/// `i32` that [`show`] does — `IDOK_I32` (=1) on primary dismissal.
+pub unsafe fn show_launcher_error(
+    parent: HWND,
+    localized_error: &str,
+    update_check_url: Option<&str>,
+) {
+    let dialogs = crate::dialogs::dialogs();
+    let content = crate::dialogs::fill(
+        dialogs.launcher.error.content.as_str(),
+        &[("error", localized_error)],
+    );
+
+    // SAFETY: every borrowed string is live for the duration of the
+    // call (dialogs is `&'static`, `content` is a local `String`).
+    // The dialog runs modally and returns before any borrow ends.
+    unsafe {
+        show(
+            parent,
+            ErrorDialog {
+                title: &dialogs.launcher.error.title,
+                heading: &dialogs.launcher.error.heading,
+                subheading: &dialogs.launcher.error.subheading,
+                error_content: &content,
+                info_icon: InfoIcon::Error,
+                info_heading: Some(&dialogs.launcher.error.info_heading),
+                info_subtext: Some(&dialogs.launcher.error.info_subtext),
+                button_label: Some(&dialogs.launcher.error.button_label),
+                mascot_hbitmap: 0,
+                update_check_url,
+                update_check_label: None,
+            },
+        );
     }
 }

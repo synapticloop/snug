@@ -63,12 +63,12 @@ fn run() -> Result<u32, LauncherError> {
 }
 
 /// Surface a [`LauncherError`] to the user via the custom-painted
-/// `error_window::show` dialog — the same window the JDK-install
-/// failure path uses — rather than a bare `MessageBoxW`. The
-/// `error_content` slot gets the formatted error; the launcher pulls
-/// the optional `update_check_url` from the embedded payload (if it
-/// was decodable before the error) and renders it as a clickable
-/// "Check for a newer version" link below the info box.
+/// `error_window::show_launcher_error` dialog — the same window the
+/// JDK-install failure path uses — rather than a bare `MessageBoxW`.
+/// The launcher pulls the optional `update_check_url` from the
+/// embedded payload (if it was decodable before the error) and
+/// renders it as a clickable "Check for a newer version" link below
+/// the info box.
 ///
 /// The dialog body uses [`error::localize_launcher_error`] so the
 /// error text is in the user's locale. Other dialog chrome (title,
@@ -113,39 +113,20 @@ fn show_launcher_error(err: &LauncherError) {
         _ => None,
     };
 
-    let dialogs = snug_launcher::dialogs::dialogs();
-    // Dialog body comes from the localization bundle (the
-    // `{error}` placeholder is the localized error string). The
-    // surrounding chrome — title, heading, subheading, info box —
-    // stays on `dialogs.toml` for now; migrating those keys into
-    // `snug-localisations.<tag>.txt` is a follow-up.
     let localized_error = error::localize_launcher_error(err);
-    let content = localize::t(
-        "launcher.error.content",
-        &[("error", &localized_error)],
-    );
-
-    // SAFETY: `error_window::show` takes a `&str` for the optional
-    // `update_check_url`; we pass `None` when the payload didn't yield
-    // a usable URL. The window is modal and returns once dismissed.
     let update_url_ref = update_url.as_deref();
-    let label_ref: Option<&str> = None;
+
+    // SAFETY: delegating to the public wrapper — `error_window` now
+    // owns the `dialogs::fill` + `ErrorDialog` construction. The
+    // window is modal and returns before any borrow ends. No parent
+    // HWND here (we're the entry point of a console-style binary
+    // that just lost its payload); the dialog renders as a free
+    // topmost window, same as before.
     unsafe {
-        snug_launcher::error_window::show(
+        snug_launcher::error_window::show_launcher_error(
             std::ptr::null_mut(),
-            snug_launcher::error_window::ErrorDialog {
-                title: &dialogs.launcher.error.title,
-                heading: &dialogs.launcher.error.heading,
-                subheading: &dialogs.launcher.error.subheading,
-                error_content: &content,
-                info_icon: snug_launcher::error_window::InfoIcon::Error,
-                info_heading: Some(&dialogs.launcher.error.info_heading),
-                info_subtext: Some(&dialogs.launcher.error.info_subtext),
-                button_label: Some(&dialogs.launcher.error.button_label),
-                mascot_hbitmap: 0,
-                update_check_url: update_url_ref,
-                update_check_label: label_ref,
-            },
+            &localized_error,
+            update_url_ref,
         );
     }
 }
