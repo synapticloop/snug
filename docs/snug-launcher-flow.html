@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>snug launcher runtime flow</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  :root {
+    --bg: #f7f5f0;
+    --card: #ffffff;
+    --line: #e9e3d6;
+    --line-soft: #f1ece1;
+    --text: #14171e;
+    --muted: #7c7a72;
+    --accent: #2f6f5e;
+    --warn: #c97b3f;
+    --err: #b06367;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Outfit', sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+    padding: 56px 0 96px;
+  }
+  .container { max-width: 1180px; margin: 0 auto; padding: 0 32px; }
+  h1 {
+    font-family: 'DM Serif Display', serif;
+    font-size: 38px;
+    font-weight: 400;
+    letter-spacing: -0.005em;
+    margin: 0 0 14px;
+    line-height: 1.15;
+  }
+  .lede {
+    font-size: 17px;
+    color: var(--muted);
+    max-width: 780px;
+    margin: 0 0 40px;
+  }
+  h2 {
+    font-family: 'DM Serif Display', serif;
+    font-size: 24px;
+    font-weight: 400;
+    margin: 56px 0 18px;
+  }
+  h2:first-of-type { margin-top: 32px; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 24px 28px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+  }
+  .mermaid-wrap {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 28px 24px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    overflow-x: auto;
+  }
+  .mermaid svg { max-width: 100%; height: auto; }
+  .grid { display: grid; gap: 16px; }
+  .grid-3 { grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 768px) { .grid-3 { grid-template-columns: 1fr; } }
+  .badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    margin-right: 8px;
+    font-weight: 500;
+  }
+  .badge.mode-off  { background: rgba(176,99,103,0.12); color: var(--err); }
+  .badge.mode-auto { background: rgba(201,123,63,0.14); color: var(--warn); }
+  .badge.mode-force{ background: rgba(47,111,94,0.14);  color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px dashed var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-family: 'JetBrains Mono', monospace; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+  td code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px;
+    color: var(--accent);
+    background: rgba(47,111,94,0.08);
+    padding: 1px 6px;
+    border-radius: 4px;
+  }
+  .err-dot {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  .err-dot.fatal { background: var(--err); }
+  .err-dot.soft  { background: var(--warn); }
+  ol, ul { padding-left: 22px; margin: 8px 0; }
+  li { margin-bottom: 6px; }
+  li code, p code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    color: var(--accent);
+    background: rgba(47,111,94,0.08);
+    padding: 1px 6px;
+    border-radius: 4px;
+  }
+  .note { font-size: 13px; color: var(--muted); margin-top: 32px; }
+  .legend-row { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 18px; font-size: 13px; color: var(--muted); }
+  .legend-row span.sw { display: inline-flex; align-items: center; gap: 6px; }
+  .sw-box {
+    display: inline-block;
+    width: 14px; height: 14px;
+    border-radius: 4px;
+    border: 1px solid var(--line);
+    vertical-align: middle;
+  }
+  .sw-box.ok   { background: #e3efe9; border-color: var(--accent); }
+  .sw-box.warn { background: #fbe6e0; border-color: var(--warn); }
+  .sw-box.err  { background: #fde7e7; border-color: var(--err); }
+  .mode-card strong { display: block; margin: 8px 0 6px; font-size: 15px; }
+  .mode-card p { margin: 0; font-size: 14px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <h1>snug launcher runtime flow</h1>
+  <p class="lede">
+    What happens between a user double-clicking the built <code>App.exe</code> and Java <code>main</code> running —
+    including the six JVM-discovery sources, the <code>--download-jdk</code> prompt,
+    and every error short-circuit to the GUI dialog.
+  </p>
+
+  <h2>Runtime flow</h2>
+  <div class="mermaid-wrap">
+<pre class="mermaid">
+flowchart TD
+  Start([User double-clicks App.exe]) --> SelfPath
+  SelfPath["<b>self_path</b><br/>std::env::current_exe"] -->|fail| E_SelfPath
+  SelfPath --> Scan
+  Scan["<b>find_in_file</b><br/>parse PE, walk resource tree<br/>to RT_RCDATA 'SNUGEMBD'"] -->|no payload| BareStub
+  Scan -->|decode fail| E_Format
+  Scan --> Decode
+
+  Decode["<b>decode payload</b> postcard<br/>localize::init bundles"] --> CacheStep
+  CacheStep["<b>cache::ensure_cached</b><br/>extract every JAR to<br/>%LOCALAPPDATA%\snug\CO\APP\SHA256\app.jar"] -->|io error| E_Io
+  CacheStep --> LogStep
+  LogStep["<b>log::init</b><br/>open snug.log next to JAR<br/>(best-effort)"] --> MainClassStep
+
+  MainClassStep{"<b>Resolve Main-Class</b><br/>config.main_class vs.<br/>JAR manifest"} -->|none| E_NoMainClass
+  MainClassStep --> ModeSwitch
+
+  ModeSwitch{"<b>behavior.download_jdk</b>"} -->|Off / Auto| Discover
+  ModeSwitch -->|Force| SkipDisc
+  SkipDisc["jvm_dir = None<br/>(skip discovery)"] --> Offer
+
+  subgraph Discovery ["JVM discovery (Off + Auto only)"]
+    direction TB
+    Discover["<b>discover_jvm</b>(strategy, min_java)"] --> D_Explicit
+    D_Explicit["1. <b>explicit override</b><br/>(used by post-install retry)"] --> D_JAVA_HOME
+    D_JAVA_HOME["2. <b>JAVA_HOME</b> env var"] --> D_JDK_HOME
+    D_JDK_HOME["3. <b>JDK_HOME</b> env var"] --> D_PATH
+    D_PATH["4. <b>PATH</b> dirs split by ;<br/>(use parent of each entry)"] --> D_Reg
+    D_Reg["5. <b>Registry HKLM\SOFTWARE\</b><br/>JavaSoft\JDK<br/>JavaSoft\JRE<br/>Eclipse Adoptium\JDK<br/>Eclipse Foundation\JDK<br/>Microsoft\JDK"] --> D_Common
+    D_Common["6. <b>common install paths</b><br/>Program Files\Eclipse Adoptium<br/>Program Files\Java<br/>Program Files\Microsoft\jdk-*<br/>..."] --> Discovered
+  end
+
+  Discovered["<b>check_candidate</b><br/>has bin\java.exe or javaw.exe<br/>parse major from release file<br/>or java -version (CREATE_NO_WINDOW)"] --> Offer
+  D_Explicit -.->|<i>major below min_java</i>| E_JvmTooOld
+  D_JAVA_HOME -.->|same| E_JvmTooOld
+  D_JDK_HOME -.->|same| E_JvmTooOld
+  D_PATH -.->|same| E_JvmTooOld
+  D_Reg -.->|same| E_JvmTooOld
+  D_Common -.->|same| E_JvmTooOld
+
+  Offer{"<b>should_offer_install?</b><br/>Off &rarr; never<br/>Auto &rarr; only if jvm_dir was None<br/>Force &rarr; always"} -->|no| FinalCheck
+  Offer -->|yes| InstallStart
+
+  subgraph Install["JDK install: maybe_install flow"]
+    direction TB
+    InstallStart["<b>maybe_install</b>(min_java, %LOCALAPPDATA%\snug\jdk\)"] --> CheckCache
+    CheckCache["<b>find_cached_jdk</b><br/>walk %LOCALAPPDATA%\snug\jdk\<br/>for subdir whose java -version &ge; min_java"] -->|hit| Installed
+    CheckCache -->|miss| FetchMeta
+    FetchMeta["<b>fetch_metadata</b><br/>GET api.adoptium.net/v3/assets/latest/{major}/jdk<br/>parse binaries.link, checksum, size"] -->|fail| E_Meta
+    FetchMeta -->|no GA for major| E_NoMeta
+    FetchMeta -->|ok| ShowPrompt
+    ShowPrompt["<b>TaskDialogIndirect</b><br/>Download / Open in browser / Cancel<br/>+ hyperlink to download URL<br/>(no 'don't show again')"] -->|Cancel| Cancelled
+    ShowPrompt -->|Open browser| Browser
+    ShowPrompt -->|Download| Worker
+    Browser["ShellExecuteW the URL<br/>return Ok(None)"] --> Cancelled
+    Cancelled["<b>Ok(None)</b><br/>courtesy re-run discovery"] --> ReDisc
+    Worker["<b>Worker thread</b><br/>stream zip to disk<br/>SHA-256 verify on file<br/>extract %LOCALAPPDATA%\snug\jdk\VER\"] -->|sha mismatch| E_Sha
+    Worker -->|extract fail| E_Extract
+    Worker -->|no java.exe in tree| E_NoJava
+    Worker -->|ok| Installed
+    Installed["<b>Ok(Some new_home)</b><br/>unsafe set JAVA_HOME=new_home<br/>retry discovery with explicit=new_home"] --> ReDisc
+    ReDisc["<b>discover_jvm</b> with explicit=new_home"] --> PostCheck
+    PostCheck{"found now?"} --> InstallDone
+  end
+
+  E_Meta -.->|fallback| ReDisc
+  E_NoMeta -.->|fallback| ReDisc
+  E_Sha -.->|fallback| ReDisc
+  E_Extract -.->|fallback| ReDisc
+  E_NoJava -.->|fallback| ReDisc
+
+  InstallDone["<b>Install outcome</b><br/>Ok Some &rarr; jvm_dir = new_home<br/>Ok None &rarr; jvm_dir still None<br/>Err &rarr; logged, courtesy re-run"] --> FinalCheck
+  FinalCheck{"<b>jvm_dir still set?</b>"} -->|no| E_JvmNotFound
+  FinalCheck --> LocateDll
+
+  LocateDll["<b>locate_jvm_dll</b><br/>prefer bin\server\jvm.dll<br/>fallback bin\client\jvm.dll"] -->|missing| E_LibLoad
+  LocateDll --> InitArgs
+  InitArgs["<b>InitArgsBuilder</b><br/>version = JNIVersion::V21<br/>option each config.jvm_args<br/>option -Djava.class.path=cached1;cached2;..."] -->|build fail| E_JniInit
+  InitArgs --> SplashStep
+  SplashStep{"splash configured?"} -->|yes| ShowSplash
+  SplashStep -->|no| LoadJvm
+  ShowSplash["<b>splash::show</b> (best-effort)<br/>native window, auto-dismiss<br/>in attach closure"] --> LoadJvm
+  LoadJvm["<b>JavaVM::with_libjvm</b><br/>LoadLibraryW(jvm.dll)<br/>resolve JNI_CreateJavaVM<br/>JNI_CreateJavaVM(init_args)"] -->|fail| E_JniCreate
+  LoadJvm --> Attach
+  Attach["<b>attach_current_thread</b><br/>dismiss splash inside closure"] -->|attach fail| E_JniAttach
+  Attach --> FindClass
+  FindClass["<b>find_class</b>(Main-Class)<br/>dots &rarr; slashes"] -->|not found| E_NoMainClass2
+  FindClass --> ArgsArr
+  ArgsArr["<b>JObjectArray[JString]</b><br/>argv from EXE if behavior.forward_args<br/>else empty placeholder"] --> GetMain
+  GetMain["<b>get_static_method_id</b>(main, '([Ljava/lang/String;)V')"] -->|not found| CheckFx
+  GetMain -->|found| CallMain
+  CheckFx{"is_assignable_from<br/><b>javafx.application.Application</b>?"} -->|yes| LaunchFx
+  CheckFx -->|no| E_NoMainMethod
+  CallMain["<b>call_static_method</b> main(args)"] --> Result
+  LaunchFx["<b>call_static_method</b><br/>Application.launch(class, args)"] --> Result
+  Result{"call result"} -->|MethodNotFound| E_NoMainMethod2
+  Result -->|Java exception pending| E_JavaExc
+  Result -->|ok| OkDone
+  OkDone["<b>Ok(0)</b><br/>splash dismissed in attach closure"] --> DestroyJvm
+  DestroyJvm["best-effort <b>vm.destroy()</b><br/>return exit_code as u32"] --> End([process exits])
+
+  BareStub["<b>stdout</b>: 'bare stub, build with snug'<br/><b>exit code 2</b>"] --> End
+  E_SelfPath["<b>MessageBoxW fallback</b><br/>err.self_path<br/>(payload not yet decodable)"] --> End
+  E_Format["<b>MessageBoxW fallback</b><br/>err.format"] --> End
+  E_Io["<b>error_window</b><br/>err.io"] --> End
+  E_NoMainClass["<b>error_window</b><br/>err.no_main_class<br/>(no jars at all)"] --> End
+  E_JvmTooOld["<b>error_window</b><br/>err.jvm_too_old<br/>(short-circuits from check_candidate)"] --> End
+  E_Meta["<b>error_window</b><br/>jdk.err.metadata_fetch"] --> End
+  E_NoMeta["<b>error_window</b><br/>jdk.err.no_metadata_for_version"] --> End
+  E_Sha["<b>error_window</b><br/>jdk.err.sha256_mismatch"] --> End
+  E_Extract["<b>error_window</b><br/>jdk.err.extract"] --> End
+  E_NoJava["<b>error_window</b><br/>jdk.err.no_java_exe"] --> End
+  E_JvmNotFound["<b>error_window</b><br/>err.jvm_not_found"] --> End
+  E_LibLoad["<b>error_window</b><br/>err.library_load"] --> End
+  E_JniInit["<b>error_window</b><br/>err.jni_init"] --> End
+  E_JniCreate["<b>error_window</b><br/>err.jni_create"] --> End
+  E_JniAttach["<b>error_window</b><br/>err.jni_attach"] --> End
+  E_NoMainClass2["<b>error_window</b><br/>err.main_class_not_found"] --> End
+  E_NoMainMethod["<b>error_window</b><br/>err.no_main_method<br/>(class is not Application)"] --> End
+  E_NoMainMethod2["<b>error_window</b><br/>err.no_main_method<br/>(post-call MethodNotFound)"] --> End
+  E_JavaExc["<b>error_window</b><br/>err.java_exception<br/>detail = Throwable.getMessage<br/>via take_exception_message"] --> End
+
+  classDef err     fill:#fde7e7,stroke:#b06367,color:#5c2528,stroke-width:1px
+  classDef fatal   fill:#fbe6e0,stroke:#c97b3f,color:#5c3520,stroke-width:1px
+  classDef ok      fill:#e3efe9,stroke:#2f6f5e,color:#1f4a3e,stroke-width:1px
+  classDef phase   fill:#f1ece1,stroke:#a89d85,color:#3a3a30,stroke-width:1px
+  class E_SelfPath,E_Format,E_Io,E_NoMainClass,E_JvmTooOld,E_Meta,E_NoMeta,E_Sha,E_Extract,E_NoJava,E_JvmNotFound,E_LibLoad,E_JniInit,E_JniCreate,E_JniAttach,E_NoMainClass2,E_NoMainMethod,E_NoMainMethod2,E_JavaExc err
+  class BareStub fatal
+  class OkDone,DestroyJvm ok
+  class Start,End phase
+</pre>
+  </div>
+
+  <div class="legend-row">
+    <span class="sw"><span class="sw-box ok"></span> normal success path</span>
+    <span class="sw"><span class="sw-box err"></span> error &rarr; error_window (custom-painted GUI dialog)</span>
+    <span class="sw"><span class="sw-box warn"></span> terminal state (not a runtime error)</span>
+  </div>
+
+  <h2>--download-jdk modes</h2>
+  <div class="grid grid-3">
+    <div class="card mode-card">
+      <span class="badge mode-off">off</span>
+      <strong>Discovery only.</strong>
+      <p>If no compatible JVM is found in any of the six sources, launch aborts with <code>JvmNotFound</code>. The install dialog never appears.</p>
+    </div>
+    <div class="card mode-card">
+      <span class="badge mode-auto">auto</span>
+      <strong>Discovery first, prompt on miss.</strong>
+      <p>Same six-step walk; only when all six return empty does the JDK install dialog appear.</p>
+    </div>
+    <div class="card mode-card">
+      <span class="badge mode-force">force</span>
+      <strong>Skip discovery, always prompt.</strong>
+      <p>Bundles a guaranteed Temurin install regardless of <code>JAVA_HOME</code>/registry state. Cancel still courtesy-re-runs discovery so a local GraalVM/Zulu isn't lost.</p>
+    </div>
+  </div>
+
+  <h2>Error &rarr; UI surface</h2>
+  <div class="card">
+    <table>
+      <thead>
+        <tr><th>Variant</th><th>Surface</th><th>Why</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>SelfPath</code>, <code>Format</code></td>
+          <td><span class="err-dot fatal"></span>MessageBoxW</td>
+          <td>Payload not yet decodable &mdash; no <code>AppMetadata</code> to read <code>update_check_url</code> from. Custom window can't be painted without it.</td>
+        </tr>
+        <tr>
+          <td><code>Io</code>, <code>NoMainClass</code>, <code>JvmNotFound</code>, <code>JvmTooOld</code>, <code>LibraryLoad</code>, <code>JniInit</code>, <code>JniCreate</code>, <code>JniAttach</code>, <code>JniInvoke</code>, <code>MainClassNotFound</code>, <code>NoMainMethod</code>, <code>JavaException</code></td>
+          <td><span class="err-dot fatal"></span>error_window</td>
+          <td>Custom-painted modal; localized via <code>localize::t("err.*")</code>; "Check for a newer version" link rendered from <code>AppMetadata.update_check_url</code> when present.</td>
+        </tr>
+        <tr>
+          <td><code>JdkError::*</code> (metadata, sha256, extract, no_java_exe)</td>
+          <td><span class="err-dot fatal"></span>error_window</td>
+          <td>Same window, <code>jdk.err.*</code> keys. Failures inside the install flow don't strand the user &mdash; we courtesy re-run discovery before bailing.</td>
+        </tr>
+        <tr>
+          <td>Bare stub (no <code>SNUGEMBD</code>)</td>
+          <td><span class="err-dot soft"></span>stderr + exit 2</td>
+          <td>Not a real error &mdash; the user ran <code>bin/launcher-stub.exe</code> directly. CLI flags would have produced a real EXE; stderr message points at <code>snug app.jar -o App.exe</code>.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>Quick reference</h2>
+  <ul>
+    <li><strong>JAR cache:</strong> <code>%LOCALAPPDATA%\snug\<company>\<app>\<jar-sha256>\app.jar</code></li>
+    <li><strong>JDK install root:</strong> <code>%LOCALAPPDATA%\snug\jdk\<version>\</code></li>
+    <li><strong>Per-launch log:</strong> <code>%LOCALAPPDATA%\snug\<company>\<app>\<jar-sha256>\snug.log</code></li>
+    <li><strong>Payload storage:</strong> <code>SNUGEMBD</code> magic + u16 version + u32 length + u32 CRC32 + postcard bytes &mdash; stored as <code>RT_RCDATA</code> resource, not binary overlay.</li>
+    <li><strong>JNI version:</strong> hardcoded <code>JNIVersion::V21</code> in the launcher &mdash; Java 25 boots fine via the V21 JNI ABI.</li>
+    <li><strong>Splash lifecycle:</strong> shown after JNI InitArgs build, dismissed inside <code>attach_current_thread</code> (before <code>find_class</code>); <code>Drop</code> cleans up if attach never runs.</li>
+  </ul>
+
+  <p class="note">
+    Source: <code>crates/snug-launcher/src/main.rs</code>,
+    <code>platform/windows.rs</code>,
+    <code>jdk_install.rs</code>,
+    <code>payload_locator.rs</code>,
+    <code>error.rs</code>.
+    Mode semantics: <code>crates/snug-format/src/lib.rs</code> +
+    <code>crates/snug-cli/src/cli.rs</code>.
+  </p>
+
+</div>
+
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    securityLevel: 'loose',
+    flowchart: {
+      curve: 'basis',
+      padding: 14,
+      nodeSpacing: 22,
+      rankSpacing: 36,
+      htmlLabels: true,
+      useMaxWidth: true,
+    },
+    theme: 'base',
+    themeVariables: {
+      fontFamily: "'Outfit', sans-serif",
+      fontSize: '13px',
+      primaryColor: '#ffffff',
+      primaryTextColor: '#14171e',
+      primaryBorderColor: '#c8c0b1',
+      lineColor: '#7c7a72',
+      secondaryColor: '#f1ece1',
+      tertiaryColor: '#fbf9f3',
+      noteBkgColor: '#fbf9f3',
+      noteTextColor: '#3a4256',
+      noteBorderColor: '#e9e3d6',
+    },
+  });
+</script>
+</body>
+</html>
