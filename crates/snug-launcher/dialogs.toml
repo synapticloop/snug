@@ -86,11 +86,11 @@ button_cancel = "Cancel"
 # copy) that a stock TaskDialog `TDE_CONTENT` slot doesn't accommodate.
 
 [jdk_install.progress]
-title = "Install runtime...?"
+title = "Install Runtime"
 main = "Runtime {version} (~{size_mb} MB)"
 content_initial = "Verifying SHA-256 against the file on disk once complete."
 
-heading = "Install Runtime...?"
+heading = "Install Runtime"
 subtitle = "We need to install a runtime so that the application can launch"
 pct_label = "{pct}%"
 phase_label = "Downloading runtime (Windows x64)"
@@ -133,8 +133,8 @@ Snug will continue launching."""
 # changes don't require recompiling layout. `content` accepts
 # placeholders the launcher fills before showing
 # (`{version}`, `{error}`).
-title = "Runtime Installation Failure...!"
-heading = "Install runtime failure...!"
+title = "Runtime Installation Failure"
+heading = "Install runtime failure"
 subheading = "All download attempts were exhausted, we will attempt to launch the application."
 content = """\
 """

@@ -95,7 +95,11 @@ const TIMER_ID: usize = 1;
 const TIMER_MS: u32 = 200;
 
 const WINDOW_W: i32 = 640;
-const WINDOW_H: i32 = 300;
+// Aligned with the rest of the family (`modal_window::WINDOW_H = 320`).
+// The progress / phase / detail rows above the info box still fit —
+// the extra 20 px of vertical breathing room pushes the info box to
+// the canonical 220 px Y position used by the other dialogs.
+const WINDOW_H: i32 = 320;
 
 const MARGIN: i32 = 16;
 const MASCOT_X: i32 = MARGIN;
@@ -127,10 +131,16 @@ const DETAIL_H: i32 = 16;
 
 const INFO_BOX_X: i32 = MARGIN;
 const INFO_BOX_W: i32 = WINDOW_W - MARGIN * 3;
-const INFO_BOX_Y: i32 = 186;
+// Aligned with `modal_window::INFO_BOX_Y` so the progress dialog
+// shares the same family silhouette as the other dialogs.
+const INFO_BOX_Y: i32 = 220;
 const INFO_BOX_H: i32 = 50;
 const INFO_PAD: i32 = 8;
-const INFO_ICON_SIZE: i32 = 12;
+// Aligned with `modal_window::INFO_ICON_SIZE`. The 16 px size was
+// already the family default; this dialog was using the smaller
+// 12 px version, which made the info icon look out of place next
+// to the rest of the family.
+const INFO_ICON_SIZE: i32 = 16;
 
 // Vertical offsets inside the info box. Currently the icon is
 // aligned with the heading baseline (`INFO_PAD - 2` nudges up by 2
@@ -189,7 +199,9 @@ const BUTTON_CLASS_NAME: &str = "BUTTON\0";
 const FONT_FACE: &str = "Segoe UI\0";
 
 // "Downloading Runtime Components" — main heading.
-const HEADING_PT: i32 = 26;
+// Aligned with `modal_window::HEADING_PT` so the progress dialog
+// matches the rest of the family.
+const HEADING_PT: i32 = 22;
 const HEADING_WEIGHT: i32 = FW_SEMIBOLD as i32;
 
 // "We are downloading the runtime components..." — subtitle.

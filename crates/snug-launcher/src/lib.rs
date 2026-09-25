@@ -22,7 +22,6 @@
 // and confined to `#[cfg(windows)]` modules.
 
 pub mod cache;
-pub mod custom_dialog;
 pub mod dialogs;
 pub mod error;
 pub mod error_window;
@@ -31,6 +30,7 @@ pub mod localize;
 pub mod log;
 pub mod manifest;
 pub mod metadata_failed_window;
+pub mod modal_window;
 pub mod payload_locator;
 pub mod progress_window;
 pub mod retry_window;

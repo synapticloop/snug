@@ -10,6 +10,7 @@
 //! cargo run -p snug-launcher --example dialogs_preview -- --kind retry
 //! cargo run -p snug-launcher --example dialogs_preview -- --kind error
 //! cargo run -p snug-launcher --example dialogs_preview -- --kind java-error
+//! cargo run -p snug-launcher --example dialogs_preview -- --kind install-prompt-v5
 //! cargo run -p snug-launcher --example dialogs_preview -- --kind early-bail
 //! ```
 //!
@@ -39,6 +40,12 @@
 //! - `early-bail`      — `MessageBoxW` from `src/main.rs`. The fallback
 //!                        shown when the launcher can't even load its
 //!                        embedded payload.
+//! - `install-prompt-v5` — `MessageBoxW` from `jdk_install::prompt_messagebox`.
+//!                        The comctl32-v5 fallback the launcher shows
+//!                        when `TaskDialogIndirect` isn't available.
+//!                        Since `prompt_messagebox` is private, the
+//!                        example duplicates the call (same pattern as
+//!                        `early-bail`).
 //! - `java-error`      — `error_window::show` invoked from `main.rs`
 //!                        when a [`LauncherError`] (Java stacktrace,
 //!                        `MainClassNotFound`, `JniCreate`, etc.)
@@ -81,6 +88,7 @@ fn main() {
         Kind::Retry => run_retry(),
         Kind::Error => run_error(opts),
         Kind::JavaError => run_java_error(),
+        Kind::InstallPromptV5 => run_install_prompt_v5(),
         Kind::EarlyBail => run_early_bail(),
     };
 
@@ -100,6 +108,7 @@ enum Kind {
     Retry,
     Error,
     JavaError,
+    InstallPromptV5,
     EarlyBail,
 }
 
@@ -111,6 +120,7 @@ impl Kind {
             "retry" => Some(Self::Retry),
             "error" => Some(Self::Error),
             "java-error" => Some(Self::JavaError),
+            "install-prompt-v5" => Some(Self::InstallPromptV5),
             "early-bail" => Some(Self::EarlyBail),
             _ => None,
         }
@@ -123,6 +133,7 @@ impl Kind {
             Self::Retry => "retry",
             Self::Error => "error",
             Self::JavaError => "java-error",
+            Self::InstallPromptV5 => "install-prompt-v5",
             Self::EarlyBail => "early-bail",
         }
     }
@@ -163,7 +174,7 @@ impl Options {
                         .ok_or_else(|| "--kind needs a value".to_string())?;
                     kind = Some(
                         Kind::parse(v)
-                            .ok_or_else(|| format!("unknown --kind {v:?}; expected one of: progress, metadata-failed, retry, error, early-bail"))?,
+                            .ok_or_else(|| format!("unknown --kind {v:?}; expected one of: progress, metadata-failed, retry, error, java-error, install-prompt-v5, early-bail"))?,
                     );
                     i += 2;
                 }
@@ -216,12 +227,13 @@ fn print_help() {
     eprintln!("usage: dialogs_preview --kind <KIND> [options]");
     eprintln!();
     eprintln!("KIND:");
-    eprintln!("  progress         JDK download progress dialog (progress_window::show)");
-    eprintln!("  metadata-failed  Could not reach Adoptium prompt (show_metadata_failed_dialog)");
-    eprintln!("  retry            Try again / Cancel prompt (show_retry_dialog)");
-    eprintln!("  error            Terminal post-install-failure dialog (show_error_dialog)");
-    eprintln!("  java-error       Launcher-runtime error dialog (show_launcher_error)");
-    eprintln!("  early-bail       MessageBoxW from src/main.rs (show_error_box)");
+    eprintln!("  progress           JDK download progress dialog (progress_window::show)");
+    eprintln!("  metadata-failed    Could not reach Adoptium prompt (show_metadata_failed_dialog)");
+    eprintln!("  retry              Try again / Cancel prompt (show_retry_dialog)");
+    eprintln!("  error              Terminal post-install-failure dialog (show_error_dialog)");
+    eprintln!("  java-error         Launcher-runtime error dialog (show_launcher_error)");
+    eprintln!("  install-prompt-v5  MessageBoxW fallback for comctl32-v5 hosts (jdk_install::prompt_messagebox)");
+    eprintln!("  early-bail         MessageBoxW from src/main.rs (show_error_box)");
     eprintln!();
     eprintln!("options:");
     eprintln!("  --static         (progress only) pin at 50%, no animation");
@@ -449,6 +461,52 @@ fn run_java_error() -> Option<i32> {
     eprintln!(
         "dialogs_preview: kind={} button={result}",
         Kind::JavaError.as_str()
+    );
+    Some(result)
+}
+
+fn run_install_prompt_v5() -> Option<i32> {
+    // Mirror `jdk_install::prompt_messagebox` exactly — the
+    // comctl32-v5 fallback the launcher shows when
+    // `TaskDialogIndirect` isn't available. We can't reach the
+    // private function from this example, so duplicate the call
+    // here — same pattern as `run_early_bail`. Sample copy comes
+    // from `[jdk_install.prompt]` in `dialogs.toml` so iterating on
+    // the production strings shows up here too.
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        MessageBoxW, MB_DEFBUTTON1, MB_ICONQUESTION, MB_YESNOCANCEL,
+    };
+
+    let d = snug_launcher::dialogs::dialogs();
+    let prompt = &d.jdk_install.prompt;
+    let title = prompt.title.as_str();
+    let main = prompt.main.as_str();
+    let content = prompt.content.as_str();
+
+    let mut text = String::new();
+    text.push_str(main);
+    text.push_str("\n\n");
+    text.push_str(content);
+
+    let title_w: Vec<u16> = OsStr::new(title)
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let text_w: Vec<u16> = OsStr::new(text.as_str())
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let result = unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text_w.as_ptr(),
+            title_w.as_ptr(),
+            MB_YESNOCANCEL | MB_ICONQUESTION | MB_DEFBUTTON1,
+        )
+    };
+    eprintln!(
+        "dialogs_preview: kind={} MessageBoxW returned {result}",
+        Kind::InstallPromptV5.as_str()
     );
     Some(result)
 }
