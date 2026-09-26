@@ -41,12 +41,12 @@ use windows_sys::Win32::Graphics::Gdi::{
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, DrawIconEx, GetMessageW,
-    GetSystemMetrics, LoadCursorW, LoadImageW, MSG, PostQuitMessage, RegisterClassExW, SendMessageW,
-    SM_CXSCREEN, SM_CYSCREEN, TranslateMessage, BS_PUSHBUTTON, DI_NORMAL, HICON, ICON_BIG,
-    ICON_SMALL, IDC_ARROW, IMAGE_ICON, LR_SHARED, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY,
-    WM_NCDESTROY, WM_PAINT, WM_SETICON, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST,
-    WS_OVERLAPPED, WS_SYSMENU, WS_VISIBLE,
+    AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
+    DrawIconEx, GetMessageW, GetSystemMetrics, LoadCursorW, LoadImageW, MSG, PostQuitMessage,
+    RegisterClassExW, SendMessageW, SM_CXSCREEN, SM_CYSCREEN, TranslateMessage, BS_PUSHBUTTON,
+    DI_NORMAL, HICON, ICON_BIG, ICON_SMALL, IDC_ARROW, IMAGE_ICON, LR_SHARED, WM_CLOSE,
+    WM_COMMAND, WM_CREATE, WM_DESTROY, WM_NCDESTROY, WM_PAINT, WM_SETICON, WNDCLASSEXW,
+    WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_OVERLAPPED, WS_SYSMENU, WS_VISIBLE,
 };
 
 use snug_launcher::dialogs;
@@ -62,8 +62,16 @@ const CLASS_NAME: &str = "snug_preview_launcher_v1\0";
 const WINDOW_TITLE: &str = "snug dialog preview\0";
 
 /// Window dimensions (logical pixels at 96 DPI).
+///
+/// `LAUNCHER_W` / `LAUNCHER_H` describe the **client area**, not the
+/// raw window size — the title bar (~30 px) is added on top at
+/// `CreateWindowExW` time via `AdjustWindowRectEx`. Treating the
+/// constants as client dimensions means the body layout
+/// (`BTN_FIRST_Y`, `BTN_CLOSE_MARGIN_BOTTOM`) is computed in the
+/// same coordinate system the buttons actually live in, so the
+/// Close button can never end up below the visible area.
 const LAUNCHER_W: i32 = 480;
-const LAUNCHER_H: i32 = 720;
+const LAUNCHER_H: i32 = 760;
 
 /// Header icon painted at the top of the launcher window's client
 /// area — the EXE's embedded MAINICON, centred horizontally. 128 px
@@ -286,11 +294,31 @@ fn main() {
         };
         let _atom = RegisterClassExW(&wc);
 
-        // Centre on primary monitor.
+        // `LAUNCHER_W` / `LAUNCHER_H` describe the **client area**.
+        // `AdjustWindowRectEx` adds the title-bar / non-client chrome
+        // to that rectangle, so we hand the *expanded* dimensions to
+        // `CreateWindowExW`. Centring on the primary monitor uses the
+        // expanded width/height (which is what the user actually sees
+        // on the desktop), not the client area.
+        let mut client_rect = RECT {
+            left: 0,
+            top: 0,
+            right: LAUNCHER_W,
+            bottom: LAUNCHER_H,
+        };
+        AdjustWindowRectEx(
+            &mut client_rect,
+            WS_CAPTION | WS_SYSMENU | WS_OVERLAPPED,
+            0,
+            WS_EX_TOPMOST,
+        );
+        let win_w = client_rect.right - client_rect.left;
+        let win_h = client_rect.bottom - client_rect.top;
+
         let sw = GetSystemMetrics(SM_CXSCREEN);
         let sh = GetSystemMetrics(SM_CYSCREEN);
-        let x = (sw - LAUNCHER_W) / 2;
-        let y = (sh - LAUNCHER_H) / 2;
+        let x = (sw - win_w) / 2;
+        let y = (sh - win_h) / 2;
 
         let hwnd = CreateWindowExW(
             WS_EX_TOPMOST,
@@ -299,8 +327,8 @@ fn main() {
             WS_CAPTION | WS_SYSMENU | WS_OVERLAPPED | WS_VISIBLE,
             x,
             y,
-            LAUNCHER_W,
-            LAUNCHER_H,
+            win_w,
+            win_h,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             hinst,
