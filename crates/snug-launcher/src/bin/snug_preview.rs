@@ -81,24 +81,21 @@ const HEADER_ICON_SIZE: i32 = 128;
 const HEADER_ICON_Y: i32 = 8;
 
 /// Button layout — single column, 24 px outer margin, 8 px gap.
-/// `BTN_FIRST_Y` is set below the header icon + heading + subtitle,
-/// not at the top of the window, so the icon sits above the buttons.
+/// `BTN_FIRST_Y` is set below the header icon + subtitle so the
+/// icon and one-line copy sit above the buttons.
 const BTN_X: i32 = 24;
 const BTN_W: i32 = LAUNCHER_W - 48;
 const BTN_H: i32 = 38;
 const BTN_GAP: i32 = 8;
-const BTN_FIRST_Y: i32 = 228;
+const BTN_FIRST_Y: i32 = 200;
 const BTN_CLOSE_W: i32 = 96;
 const BTN_CLOSE_H: i32 = 36;
 const BTN_CLOSE_MARGIN_BOTTOM: i32 = 16;
 
-/// Heading text painted in `WM_PAINT`. Y positions are absolute
-/// pixels from the top of the client area — `HEADING_Y` sits below
-/// the header icon with a 12 px gap, `SUBTITLE_Y` follows at +32.
-const HEADING_TEXT: &str = "snug dialog preview";
+/// Subtitle text painted in `WM_PAINT`. `SUBTITLE_Y` sits directly
+/// below the header icon (icon ends at y=136) with a 16 px gap.
 const SUBTITLE_TEXT: &str = "Click a button to open the corresponding dialog.";
-const HEADING_Y: i32 = 148;
-const SUBTITLE_Y: i32 = 180;
+const SUBTITLE_Y: i32 = 152;
 
 /// `WM_SETFONT` isn't exported as a named constant by windows-sys
 /// 0.59. Value from winuser.h.
@@ -475,23 +472,7 @@ unsafe extern "system" fn wndproc(
                 );
             }
 
-            // 2. Heading — slightly darker than the subtitle.
-            SetTextColor(hdc, 0x00202020);
-            let mut rect_head = RECT {
-                left: BTN_X,
-                top: HEADING_Y,
-                right: LAUNCHER_W - BTN_X,
-                bottom: HEADING_Y + 28,
-            };
-            DrawTextW(
-                hdc,
-                wide(HEADING_TEXT).as_ptr(),
-                -1,
-                &mut rect_head,
-                DT_LEFT | DT_SINGLELINE,
-            );
-
-            // 3. Subtitle — mid grey.
+            // 2. Subtitle — one line of mid-grey copy below the icon.
             SetTextColor(hdc, 0x00606060);
             let mut rect_sub = RECT {
                 left: BTN_X,
