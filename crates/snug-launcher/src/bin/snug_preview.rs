@@ -29,7 +29,7 @@
 
 #![cfg(windows)]
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::Duration;
@@ -40,13 +40,15 @@ use windows_sys::Win32::Graphics::Gdi::{
     PAINTSTRUCT, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    DrawIconEx, GetMessageW, GetSystemMetrics, LoadCursorW, LoadImageW, MSG, PostQuitMessage,
-    RegisterClassExW, SendMessageW, SM_CXSCREEN, SM_CYSCREEN, TranslateMessage, BS_PUSHBUTTON,
-    DI_NORMAL, HICON, ICON_BIG, ICON_SMALL, IDC_ARROW, IMAGE_ICON, LR_SHARED, WM_CLOSE,
-    WM_COMMAND, WM_CREATE, WM_DESTROY, WM_NCDESTROY, WM_PAINT, WM_SETICON, WNDCLASSEXW,
-    WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_OVERLAPPED, WS_SYSMENU, WS_VISIBLE,
+    DrawIconEx, GetMessageW, GetSystemMetrics, LoadCursorW, LoadImageW, MSG,
+    PostThreadMessageW, RegisterClassExW, SendMessageW, SM_CXSCREEN, SM_CYSCREEN,
+    TranslateMessage, BS_PUSHBUTTON, DI_NORMAL, HICON, ICON_BIG, ICON_SMALL, IDC_ARROW,
+    IMAGE_ICON, LR_SHARED, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_NCDESTROY, WM_PAINT,
+    WM_QUIT, WM_SETICON, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_OVERLAPPED,
+    WS_SYSMENU, WS_VISIBLE,
 };
 
 use snug_launcher::dialogs;
@@ -193,25 +195,39 @@ fn header_icon(hinst: HMODULE) -> HICON {
 /// binary — the launcher window plus one per spawned dialog. Initial
 /// value of 1 accounts for the launcher itself.
 ///
-/// The process only exits when this hits zero. Decremented when the
-/// launcher's `WM_NCDESTROY` fires, and when each spawned dialog's
-/// thread finishes its `show()` call.
+/// The process only exits when this hits zero. The launcher's slot
+/// is released by `WM_NCDESTROY` (one-shot, after the launcher is
+/// destroyed); each spawned dialog's slot is released by the
+/// `SlotGuard` Drop inside its thread closure. When the count
+/// reaches zero we post `WM_QUIT` to the **main** thread (not the
+/// calling thread) so the launcher's `GetMessageW` returns 0 and
+/// `main` exits. Posting to the spawned thread instead would only
+/// kill that one dialog, leaving the launcher blocked forever.
+///
+/// `PostThreadMessageW` targets the thread's message queue directly,
+/// so it works whether the launcher window still exists or has
+/// already been destroyed — both the launcher and the dialogs hold
+/// their own slots independently.
 static OPEN_WINDOWS: AtomicUsize = AtomicUsize::new(1);
 
-/// Decrement the window counter; if it was the last window, post
-/// `WM_QUIT` to the calling thread's message queue so the message
-/// loop (or, on a dialog thread, the modal `show()` loop) exits.
-///
-/// Safe to call from any thread: `PostQuitMessage` targets the
-/// current thread.
-unsafe fn maybe_quit_on_last() {
+/// Win32 thread id of the launcher main thread. Captured at startup
+/// via `GetCurrentThreadId`; read by `release_slot` to send the
+/// final `WM_QUIT` to the right place.
+static MAIN_THREAD_ID: AtomicU32 = AtomicU32::new(0);
+
+/// Release one slot from `OPEN_WINDOWS`. If this was the last slot,
+/// post `WM_QUIT` to the launcher main thread so `main` returns.
+unsafe fn release_slot() {
     let prev = OPEN_WINDOWS.fetch_sub(1, Ordering::SeqCst);
     if prev == 1 {
-        // SAFETY: `PostQuitMessage` targets the **calling** thread's
-        // message queue; safe to call from any thread as long as we
-        // own the slot we're decrementing (which we do, via the
-        // guard on the spawn-dialog closure).
-        unsafe { PostQuitMessage(0) };
+        // SAFETY: `PostThreadMessageW` posts to the named thread's
+        // message queue. It's safe to call from any thread, and we
+        // own the slot we're decrementing (either via the dialog's
+        // SlotGuard or the launcher's WM_NCDESTROY path).
+        let main_tid = MAIN_THREAD_ID.load(Ordering::SeqCst);
+        if main_tid != 0 {
+            unsafe { PostThreadMessageW(main_tid, WM_QUIT, 0, 0) };
+        }
     }
 }
 
@@ -221,25 +237,38 @@ unsafe fn maybe_quit_on_last() {
 ///
 /// Dialogs run on their own threads so closing the launcher doesn't
 /// destroy them, and so the user can spawn multiple dialogs
-/// side-by-side from the launcher.
+/// side-by-side from the launcher. The launcher releases its own
+/// slot in `WM_NCDESTROY`; the dialog's slot is released by the
+/// `SlotGuard` here.
 fn spawn_dialog<F>(f: F)
 where
     F: FnOnce() + Send + 'static,
 {
     OPEN_WINDOWS.fetch_add(1, Ordering::SeqCst);
-    let _slot = SlotGuard;
-    thread::spawn(move || {
-        let _slot = SlotGuard;
-        f();
-    });
+    // `Builder::spawn` returns `Result` so we can release the slot
+    // if the OS refuses the thread (resource exhaustion, etc.).
+    // The common path is `Ok(_)`, where the SlotGuard inside the
+    // closure will fire when `f` returns and decrement the counter
+    // for us.
+    if thread::Builder::new()
+        .spawn(move || {
+            let _slot = SlotGuard;
+            f();
+        })
+        .is_err()
+    {
+        // Spawn failed — release the slot manually so the count
+        // doesn't leak above the live-window count.
+        unsafe { release_slot() };
+    }
 }
 
-/// `OPEN_WINDOWS` accounting guard. Decremented on drop so a panic in
-/// the dialog thread still releases the window slot.
+/// `OPEN_WINDOWS` accounting guard. Decremented on drop so a panic
+/// in the dialog thread still releases the window slot.
 struct SlotGuard;
 impl Drop for SlotGuard {
     fn drop(&mut self) {
-        unsafe { maybe_quit_on_last() };
+        unsafe { release_slot() };
     }
 }
 
@@ -261,6 +290,15 @@ const ID_BTN_CLOSE: usize = 1099;
 
 fn main() {
     unsafe {
+        // Capture the launcher main thread id up front so the
+        // window-counter accounting can post `WM_QUIT` to *this*
+        // thread when the last dialog (and the launcher itself)
+        // closes. Posting to the calling thread — which is what
+        // `PostQuitMessage` does — would target a spawned dialog
+        // thread instead, leaving the main thread blocked forever
+        // once the launcher was closed.
+        MAIN_THREAD_ID.store(GetCurrentThreadId(), Ordering::SeqCst);
+
         let hinst = GetModuleHandleW(std::ptr::null());
         let class_name_w = wide(CLASS_NAME);
 
@@ -562,10 +600,11 @@ unsafe extern "system" fn wndproc(
         WM_NCDESTROY => {
             // Launcher window is fully gone — release its slot in the
             // window counter. If no dialogs are still running, this
-            // posts `WM_QUIT` to the launcher thread and the process
-            // exits.
+            // decrements the counter to 0 and posts `WM_QUIT` to the
+            // main thread (via `release_slot`), so the launcher's
+            // message loop exits cleanly.
             unsafe {
-                maybe_quit_on_last();
+                release_slot();
             }
             0
         }
