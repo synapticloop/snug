@@ -16,6 +16,13 @@ REM   4. target\...\snug.exe assets\snug-javafx-demo.jar
 REM      Reads snug.options from CWD, writes assets\snug-javafx-demo.exe.
 REM   5. Verify snug.exe contains the stub bytes we just produced
 REM      (scripts\verify-embedded-stub.ps1; sha256 substring check).
+REM   6. (cargo | cargo zig)build --release -p snug-launcher --bin snug_preview --bin stamp_preview_icon
+REM      Then run the freshly-built stamp_preview_icon against snug_preview.exe
+REM      so it ends up with the assets\snug-preview.png icon (the dev icon, not
+REM      the production snug-icon.png that compile_for_everything links into
+REM      every dev-time bin). See crates/snug-launcher/src/bin\stamp_preview_icon.rs
+REM      for why this needs to be a separate post-link step rather than a
+REM      build.rs trick.
 REM
 REM Run from the repo root:
 REM     .\scripts\build-release.cmd
@@ -25,6 +32,10 @@ REM     --SkipLauncherRebuild   Skip steps 1+2 (stub unchanged from prior build)
 REM                             --CrossCompile is also ignored in this case.
 REM     --SkipPackage           Skip step 4 (build launcher + CLI only).
 REM     --SkipVerify            Skip step 5 (embedded-stub sha256 sanity check).
+REM     --SkipDevTools          Skip step 6 (dev-only snug_preview /
+REM                             stamp_preview_icon build + icon stamp). Use
+REM                             this for CI release pipelines that don't ship
+REM                             dev artefacts to test machines.
 REM     --CrossCompile          Cross-compile to x86_64-pc-windows-gnu via
 REM                             cargo-zigbuild (for non-Windows dev hosts).
 REM                             Requires zig, cargo-zigbuild on PATH and the
@@ -64,6 +75,7 @@ REM ---------------------------------------------------------------------------
 set "SKIP_LAUNCHER_REBUILD=0"
 set "SKIP_PACKAGE=0"
 set "SKIP_VERIFY=0"
+set "SKIP_DEV_TOOLS=0"
 set "CROSS_COMPILE=0"
 set "CLEAN=0"
 
@@ -72,6 +84,7 @@ if "%~1"=="" goto args_done
 if /i "%~1"=="--SkipLauncherRebuild" set "SKIP_LAUNCHER_REBUILD=1"
 if /i "%~1"=="--SkipPackage"         set "SKIP_PACKAGE=1"
 if /i "%~1"=="--SkipVerify"          set "SKIP_VERIFY=1"
+if /i "%~1"=="--SkipDevTools"        set "SKIP_DEV_TOOLS=1"
 if /i "%~1"=="--CrossCompile"        set "CROSS_COMPILE=1"
 if /i "%~1"=="--Clean"               set "CLEAN=1"
 shift
@@ -86,13 +99,17 @@ if "!CROSS_COMPILE!"=="1" if "!SKIP_LAUNCHER_REBUILD!"=="1" (
 set "STUB=bin\launcher-stub.exe"
 set "DEMO_JAR=assets\snug-javafx-demo.jar"
 set "DEMO_EXE=assets\snug-javafx-demo.exe"
+set "PREVIEW_PNG=assets\snug-preview.png"
 
 if "!CROSS_COMPILE!"=="1" (
     set "TARGET_TRIPLE=x86_64-pc-windows-gnu"
     set "BUILT_LAUNCHER_EXE=target\!TARGET_TRIPLE!\release\snug-launcher.exe"
     set "BUILT_CLI_EXE=target\!TARGET_TRIPLE!\release\snug.exe"
+    set "BUILT_PREVIEW_EXE=target\!TARGET_TRIPLE!\release\snug_preview.exe"
+    set "BUILT_STAMP_EXE=target\!TARGET_TRIPLE!\release\stamp_preview_icon.exe"
     set "BUILD_LAUNCHER_CMD=cargo zigbuild --target !TARGET_TRIPLE! --release -p snug-launcher"
     set "BUILD_CLI_CMD=cargo zigbuild --target !TARGET_TRIPLE! --release -p snug-cli"
+    set "BUILD_DEV_TOOLS_CMD=cargo zigbuild --target !TARGET_TRIPLE! --release -p snug-launcher --bin snug_preview --bin stamp_preview_icon"
     where cargo-zigbuild >nul 2>nul
     if errorlevel 1 (
         echo [build-release] --CrossCompile requires cargo-zigbuild on PATH. Install with:
@@ -103,8 +120,11 @@ if "!CROSS_COMPILE!"=="1" (
     set "TARGET_TRIPLE=x86_64-pc-windows-msvc"
     set "BUILT_LAUNCHER_EXE=target\release\snug-launcher.exe"
     set "BUILT_CLI_EXE=target\release\snug.exe"
+    set "BUILT_PREVIEW_EXE=target\release\snug_preview.exe"
+    set "BUILT_STAMP_EXE=target\release\stamp_preview_icon.exe"
     set "BUILD_LAUNCHER_CMD=cargo build --release -p snug-launcher"
     set "BUILD_CLI_CMD=cargo build --release -p snug-cli"
+    set "BUILD_DEV_TOOLS_CMD=cargo build --release -p snug-launcher --bin snug_preview --bin stamp_preview_icon"
 )
 
 echo.
@@ -229,6 +249,52 @@ echo ==^> Skipping embedded-stub verification ^(--SkipVerify^)
 :after_verify
 
 REM ---------------------------------------------------------------------------
+REM 6. Build the dev-only snug_preview + stamp_preview_icon binaries and stamp
+REM    the preview icon into snug_preview.exe. These live in src/bin/ and aren't
+REM    built by step 1's `cargo build -p snug-launcher` (which only targets the
+REM    primary bin). Skip with --SkipDevTools for CI pipelines that don't ship
+REM    dev artefacts.
+REM ---------------------------------------------------------------------------
+
+if "!SKIP_DEV_TOOLS!"=="1" goto skip_dev_tools
+
+echo.
+echo ==^> !BUILD_DEV_TOOLS_CMD!
+call !BUILD_DEV_TOOLS_CMD!
+if errorlevel 1 (
+    echo [build-release] dev-tools build failed with exit code %errorlevel%
+    exit /b %errorlevel%
+)
+if not exist "!BUILT_PREVIEW_EXE!" (
+    echo [build-release] Expected preview binary at !BUILT_PREVIEW_EXE! but it was not produced.
+    exit /b 1
+)
+if not exist "!BUILT_STAMP_EXE!" (
+    echo [build-release] Expected stamp helper at !BUILT_STAMP_EXE! but it was not produced.
+    exit /b 1
+)
+if not exist "!PREVIEW_PNG!" (
+    echo [build-release] Preview icon PNG not found at !PREVIEW_PNG!.
+    exit /b 1
+)
+
+echo.
+echo ==^> !BUILT_STAMP_EXE! !BUILT_PREVIEW_EXE! !PREVIEW_PNG!
+"!BUILT_STAMP_EXE!" "!BUILT_PREVIEW_EXE!" "!PREVIEW_PNG!"
+if errorlevel 1 (
+    echo [build-release] icon stamp failed with exit code %errorlevel%
+    exit /b %errorlevel%
+)
+
+goto after_dev_tools
+
+:skip_dev_tools
+echo.
+echo ==^> Skipping dev-tools build + icon stamp ^(--SkipDevTools^)
+
+:after_dev_tools
+
+REM ---------------------------------------------------------------------------
 REM Summary.
 REM ---------------------------------------------------------------------------
 
@@ -236,8 +302,9 @@ echo.
 echo OK
 echo.
 echo Sizes:
-for %%I in ("!STUB!")          do echo   Launcher stub:        !STUB!          ^(%%~zI bytes^)
-for %%I in ("!BUILT_CLI_EXE!") do echo   snug CLI:             !BUILT_CLI_EXE! ^(%%~zI bytes^)
-for %%I in ("!DEMO_EXE!")      do echo   Demo EXE:             !DEMO_EXE!      ^(%%~zI bytes^)
+for %%I in ("!STUB!")            do echo   Launcher stub:          !STUB!            ^(%%~zI bytes^)
+for %%I in ("!BUILT_CLI_EXE!")   do echo   snug CLI:               !BUILT_CLI_EXE!   ^(%%~zI bytes^)
+for %%I in ("!DEMO_EXE!")        do echo   Demo EXE:               !DEMO_EXE!        ^(%%~zI bytes^)
+for %%I in ("!BUILT_PREVIEW_EXE!") do ( if exist "!BUILT_PREVIEW_EXE!" echo   snug_preview:           !BUILT_PREVIEW_EXE! ^(%%~zI bytes^) )
 
 endlocal
