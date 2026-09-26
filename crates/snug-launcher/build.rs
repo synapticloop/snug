@@ -26,6 +26,26 @@
 //! available; on hosts without it the build fails loudly with a
 //! clear error from `embed-resource`. Dev builds on
 //! `windows-latest` runners have `rc.exe` available.
+//!
+//! **`snug_preview.exe` icon override** (uses
+//! `assets/snug-preview.png` instead of `snug-icon.png`). The
+//! un-binned MAINICON above applies to every dev-time bin in this
+//! crate (primary launcher, examples, tests), including the
+//! preview binary. To swap to the preview-specific icon, run the
+//! `stamp_preview_icon` helper **after** `cargo build --bin
+//! snug_preview`:
+//!
+//! ```bash
+//! cargo build --bin snug_preview
+//! cargo run --bin stamp_preview_icon
+//! ```
+//!
+//! See `crates/snug-launcher/src/bin/stamp_preview_icon.rs` for the
+//! helper. Cargo doesn't expose a post-link hook, and
+//! `compile_for_everything` can't apply per-bin overrides without
+//! a linker-resource conflict, so a manual step is the cleanest
+//! path. The first build also needs `cargo build --bin
+//! stamp_preview_icon` once to compile the helper.
 
 use std::env;
 use std::fs;
