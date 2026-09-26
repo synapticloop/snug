@@ -30,23 +30,23 @@
 #![cfg(windows)]
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::Duration;
 
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows_sys::Win32::Foundation::{HMODULE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, CreateFontW, DT_LEFT, DT_SINGLELINE, DrawTextW, EndPaint, HBRUSH, HFONT,
     PAINTSTRUCT, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, DrawIconEx, GetMessageW,
     GetSystemMetrics, LoadCursorW, LoadImageW, MSG, PostQuitMessage, RegisterClassExW, SendMessageW,
-    SM_CXSCREEN, SM_CYSCREEN, TranslateMessage, BS_PUSHBUTTON, HICON, ICON_BIG, ICON_SMALL,
-    IDC_ARROW, IMAGE_ICON, LR_SHARED, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_NCDESTROY,
-    WM_PAINT, WM_SETICON, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_OVERLAPPED,
-    WS_SYSMENU, WS_VISIBLE,
+    SM_CXSCREEN, SM_CYSCREEN, TranslateMessage, BS_PUSHBUTTON, DI_NORMAL, HICON, ICON_BIG,
+    ICON_SMALL, IDC_ARROW, IMAGE_ICON, LR_SHARED, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY,
+    WM_NCDESTROY, WM_PAINT, WM_SETICON, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST,
+    WS_OVERLAPPED, WS_SYSMENU, WS_VISIBLE,
 };
 
 use snug_launcher::dialogs;
@@ -65,19 +65,32 @@ const WINDOW_TITLE: &str = "snug dialog preview\0";
 const LAUNCHER_W: i32 = 480;
 const LAUNCHER_H: i32 = 720;
 
-/// Button layout — single column, 24px outer margin, 8px gap.
+/// Header icon painted at the top of the launcher window's client
+/// area — the EXE's embedded MAINICON, centred horizontally. 128 px
+/// reads well at HiDPI without overshooting the available width
+/// (window is 480 px, icon is centred with 176 px on either side).
+const HEADER_ICON_SIZE: i32 = 128;
+const HEADER_ICON_Y: i32 = 8;
+
+/// Button layout — single column, 24 px outer margin, 8 px gap.
+/// `BTN_FIRST_Y` is set below the header icon + heading + subtitle,
+/// not at the top of the window, so the icon sits above the buttons.
 const BTN_X: i32 = 24;
 const BTN_W: i32 = LAUNCHER_W - 48;
 const BTN_H: i32 = 38;
 const BTN_GAP: i32 = 8;
-const BTN_FIRST_Y: i32 = 100;
+const BTN_FIRST_Y: i32 = 228;
 const BTN_CLOSE_W: i32 = 96;
 const BTN_CLOSE_H: i32 = 36;
 const BTN_CLOSE_MARGIN_BOTTOM: i32 = 16;
 
-/// Heading text painted in `WM_PAINT`.
+/// Heading text painted in `WM_PAINT`. Y positions are absolute
+/// pixels from the top of the client area — `HEADING_Y` sits below
+/// the header icon with a 12 px gap, `SUBTITLE_Y` follows at +32.
 const HEADING_TEXT: &str = "snug dialog preview";
 const SUBTITLE_TEXT: &str = "Click a button to open the corresponding dialog.";
+const HEADING_Y: i32 = 148;
+const SUBTITLE_Y: i32 = 180;
 
 /// `WM_SETFONT` isn't exported as a named constant by windows-sys
 /// 0.59. Value from winuser.h.
@@ -126,6 +139,45 @@ fn load_exe_main_icons(
             if !by_name_small.is_null() { by_name_small } else { by_id_small },
         )
     }
+}
+
+// ============================================================================
+//  Header icon (painted at the top of the launcher window)
+// ============================================================================
+
+/// Lazily-loaded handle for the 128×128 MAINICON that the launcher
+/// window paints at the top of its client area. The underlying
+/// `LoadImageW` call is relatively expensive — multi-millisecond,
+/// plus a roundtrip into the resource directory — and the result is
+/// invariant for the lifetime of the EXE module, so we cache it in
+/// a `OnceLock` and only call LoadImageW once per process. The
+/// `LR_SHARED` flag means the handle stays valid forever; we never
+/// `DestroyIcon` it (and can't, even if we wanted to — `LR_SHARED`
+/// makes the icon owned by the system).
+///
+/// `HICON` is a raw pointer (`*mut c_void`), which isn't `Sync` and
+/// can't sit directly in a `OnceLock` static. We store the bit
+/// pattern as `usize` instead and cast on read; the load still
+/// happens exactly once.
+static HEADER_ICON: OnceLock<usize> = OnceLock::new();
+
+/// Return the cached header-icon handle, loading it on first call.
+/// Returns a null `HICON` if LoadImageW fails — the paint path
+/// checks for null and skips the draw in that case (we never
+/// want a load failure to crash the paint loop).
+fn header_icon(hinst: HMODULE) -> HICON {
+    let bits = *HEADER_ICON.get_or_init(|| unsafe {
+        let mainicon_w: Vec<u16> = "MAINICON\0".encode_utf16().collect();
+        LoadImageW(
+            hinst,
+            mainicon_w.as_ptr(),
+            IMAGE_ICON,
+            HEADER_ICON_SIZE,
+            HEADER_ICON_SIZE,
+            LR_SHARED,
+        ) as usize
+    });
+    bits as *mut std::ffi::c_void
 }
 
 // ============================================================================
@@ -366,18 +418,42 @@ unsafe extern "system" fn wndproc(
             // font as the buttons (10pt Segoe UI), reused via
             // SelectObject so the system font doesn't bleed through.
             let hfont = create_button_font();
+            let hinst = GetModuleHandleW(std::ptr::null());
             let mut ps: PAINTSTRUCT = std::mem::zeroed();
             let hdc = BeginPaint(hwnd, &mut ps);
             let prev_font = SelectObject(hdc, hfont as _);
 
             SetBkMode(hdc, TRANSPARENT as i32);
-            // Heading — slightly darker than the subtitle.
+
+            // 1. Header icon — centred horizontally at the top of
+            //    the client area. The HICON is loaded once via the
+            //    `OnceLock` in `header_icon()` and reused on every
+            //    subsequent paint (LR_SHARED keeps the handle valid
+            //    for the lifetime of the EXE module, so no
+            //    DestroyIcon is needed).
+            let hicon = header_icon(hinst);
+            if !hicon.is_null() {
+                let icon_x = (LAUNCHER_W - HEADER_ICON_SIZE) / 2;
+                DrawIconEx(
+                    hdc,
+                    icon_x,
+                    HEADER_ICON_Y,
+                    hicon,
+                    HEADER_ICON_SIZE,
+                    HEADER_ICON_SIZE,
+                    0,
+                    std::ptr::null_mut(),
+                    DI_NORMAL,
+                );
+            }
+
+            // 2. Heading — slightly darker than the subtitle.
             SetTextColor(hdc, 0x00202020);
             let mut rect_head = RECT {
                 left: BTN_X,
-                top: 16,
+                top: HEADING_Y,
                 right: LAUNCHER_W - BTN_X,
-                bottom: 48,
+                bottom: HEADING_Y + 28,
             };
             DrawTextW(
                 hdc,
@@ -387,13 +463,13 @@ unsafe extern "system" fn wndproc(
                 DT_LEFT | DT_SINGLELINE,
             );
 
-            // Subtitle — mid grey.
+            // 3. Subtitle — mid grey.
             SetTextColor(hdc, 0x00606060);
             let mut rect_sub = RECT {
                 left: BTN_X,
-                top: 52,
+                top: SUBTITLE_Y,
                 right: LAUNCHER_W - BTN_X,
-                bottom: 88,
+                bottom: SUBTITLE_Y + 24,
             };
             DrawTextW(
                 hdc,
