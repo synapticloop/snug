@@ -91,6 +91,38 @@ fn stamp_icon(exe: &std::path::Path, png: &std::path::Path) -> Result<(), String
         .cloned()
         .unwrap_or_default();
 
+    // Two-step cleanup before adding the new icon:
+    //
+    //   1. `remove_main_icon` strips the RT_GROUP_ICON MAINICON entry
+    //      and the RT_ICON entries it currently references. That's
+    //      what editpe's docs explicitly recommend before
+    //      `set_main_icon`.
+    //
+    //   2. **But** every previous stamp (including the ones before
+    //      this fix landed) appended new icons with monotonically
+    //      higher IDs and left the *previous* MAINICON's icons as
+    //      orphans in RT_ICON. `remove_main_icon` doesn't see those
+    //      orphans because no group currently points at them, so a
+    //      naive stamp grows the resource section by 6 PNGs per run
+    //      forever. Clear RT_ICON in full after the group-side
+    //      cleanup so only the freshly-added icons survive.
+    //
+    // `RT_ICON` = id 3 in the Windows resource-type namespace.
+    // `Image::set_resource_directory` rebuilds the on-disk section
+    // from the in-memory tree, so clearing entries here drops the
+    // orphan bytes from the file too — not just the directory view.
+    resources
+        .remove_main_icon()
+        .map_err(|e| format!("remove_main_icon: {e}"))?;
+
+    let icon_table_id = editpe::ResourceEntryName::ID(3);
+    if let Some(editpe::ResourceEntry::Table(icon_table)) = resources.root_mut().get_mut(&icon_table_id) {
+        let keys: Vec<_> = icon_table.entries().into_iter().cloned().collect();
+        for k in keys {
+            icon_table.remove(k);
+        }
+    }
+
     resources
         .set_main_icon_file(png_str)
         .map_err(|e| format!("set_main_icon_file({png_str}): {e}"))?;
