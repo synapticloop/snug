@@ -42,10 +42,11 @@ use windows_sys::Win32::Graphics::Gdi::{
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-    GetSystemMetrics, LoadCursorW, MSG, PostQuitMessage, RegisterClassExW, SendMessageW,
-    SM_CXSCREEN, SM_CYSCREEN, TranslateMessage, BS_PUSHBUTTON, IDC_ARROW, WM_CLOSE, WM_COMMAND,
-    WM_CREATE, WM_DESTROY, WM_NCDESTROY, WM_PAINT, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
-    WS_EX_TOPMOST, WS_OVERLAPPED, WS_SYSMENU, WS_VISIBLE,
+    GetSystemMetrics, LoadCursorW, LoadImageW, MSG, PostQuitMessage, RegisterClassExW, SendMessageW,
+    SM_CXSCREEN, SM_CYSCREEN, TranslateMessage, BS_PUSHBUTTON, HICON, ICON_BIG, ICON_SMALL,
+    IDC_ARROW, IMAGE_ICON, LR_SHARED, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_NCDESTROY,
+    WM_PAINT, WM_SETICON, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_OVERLAPPED,
+    WS_SYSMENU, WS_VISIBLE,
 };
 
 use snug_launcher::dialogs;
@@ -81,6 +82,51 @@ const SUBTITLE_TEXT: &str = "Click a button to open the corresponding dialog.";
 /// `WM_SETFONT` isn't exported as a named constant by windows-sys
 /// 0.59. Value from winuser.h.
 const WM_SETFONT: u32 = 0x0030;
+
+/// Load the EXE's embedded `MAINICON` group at two sizes for the
+/// window class. `LR_SHARED` keeps Windows from handing us a
+/// per-process copy that we'd have to `DestroyIcon` later — the
+/// icon handle stays valid for the lifetime of the EXE module.
+fn load_exe_main_icons(
+    hinst: windows_sys::Win32::Foundation::HMODULE,
+) -> (HICON, HICON) {
+    // RT_GROUP_ICON entries are conventionally named "MAINICON"
+    // (Windows icon convention). editpe writes the group under the
+    // *name* rather than under numeric ID 1, so the primary lookup
+    // is by name. The numeric ID 1 fallback covers any future
+    // upstream that switches to a numeric MAINICON.
+    let mainicon_w: Vec<u16> = "MAINICON\0".encode_utf16().collect();
+    let id1: *const u16 = 1 as *const u16;
+    unsafe {
+        let by_name_big = LoadImageW(
+            hinst,
+            mainicon_w.as_ptr(),
+            IMAGE_ICON,
+            32,
+            32,
+            LR_SHARED,
+        );
+        let by_name_small = LoadImageW(
+            hinst,
+            mainicon_w.as_ptr(),
+            IMAGE_ICON,
+            16,
+            16,
+            LR_SHARED,
+        );
+        // Fall back to the numeric ID 1 path. MAKEINTRESOURCE(1)
+        // is encoded as the pointer value 1 — the high 16 bits are
+        // 0, which Windows uses as the discriminator between
+        // numeric IDs and string pointers.
+        let by_id_big = LoadImageW(hinst, id1, IMAGE_ICON, 32, 32, LR_SHARED);
+        let by_id_small = LoadImageW(hinst, id1, IMAGE_ICON, 16, 16, LR_SHARED);
+
+        (
+            if !by_name_big.is_null() { by_name_big } else { by_id_big },
+            if !by_name_small.is_null() { by_name_small } else { by_id_small },
+        )
+    }
+}
 
 // ============================================================================
 //  Window counter
@@ -161,6 +207,12 @@ fn main() {
         let hinst = GetModuleHandleW(std::ptr::null());
         let class_name_w = wide(CLASS_NAME);
 
+        // Pull the EXE's embedded MAINICON at 32×32 (title bar /
+        // Alt-Tab) and 16×16 (taskbar / window corner). `LR_SHARED`
+        // keeps these handles valid for the lifetime of the module —
+        // no DestroyIcon needed, even at process exit.
+        let (hicon_class, hicon_sm_class) = load_exe_main_icons(hinst);
+
         let wc = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
             // No `CS_HREDRAW | CS_VREDRAW` — the window is fixed
@@ -170,7 +222,7 @@ fn main() {
             cbClsExtra: 0,
             cbWndExtra: 0,
             hInstance: hinst,
-            hIcon: std::ptr::null_mut(),
+            hIcon: hicon_class,
             hCursor: LoadCursorW(std::ptr::null_mut(), IDC_ARROW),
             // NULL_BRUSH — we paint the entire background in
             // WM_PAINT so the system default-class brush doesn't
@@ -178,7 +230,7 @@ fn main() {
             hbrBackground: std::ptr::null_mut() as HBRUSH,
             lpszMenuName: std::ptr::null(),
             lpszClassName: class_name_w.as_ptr(),
-            hIconSm: std::ptr::null_mut(),
+            hIconSm: hicon_sm_class,
         };
         let _atom = RegisterClassExW(&wc);
 
@@ -207,6 +259,21 @@ fn main() {
             eprintln!("snug-preview: CreateWindowExW failed");
             std::process::exit(1);
         }
+
+        // Belt-and-suspenders: WNDCLASSEXW.hIcon/hIconSm is supposed
+        // to drive the window's title-bar / taskbar icon, but a few
+        // shell compositors (and the PS API queries above) report
+        // 0 for the class icon even when one was registered. Forcing
+        // WM_SETICON with the same handles per-window is the
+        // canonical fix — WM_SETICON's `hIcon` parameter is the
+        // authoritative source that Explorer and Taskbar read.
+        //
+        // ICON_BIG = 1 (title bar / Alt-Tab), ICON_SMALL = 0
+        // (taskbar overlay + window corner). We use the same handles
+        // we loaded into the class — they stay valid for the
+        // module lifetime via `LR_SHARED`, no DestroyIcon needed.
+        SendMessageW(hwnd, WM_SETICON, ICON_BIG as usize, hicon_class as isize);
+        SendMessageW(hwnd, WM_SETICON, ICON_SMALL as usize, hicon_sm_class as isize);
 
         // Pump messages until PostQuitMessage.
         let mut msg: MSG = std::mem::zeroed();
