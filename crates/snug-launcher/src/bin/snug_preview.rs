@@ -13,20 +13,23 @@
 //! Build:
 //!
 //! ```bash
-//! cargo build --bin snug-preview          # target/debug/snug_preview.exe
-//! cargo build --bin snug-preview --release # target/release/snug_preview.exe
+//! cargo build --bin snug_preview           # target/debug/snug_preview.exe
+//! cargo build --bin snug_preview --release # target/release/snug_preview.exe
 //! ```
 //!
-//! The launcher window is the parent for every dialog so the dialog
-//! becomes owned / always-on-top while it's up, mimicking the
-//! production modal behaviour. Click any button to open the matching
-//! dialog. "Close" (or the window's X button) exits the preview.
+//! Each dialog is **detached** from the launcher's lifecycle — they
+//! are top-level windows (no parent HWND) and run on their own
+//! thread, so closing the launcher (X button or "Close") does not
+//! destroy them. Click another button while a dialog is still up to
+//! spawn a second dialog side-by-side. The process only exits when
+//! **every** open window has been dismissed.
 //!
 //! No `unsafe` crate dependencies beyond what's already pinned in
 //! `Cargo.toml` (just `windows-sys`).
 
 #![cfg(windows)]
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -38,11 +41,11 @@ use windows_sys::Win32::Graphics::Gdi::{
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, GetSystemMetrics, LoadCursorW,
-    MSG, PostQuitMessage, RegisterClassExW, SendMessageW, SM_CXSCREEN, SM_CYSCREEN,
-    TranslateMessage, BS_PUSHBUTTON, IDC_ARROW, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY,
-    WM_PAINT, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_OVERLAPPED, WS_SYSMENU,
-    WS_VISIBLE,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
+    GetSystemMetrics, LoadCursorW, MSG, PostQuitMessage, RegisterClassExW, SendMessageW,
+    SM_CXSCREEN, SM_CYSCREEN, TranslateMessage, BS_PUSHBUTTON, IDC_ARROW, WM_CLOSE, WM_COMMAND,
+    WM_CREATE, WM_DESTROY, WM_NCDESTROY, WM_PAINT, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
+    WS_EX_TOPMOST, WS_OVERLAPPED, WS_SYSMENU, WS_VISIBLE,
 };
 
 use snug_launcher::dialogs;
@@ -78,6 +81,64 @@ const SUBTITLE_TEXT: &str = "Click a button to open the corresponding dialog.";
 /// `WM_SETFONT` isn't exported as a named constant by windows-sys
 /// 0.59. Value from winuser.h.
 const WM_SETFONT: u32 = 0x0030;
+
+// ============================================================================
+//  Window counter
+// ============================================================================
+
+/// Counts the number of open top-level windows owned by this preview
+/// binary — the launcher window plus one per spawned dialog. Initial
+/// value of 1 accounts for the launcher itself.
+///
+/// The process only exits when this hits zero. Decremented when the
+/// launcher's `WM_NCDESTROY` fires, and when each spawned dialog's
+/// thread finishes its `show()` call.
+static OPEN_WINDOWS: AtomicUsize = AtomicUsize::new(1);
+
+/// Decrement the window counter; if it was the last window, post
+/// `WM_QUIT` to the calling thread's message queue so the message
+/// loop (or, on a dialog thread, the modal `show()` loop) exits.
+///
+/// Safe to call from any thread: `PostQuitMessage` targets the
+/// current thread.
+unsafe fn maybe_quit_on_last() {
+    let prev = OPEN_WINDOWS.fetch_sub(1, Ordering::SeqCst);
+    if prev == 1 {
+        // SAFETY: `PostQuitMessage` targets the **calling** thread's
+        // message queue; safe to call from any thread as long as we
+        // own the slot we're decrementing (which we do, via the
+        // guard on the spawn-dialog closure).
+        unsafe { PostQuitMessage(0) };
+    }
+}
+
+/// Run `f` on a new OS thread, accounting for the new top-level
+/// window in `OPEN_WINDOWS` and decrementing when `f` returns (or
+/// panics — the `Guard` below releases the slot on drop).
+///
+/// Dialogs run on their own threads so closing the launcher doesn't
+/// destroy them, and so the user can spawn multiple dialogs
+/// side-by-side from the launcher.
+fn spawn_dialog<F>(f: F)
+where
+    F: FnOnce() + Send + 'static,
+{
+    OPEN_WINDOWS.fetch_add(1, Ordering::SeqCst);
+    let _slot = SlotGuard;
+    thread::spawn(move || {
+        let _slot = SlotGuard;
+        f();
+    });
+}
+
+/// `OPEN_WINDOWS` accounting guard. Decremented on drop so a panic in
+/// the dialog thread still releases the window slot.
+struct SlotGuard;
+impl Drop for SlotGuard {
+    fn drop(&mut self) {
+        unsafe { maybe_quit_on_last() };
+    }
+}
 
 // Button control IDs. Cast to `usize` for the `wparam & 0xFFFF` mask
 // in `WM_COMMAND`.
@@ -279,62 +340,80 @@ unsafe extern "system" fn wndproc(
             EndPaint(hwnd, &ps);
             0
         },
-        WM_COMMAND => unsafe {
+        WM_COMMAND => {
             // LOWORD(wparam) is the control / menu id. Mask off
             // the notification code in the high word.
             let id = (wparam & 0xFFFF) as usize;
             match id {
-                ID_BTN_PROGRESS_ANIM => spawn_progress(hwnd, false),
-                ID_BTN_PROGRESS_STATIC => spawn_progress(hwnd, true),
-                ID_BTN_METADATA_FAILED => {
+                ID_BTN_PROGRESS_ANIM => spawn_dialog(|| run_progress(false)),
+                ID_BTN_PROGRESS_STATIC => spawn_dialog(|| run_progress(true)),
+                ID_BTN_METADATA_FAILED => spawn_dialog(|| {
                     let _ = jdk_install::show_metadata_failed_dialog(
-                        hwnd,
+                        std::ptr::null_mut(),
                         25,
                         "DNS resolution failed: no such host is known",
                     );
-                }
-                ID_BTN_RETRY => {
+                }),
+                ID_BTN_RETRY => spawn_dialog(|| {
                     let _ = jdk_install::show_retry_dialog(
-                        hwnd,
+                        std::ptr::null_mut(),
                         2,
                         3,
                         "25.0.1",
                         "TLS handshake timeout after 30s",
                     );
-                }
-                ID_BTN_ERROR => {
+                }),
+                ID_BTN_ERROR => spawn_dialog(|| {
                     jdk_install::show_error_dialog(
-                        hwnd,
+                        std::ptr::null_mut(),
                         "Sample post-install error",
                         "",
                         "java.lang.UnsatisfiedLinkError: C:\\Users\\demo\\.snug\\jdk\\jdk-25\\bin\\jvm.dll: Can't find dependent libraries",
                     );
-                }
-                ID_BTN_JAVA_ERROR => {
+                }),
+                ID_BTN_JAVA_ERROR => spawn_dialog(|| unsafe {
                     error_window::show_launcher_error(
-                        hwnd,
+                        std::ptr::null_mut(),
                         "java.lang.NoClassDefFoundError: com/example/Main",
                         Some("https://github.com/adoptium/temurin25-binaries/releases"),
                     );
-                }
-                ID_BTN_PROMPT_V5 => run_install_prompt_v5(hwnd),
-                ID_BTN_EARLY_BAIL => run_early_bail(hwnd),
+                }),
+                ID_BTN_PROMPT_V5 => spawn_dialog(run_install_prompt_v5),
+                ID_BTN_EARLY_BAIL => spawn_dialog(run_early_bail),
                 ID_BTN_CLOSE => {
-                    PostQuitMessage(0);
+                    // Same as the X button: destroy the launcher
+                    // window. Any dialogs spawned before this point
+                    // are on their own threads and survive.
+                    unsafe {
+                        DestroyWindow(hwnd);
+                    }
                 }
                 _ => {}
             }
             0
-        },
+        }
         WM_CLOSE => {
+            // Closing the launcher destroys **only the launcher**.
+            // Any dialogs already spawned are independent top-level
+            // windows on their own threads; they keep running until
+            // the user dismisses them.
             unsafe {
-                PostQuitMessage(0);
+                DestroyWindow(hwnd);
             }
             0
         }
         WM_DESTROY => {
+            // Nothing to do — let `WM_NCDESTROY` handle the counter
+            // decrement once the window is fully torn down.
+            0
+        }
+        WM_NCDESTROY => {
+            // Launcher window is fully gone — release its slot in the
+            // window counter. If no dialogs are still running, this
+            // posts `WM_QUIT` to the launcher thread and the process
+            // exits.
             unsafe {
-                PostQuitMessage(0);
+                maybe_quit_on_last();
             }
             0
         }
@@ -350,7 +429,13 @@ unsafe extern "system" fn wndproc(
 /// worker thread; `false` spawns a worker that drives
 /// `phase 0 → 95% → phase 1 → 98% → phase 2 → 100%` like the real
 /// install flow.
-fn spawn_progress(hwnd: HWND, static_mode: bool) {
+///
+/// Always invoked via `spawn_dialog` so it runs on its own OS thread
+/// — closing the launcher doesn't take this dialog down. The dialog
+/// itself is **null-parented** (top-level), so it's also independent
+/// visually (can be moved to a different monitor, doesn't follow the
+/// launcher's z-order).
+fn run_progress(static_mode: bool) {
     let total_bytes: u64 = 150 * 1_048_576;
     let bytes_per_ms: u64 = ((10.0_f64 * 1_048_576.0) / 1000.0) as u64;
     let shared = Arc::new(ProgressShared::new(total_bytes));
@@ -413,10 +498,12 @@ fn spawn_progress(hwnd: HWND, static_mode: bool) {
     }
 
     // Blocks until the user dismisses (Cancel, X, or worker sets
-    // status != 0).
+    // status != 0). Runs on the spawn-dialog thread (not the launcher
+    // thread) so the launcher can accept more button clicks while
+    // this dialog is up.
     unsafe {
         progress_window::show(
-            hwnd,
+            std::ptr::null_mut(),
             "Snug — progress dialog preview",
             "",
             shared.clone(),
@@ -431,7 +518,7 @@ fn spawn_progress(hwnd: HWND, static_mode: bool) {
 /// `MessageBoxW` call shape here. Sample copy comes from
 /// `[jdk_install.prompt]` in `dialogs.toml` so iterating on the
 /// production strings shows up here too.
-fn run_install_prompt_v5(hwnd: HWND) {
+fn run_install_prompt_v5() {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         MessageBoxW, MB_DEFBUTTON1, MB_ICONQUESTION, MB_YESNOCANCEL,
     };
@@ -445,7 +532,7 @@ fn run_install_prompt_v5(hwnd: HWND) {
 
     let result = unsafe {
         MessageBoxW(
-            hwnd,
+            std::ptr::null_mut(),
             wide(&text).as_ptr(),
             wide(&prompt.title).as_ptr(),
             MB_YESNOCANCEL | MB_ICONQUESTION | MB_DEFBUTTON1,
@@ -456,7 +543,7 @@ fn run_install_prompt_v5(hwnd: HWND) {
 
 /// Mirror of `main.rs::show_error_box` — the `MessageBoxW` shown when
 /// the launcher can't even load its embedded payload.
-fn run_early_bail(hwnd: HWND) {
+fn run_early_bail() {
     use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
 
     let title = "snug launcher";
@@ -466,7 +553,7 @@ fn run_early_bail(hwnd: HWND) {
 
     let result = unsafe {
         MessageBoxW(
-            hwnd,
+            std::ptr::null_mut(),
             wide(body).as_ptr(),
             wide(title).as_ptr(),
             MB_OK | MB_ICONERROR,
