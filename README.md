@@ -3,17 +3,77 @@
 <img src="assets/snug-splash.png" alt="snug" width="640">
 
 # snug
+> Snug deliberately does less. It creates a polished, self-managing launch experience for your Java application, then gets out of the way.
 
-> A small, modern, Rust-based launcher-wrapper for Java fat JARs. Turns
-> `MyApp-fat.jar` into `MyApp.exe` — without bundling a JVM.
+> A small, modern, Rust-based launcher-wrapper That turns Java jars into a clickable Windows application
 
 </div>
 
 ---
 
 > **THIS IS NOWHERE NEAR READY - BUT IT IS CLOSE, PLEASE COME BACK LATER**
-> 
+
 ---
+
+# Quick-Start
+
+1. Download `snug.exe` and `snug-javafx-demo.jar`
+2. Run the following command
+
+```
+snug.exe --company "My Company" --name "My App" snug-javafx-demo.exe
+```
+
+Then either run
+
+```
+snug-javafx-demo.exe 
+```
+
+Or double-click on the icon
+
+## Quick Demo
+
+For a quick demo of a JavaFx java demo (with a splashscreen) have a look at
+and run the `./assets/snug-javafx-demo.exe`.
+
+<div align="center"><img src="assets/snug-javafx-demo-screenshot.png" alt="snug" width="302"></div>
+
+# Why use Snug?
+
+- **Make Java applications easy to run.** Turn your application into a 
+  familiar Windows executable that users can just double-click on.
+- **Remove Java setup from the user.** Snug takes care of finding or downloading 
+  the required Java runtime.
+- **Create a more polished application.** Add your own start up splash screen,
+  icon, application name, version information and other metadata.
+- **Make deployment simpler.** Give colleagues a straightforward executable 
+  they can run without needing to understand what the underlying language is.
+- **Keep applications local.** Useful for internal business tools that should 
+  run on a user’s own computer rather than being hosted as a web application.
+- **Reuse runtimes efficiently.** Applications can make use of downloaded 
+  runtime components instead of bundling a complete Java runtime into every application.
+- **Control how your application launches.** Configure Java requirements, 
+  startup behaviour, arguments and other deployment details to suit your application.
+- **Bridge the gap between building and distributing.** Snug handles the 
+  awkward packaging and launching work that sits between a working Java application and something ready for everyday office use.
+
+# What Snug is Not
+
+- **Snug is not an application store or publishing platform.** It does not 
+  host your application, provide a public download page, or publish releases 
+  for you.  It builds locally, you can run it locally yourself, or give people a copy to run themselves.
+- **Snug does not have a built-in application update mechanism for your 
+  application.** If you distribute a new version, you decide how that version is delivered to users. (That is not to say that you couldn't check for updates in your main application and point people at the new download location)
+- **Snug does not require your application to be published publicly.** It is 
+  well suited to internal applications that are simply copied to colleagues, placed on a shared drive, or distributed through whatever process your business already uses.  This bypasses code-signing the application, which can be expensive for the use cases.
+- **Snug is not an installer framework.** Its primary job is to create a 
+  native executable and manage the Java launch experience, rather than build a complete installation and uninstallation system. (This means that you will NOT get a Start menu icon or a desktop shortcut - but you can still run it from your desktop)
+- **Snug does not provide cloud-based deployment infrastructure.** There is 
+  no requirement for npm, GitHub Releases, a hosted service, or an online account simply to distribute an application.
+- **Snug does not dictate how you distribute your software.** Once the 
+  executable has been created, you remain in control of where it goes and who receives it.
+
 
 Snug generates a single native Windows `.exe` that:
 
@@ -34,12 +94,6 @@ Rust-based, and open source.
 [exe4j]: https://www.ej-technologies.com/products/exe4j/overview.html
 [Launch4j]: https://launch4j.sourceforge.net/
 
-## Quick Demo
-
-For a quick demo of a JavaFx java demo (with a splashscreen) have a look at
-and run the `./assets/snug-javafx-demo.exe`.
-
-<div align="center"><img src="assets/snug-javafx-demo-screenshot.png" alt="snug" width="302"></div>
 
 ## Status
 
