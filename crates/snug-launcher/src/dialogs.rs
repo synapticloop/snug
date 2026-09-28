@@ -56,7 +56,6 @@ pub struct JdkInstallDialogs {
     pub prompt: InstallPromptDialog,
     pub metadata_failed: MetadataFailedDialog,
     pub progress: ProgressDialog,
-    pub success: SuccessDialog,
     pub failure: FailureDialog,
     pub retry: RetryDialog,
 }
@@ -70,8 +69,6 @@ pub struct InstallPromptDialog {
     pub button_download: String,
     pub button_open_browser: String,
     pub button_cancel: String,
-    pub show_details: String,
-    pub hide_details: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -125,13 +122,6 @@ pub struct ProgressDialog {
     /// `prompt.button_cancel` once the verify / extract phases
     /// start.
     pub cancel_button_during_download: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct SuccessDialog {
-    pub title: String,
-    pub main: String,
-    pub content: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

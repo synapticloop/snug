@@ -45,7 +45,18 @@ impl From<CliDownloadJdkMode> for DownloadJdkMode {
 #[command(
     name = "snug",
     about = "Wrap a Java fat JAR into a native Windows .exe launcher",
-    long_about = "Wrap a Java fat JAR into a native Windows .exe launcher.\n\
+    long_about = "###############################################################################\n\
+                  #                                                                             #\n\
+                  #                          .-----.-----.--.--.-----.                          #\n\
+                  #                          |__ --|     |  |  |  _  |                          #\n\
+                  #                          |_____|__|__|_____|___  |                          #\n\
+                  #                                ... .-..    |_____|                          #\n\
+                  #                                                                             #\n\
+                  #                                ~ ~ ~ * ~ ~ ~                                #\n\
+                  #                                                                             #\n\
+                  ###############################################################################\n\
+                  \n\
+                  Wrap a Java fat JAR into a native Windows .exe launcher.\n\
                   \n\
                   The produced EXE loads `jvm.dll` directly via JNI so it\n\
                   appears as `<App>.exe` (not `javaw.exe`) in Task Manager,\n\
