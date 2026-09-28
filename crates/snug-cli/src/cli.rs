@@ -47,12 +47,10 @@ impl From<CliDownloadJdkMode> for DownloadJdkMode {
     about = "Wrap a Java fat JAR into a native Windows .exe launcher",
     long_about = "Wrap a Java fat JAR into a native Windows .exe launcher.\n\
                   \n\
-                  Flags below are grouped by function: input/output paths, the\n\
-                  Windows metadata that lands in the EXE's version resource,\n\
-                  Java-runtime controls, Windows-resource files (icon / manifest\n\
-                  / splash), build behaviour (JDK download, localization, dry\n\
-                  run), and finally tool-of-the-CLI flags (options-file path,\n\
-                  version, init-options).",
+                  The produced EXE loads `jvm.dll` directly via JNI so it\n\
+                  appears as `<App>.exe` (not `javaw.exe`) in Task Manager,\n\
+                  and the launcher locates a compatible JDK on the target\n\
+                  machine before falling back to an optional Temurin download.",
     // Demo `help_template` — overrides clap's default rendering. Each
     // `{placeholder}` is substituted at render time. Available tokens:
     //   {name}            binary / command name
@@ -92,9 +90,9 @@ USAGE:\n  \
                   snug App.jar -o App.exe --name \"My App\" --company \"Acme\" \\\n  \
                         --version 1.2.3 --min-java 25 --icon app.png\n\
                   \n  \
-                  snug App.jar --dry-run                       # validate, don't build\n  \
+                  snug App.jar --dry-run                      # validate, don't build\n  \
                   snug App.jar --emit-payload > payload.bin   # write encoded payload\n  \
-                  snug --init-options                          # write a starter snug.options\n\
+                  snug --init-options                         # write a starter snug.options\n\
                   \n\
                   Each `--localization your-locale.txt` you pass is embedded in the\n\
                   launcher alongside the built-in English baseline; the user's Windows\n\
@@ -114,6 +112,7 @@ pub struct Cli {
     /// Equivalent to `--input <jar>`; the positional form is kept for
     /// shell convenience. `--input` and the positional are mutually
     /// exclusive — supply one or the other.
+    #[arg(help_heading = "Input / output")]
     pub jar: Option<PathBuf>,
 
     /// Input source — either a single fat-JAR file or a directory
@@ -208,13 +207,13 @@ pub struct Cli {
     pub jvm_args: Vec<String>,
 
     /// `.ico` or `.png` file used as the Windows Explorer icon for the EXE.
-    #[arg(long = "icon", value_name = "PNG/ICO", help_heading = "Windows resources (icon / manifest / splash)")]
+    #[arg(long = "icon", value_name = "PNG/ICO", help_heading = "Windows resources")]
     pub icon: Option<PathBuf>,
 
     /// Optional Windows application manifest (XML) embedded as
     /// `RT_MANIFEST`. Use this to declare DPI-awareness, side-by-side
     /// assembly identity, or `requestedExecutionLevel` for UAC.
-    #[arg(long = "manifest", value_name = "XML", help_heading = "Windows resources (icon / manifest / splash)")]
+    #[arg(long = "manifest", value_name = "XML", help_heading = "Windows resources")]
     pub manifest: Option<PathBuf>,
 
     /// PNG splash image shown by the native launcher before the JVM starts.
@@ -225,14 +224,14 @@ pub struct Cli {
     /// `640x360`. Anything bigger triggers a build-time warning
     /// (see `--splash-max`); anything smaller renders fine but may
     /// look lost on high-DPI displays.
-    #[arg(long = "splash", value_name = "PNG", help_heading = "Windows resources (icon / manifest / splash)")]
+    #[arg(long = "splash", value_name = "PNG", help_heading = "Windows resources")]
     pub splash: Option<PathBuf>,
 
     /// Minimum splash duration in milliseconds.
     ///
     /// The splash is dismissed once the JVM signals readiness *or* this
     /// duration elapses, whichever is later. Defaults to `1500`.
-    #[arg(long = "splash-ms", value_name = "MS", default_value_t = 1_500, help_heading = "Windows resources (icon / manifest / splash)")]
+    #[arg(long = "splash-ms", value_name = "MS", default_value_t = 1_500, help_heading = "Windows resources")]
     pub splash_ms: u32,
 
     /// Maximum recommended splash dimensions, or `off` to silence the
@@ -252,7 +251,7 @@ pub struct Cli {
         long = "splash-max",
         value_name = "WxH|off",
         default_value = "640x360",
-        help_heading = "Windows resources (icon / manifest / splash)"
+        help_heading = "Windows resources"
     )]
     pub splash_max: String,
 
@@ -281,7 +280,7 @@ pub struct Cli {
         default_value_t = CliDownloadJdkMode::Off,
         num_args = 0..=1,
         require_equals = true,
-        help_heading = "Behaviour (JDK download / localization / dry run)"
+        help_heading = "Build behaviour"
     )]
     pub download_jdk: CliDownloadJdkMode,
 
@@ -314,18 +313,18 @@ pub struct Cli {
         long = "localization",
         value_name = "TXT",
         value_parser = crate::localization::validate_localization_path,
-        help_heading = "Behaviour (JDK download / localization / dry run)"
+        help_heading = "Build behaviour"
     )]
     pub localizations: Vec<std::path::PathBuf>,
 
     /// Write the encoded embedded payload to stdout instead of writing a
     /// file or building an EXE. Useful for piping into other tools or for
     /// inspecting the format.
-    #[arg(long = "emit-payload", help_heading = "Behaviour (JDK download / localization / dry run)")]
+    #[arg(long = "emit-payload", help_heading = "Build behaviour")]
     pub emit_payload: bool,
 
     /// Validate inputs and print what would be built, but write nothing.
-    #[arg(long = "dry-run", help_heading = "Behaviour (JDK download / localization / dry run)")]
+    #[arg(long = "dry-run", help_heading = "Build behaviour")]
     pub dry_run: bool,
 
     /// Print snug's own version (from `Cargo.toml`) and exit.
@@ -333,7 +332,7 @@ pub struct Cli {
     /// Distinct from `--version <APP-VERSION>`, which sets the
     /// wrapped application's version. Snug's version is otherwise
     /// shown in the no-args help output.
-    #[arg(long = "snug-version", action = clap::ArgAction::Version, help_heading = "Tooling (options file / version / init-options)")]
+    #[arg(long = "snug-version", action = clap::ArgAction::Version, help_heading = "CLI tooling")]
     pub snug_version: (),
 
     /// Path to a snug options file. Default: `snug.options` in the
@@ -343,7 +342,7 @@ pub struct Cli {
     /// the command line (so `--name "My App"` works, quoting and
     /// escaping included). Lines starting with `#` are comments.
     /// Command-line options override file options.
-    #[arg(long = "options", value_name = "PATH", help_heading = "Tooling (options file / version / init-options)")]
+    #[arg(long = "options", value_name = "PATH", help_heading = "CLI tooling")]
     pub options: Option<PathBuf>,
 
     /// Write the embedded `snug.options` example file to disk, then
@@ -371,17 +370,17 @@ pub struct Cli {
         default_missing_value = "snug.options",
         conflicts_with = "jar",
         conflicts_with = "input",
-        help_heading = "Tooling (options file / version / init-options)"
+        help_heading = "CLI tooling"
     )]
     pub init_options: Option<String>,
 
     /// Overwrite an existing file at the `--init-options` target
     /// instead of refusing. Has no effect without `--init-options`.
-    #[arg(long = "init-options-force", help_heading = "Tooling (options file / version / init-options)")]
+    #[arg(long = "init-options-force", help_heading = "CLI tooling")]
     pub init_options_force: bool,
 
     /// Print the `--init-options` example to stdout instead of
     /// writing it to disk. Has no effect without `--init-options`.
-    #[arg(long = "init-options-stdout", help_heading = "Tooling (options file / version / init-options)")]
+    #[arg(long = "init-options-stdout", help_heading = "CLI tooling")]
     pub init_options_stdout: bool,
 }
