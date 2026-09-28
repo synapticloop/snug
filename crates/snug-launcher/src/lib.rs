@@ -33,6 +33,7 @@ pub mod metadata_failed_window;
 pub mod modal_window;
 pub mod payload_locator;
 pub mod progress_window;
+pub mod prompt_window;
 pub mod retry_window;
 pub mod splash;
 

@@ -430,7 +430,7 @@ unsafe extern "system" fn wndproc(
                 ("Retry (try 2 of 3)", ID_BTN_RETRY),
                 ("Error (post-install)", ID_BTN_ERROR),
                 ("Java error (with update link)", ID_BTN_JAVA_ERROR),
-                ("Install prompt v5 (MessageBoxW)", ID_BTN_PROMPT_V5),
+                ("Install prompt (custom-painted)", ID_BTN_PROMPT_V5),
                 ("Early bail (MessageBoxW)", ID_BTN_EARLY_BAIL),
             ];
             for (i, (label, id)) in buttons.iter().enumerate() {
@@ -702,34 +702,24 @@ fn run_progress(static_mode: bool) {
     }
 }
 
-/// Mirror of `jdk_install::prompt_messagebox` — the comctl32-v5
-/// fallback the launcher shows when `TaskDialogIndirect` isn't
-/// available. We can't reach the private function from this binary
-/// (it's private to `jdk_install`), so duplicate the same
-/// `MessageBoxW` call shape here. Sample copy comes from
-/// `[jdk_install.prompt]` in `dialogs.toml` so iterating on the
-/// production strings shows up here too.
+/// Drives the install-prompt dialog via the same `prompt_window`
+/// path the launcher would use if the prompt were ever wired into
+/// production. `mascot_hbitmap = 0` makes `modal_window` fall back
+/// to the EXE's main icon, so the preview shows the brand-correct
+/// Snug character without us having to load anything here.
 fn run_install_prompt_v5() {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        MessageBoxW, MB_DEFBUTTON1, MB_ICONQUESTION, MB_YESNOCANCEL,
-    };
-
     let d = dialogs::dialogs();
     let prompt = &d.jdk_install.prompt;
-    let mut text = String::new();
-    text.push_str(&prompt.main);
-    text.push_str("\n\n");
-    text.push_str(&prompt.content);
-
-    let result = unsafe {
-        MessageBoxW(
-            std::ptr::null_mut(),
-            wide(&text).as_ptr(),
-            wide(&prompt.title).as_ptr(),
-            MB_YESNOCANCEL | MB_ICONQUESTION | MB_DEFBUTTON1,
-        )
-    };
-    eprintln!("snug-preview: install-prompt-v5 MessageBoxW returned {result}");
+    let choice = snug_launcher::prompt_window::show(
+        std::ptr::null_mut(),
+        0,
+        prompt,
+        "21.0.2",
+        192,
+        "https://api.adoptium.net/v3/binary/latest/21/ga/windows/x64/jdk/hotspot/normal/eclipse",
+        "9c629caaccc4e64aa0ea58bd0a3f43eaf903a4c1a3e2c2a6e9c5b1a8e8b3f1a0",
+    );
+    eprintln!("snug-preview: install-prompt choice = {choice:?}");
 }
 
 /// Mirror of `main.rs::show_error_box` — the `MessageBoxW` shown when

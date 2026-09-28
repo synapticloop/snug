@@ -9,28 +9,45 @@
 //!
 //! ```text
 //! ┌───────────────────────────────────────────────────────────────┐
-//! │ [icon] Dialog title                                  — □ ✕      │ ← title bar (system)
-//! │                                                                │
+//! │ [icon] Dialog title                                  — □ ✕    │ ← title bar (system)
+//! │                                                               │
 //! │  ┌──────────────┐  Heading (large bold)                       │
-//! │  │              │  Subheading (grey)                           │
-//! │  │   [mascot]   │                                               │
-//! │  │              │  Content (multi-line)                         │
-//! │  │              │                                               │
-//! │  │              │                                               │
-//! │  └──────────────┘                                               │
-//! │  ┌──────────────────────────────────────┐  ┌────────────┐       │
-//! │  │ ⓘ  Info heading                      │  │  Primary   │       │
-//! │  │     Info subtext                     │  │  Secondary │       │
-//! │  └──────────────────────────────────────┘  └────────────┘       │
-//! │  [optional "Check for a newer version:" link]                    │
+//! │  │              │  Subheading (grey)                          │
+//! │  │   [mascot]   │                                             │
+//! │  │              │  Content (multi-line)                       │
+//! │  │              │  [Show details]   ← only when expanded_*    │
+//! │  │              │  [expanded body]  ← present when toggled on │
+//! │  │              │  [clickable URL]  ← only when expanded_link │
+//! │  └──────────────┘                                             │
+//! │  ┌──────────────────────────────────────┐  ┌────────────┐     │
+//! │  │ (i)  Info heading                    │  │ Tertiary   │     │
+//! │  │      Info subtext                    │  │ Secondary  │     │
+//! │  │                                      │  │  Primary   │     │
+//! │  └──────────────────────────────────────┘  └────────────┘     │
+//! │  [optional "Check for a newer version:" link]                 │
 //! └───────────────────────────────────────────────────────────────┘
 //! ```
+//!
+//! Supports 1, 2, or 3 buttons via [`Button::Primary`],
+//! [`Button::Secondary`], [`Button::Tertiary`]. Buttons are
+//! right-aligned: primary is rightmost (default, Enter), tertiary is
+//! leftmost (treats Esc / X the same way). One-button dialogs use
+//! the solo position; two-button dialogs get primary + secondary.
+//!
+//! **Expand/collapse.** A caller can supply optional
+//! [`ModalDialog::expanded_content`] (and optional
+//! [`ModalDialog::expanded_link_url`]). When present, a "Show
+//! details" hyperlink appears below the regular content. Clicking
+//! it toggles the expanded body in/out of the content area. The
+//! clickable URL, when present, is rendered as a brand-blue
+//! underlined link at the bottom of the expanded body and opens via
+//! `ShellExecuteW(..., "open", url, ...)`.
 //!
 //! **One static class** (`"snug_modal_dialog_v1\0"`) is registered
 //! lazily on first use and shared by every dialog instance. A single
 //! [`wndproc`] branches on the per-window `state.buttons.len()` and
-//! `state.link_url` to decide what to create in `WM_CREATE` and what
-//! to paint in `WM_PAINT`.
+//! `state.expanded_content` to decide what to create in `WM_CREATE`
+//! and what to paint in `WM_PAINT`.
 //!
 //! **One font helper** [`create_font_pt`] (with an `underline: bool`
 //! variant) drives every text element. **One icon helper**
@@ -91,9 +108,17 @@ const DT_NOPREFIX: u32 = 0x0000_0800;
 /// callers can compare against `windows_sys::Win32::UI::WindowsAndMessaging::IDYES`.
 pub const IDYES_I32: i32 = 6;
 
-/// Returned when the user activates the **secondary** action, clicks
-/// the X button, presses Alt+F4, or any other dismissal. Same
-/// numeric value as Win32 `IDCANCEL`.
+/// Returned when the user activates the **secondary** action. Only
+/// possible when three buttons are present (primary / secondary /
+/// tertiary). Same numeric value as Win32 `IDNO`.
+pub const IDNO_I32: i32 = 7;
+
+/// Returned when the user activates the **tertiary** action, clicks
+/// the X button, presses Alt+F4, or any other dismissal. In a
+/// 2-button dialog the secondary action returns this code (so
+/// `retry_window` / `metadata_failed_window` callers can keep
+/// branching on `IDYES_I32` vs `IDCANCEL_I32` exactly as before).
+/// Same numeric value as Win32 `IDCANCEL`.
 pub const IDCANCEL_I32: i32 = 2;
 
 // ============================================================================
@@ -138,12 +163,15 @@ const INFO_TEXT_W: i32 = INFO_BOX_W - (INFO_TEXT_X - INFO_BOX_X) - INFO_PAD;
 /// Primary button width when paired. Matches `error_window` 80 px.
 const BUTTON_PRIMARY_W_PAIR: i32 = 100;
 const BUTTON_SECONDARY_W_PAIR: i32 = 80;
+const BUTTON_TERTIARY_W_PAIR: i32 = 80;
 const BUTTON_SOLO_W: i32 = 80;
 const BUTTON_H: i32 = 25;
 const BUTTON_GAP: i32 = INFO_PAD;
 const BUTTON_SECONDARY_X: i32 = WINDOW_W - MARGIN * 2 - BUTTON_SECONDARY_W_PAIR;
 const BUTTON_PRIMARY_X_PAIR: i32 =
     BUTTON_SECONDARY_X - BUTTON_GAP - BUTTON_PRIMARY_W_PAIR;
+const BUTTON_TERTIARY_X: i32 =
+    BUTTON_PRIMARY_X_PAIR - BUTTON_GAP - BUTTON_TERTIARY_W_PAIR;
 const BUTTON_SOLO_X: i32 = WINDOW_W - MARGIN * 2 - BUTTON_SOLO_W;
 const BUTTON_Y: i32 = INFO_BOX_Y + (INFO_BOX_H - BUTTON_H) / 2;
 
@@ -195,7 +223,11 @@ const COLOR_BG: u32 = 0x00FFFFFF;
 const COLOR_SUBTITLE: u32 = 0x005F6368;
 const COLOR_CONTENT: u32 = 0x00303030;
 const COLOR_INFO_BG: u32 = 0x00FEF0E8;
-// Link URL colour — standard hyperlink blue.
+// Link URL colour — brand blue (`#1A73E8`), identical to
+// `COLOR_PROGRESS_FILL`. We deliberately reuse the brand colour
+// for the "Check for a newer version" link row rather than
+// introducing a second accent so the dialog reads as a single
+// chromatic family.
 const COLOR_LINK: u32 = 0x00E8731A;
 
 // ============================================================================
@@ -229,13 +261,18 @@ pub enum InfoIcon {
 
 /// A button on the dialog.
 ///
-/// [`Button::Primary`] is the left button (or the only button); Enter
-/// activates it. [`Button::Secondary`] sits to its right; Esc and the
-/// X button dismiss via it. Up to two buttons today.
+/// [`Button::Primary`] is the rightmost (default, Enter); in a
+/// 1-button dialog it's the only button and sits at the solo
+/// position. [`Button::Secondary`] sits to its left when present.
+/// [`Button::Tertiary`] sits to the left of the secondary; Esc, the
+/// X button, and Alt+F4 all dismiss as the tertiary (or as the
+/// secondary in a 2-button dialog, or as the primary in a
+/// 1-button dialog). Up to three buttons total.
 #[derive(Clone, Copy)]
 pub enum Button<'a> {
     Primary(&'a str),
     Secondary(&'a str),
+    Tertiary(&'a str),
 }
 
 /// Inputs to [`show`]. Caller fills the text fields + button list;
@@ -255,8 +292,10 @@ pub struct ModalDialog<'a> {
     pub info_heading: Option<&'a str>,
     /// Info-box subtext. `None` ⇒ [`INFO_SUBTEXT_DEFAULT`].
     pub info_subtext: Option<&'a str>,
-    /// Button list. One or two entries; the first is always
-    /// [`Button::Primary`].
+    /// Button list. One, two, or three entries; the first is always
+    /// [`Button::Primary`], the last is always either
+    /// [`Button::Secondary`] (2-button) or [`Button::Tertiary`]
+    /// (3-button).
     pub buttons: &'a [Button<'a>],
     /// Optional HBITMAP (cast to `isize`) for the mascot slot. `0` ⇒
     /// fall back to the EXE icon resource.
@@ -271,6 +310,11 @@ pub struct ModalDialog<'a> {
     /// `[launcher.error].update_check_label` (or empty when the
     /// TOML is unset).
     pub link_label: Option<&'a str>,
+    // --- Expand/collapse + content-area link support removed:
+    //     the modal_window family is now strictly 1-3 button +
+    //     optional link row. The install prompt lives in
+    //     `prompt_window` and handles its own content-area link
+    //     + expandable body.
 }
 
 /// Show the modal dialog. Returns [`IDYES_I32`] when the user
@@ -342,6 +386,7 @@ pub unsafe fn show<'a>(parent: HWND, dlg: &'a ModalDialog<'a>) -> i32 {
             .map(|b| match b {
                 Button::Primary(s) => (true, (*s).to_string()),
                 Button::Secondary(s) => (false, (*s).to_string()),
+                Button::Tertiary(s) => (false, (*s).to_string()),
             })
             .collect(),
         link_label_text,
@@ -354,6 +399,7 @@ pub unsafe fn show<'a>(parent: HWND, dlg: &'a ModalDialog<'a>) -> i32 {
         hwnd_info_subtext: std::ptr::null_mut(),
         hwnd_button_primary: std::ptr::null_mut(),
         hwnd_button_secondary: std::ptr::null_mut(),
+        hwnd_button_tertiary: std::ptr::null_mut(),
         hfont_heading: std::ptr::null_mut(),
         hfont_subtitle: std::ptr::null_mut(),
         hfont_content: std::ptr::null_mut(),
@@ -462,6 +508,8 @@ struct State {
     hwnd_button_primary: HWND,
     /// `std::ptr::null_mut()` when there's only one button.
     hwnd_button_secondary: HWND,
+    /// `std::ptr::null_mut()` when there are fewer than three buttons.
+    hwnd_button_tertiary: HWND,
 
     hfont_heading: HFONT,
     hfont_subtitle: HFONT,
@@ -537,6 +585,7 @@ const IDC_INFO_HEADING: i32 = 5005;
 const IDC_INFO_SUBTEXT: i32 = 5006;
 const IDC_BUTTON_PRIMARY: i32 = 5007;
 const IDC_BUTTON_SECONDARY: i32 = 5008;
+const IDC_BUTTON_TERTIARY: i32 = 5009;
 
 const STATIC_CLASS: &str = "STATIC\0";
 const BUTTON_CLASS: &str = "BUTTON\0";
@@ -753,10 +802,9 @@ unsafe extern "system" fn wndproc(
 
             // ----- Buttons -----
             let buttons_len = (&(*state).buttons).len();
-            let (hwnd_primary, hwnd_secondary) = match buttons_len {
+            let (hwnd_primary, hwnd_secondary, hwnd_tertiary) = match buttons_len {
                 1 => {
-                    let (is_primary, label) = (&(*state).buttons)[0].clone();
-                    let _ = is_primary;
+                    let (_is_primary, label) = (&(*state).buttons)[0].clone();
                     let hwnd_button = CreateWindowExW(
                         0,
                         wide(BUTTON_CLASS).as_ptr(),
@@ -771,13 +819,11 @@ unsafe extern "system" fn wndproc(
                         hinst,
                         std::ptr::null(),
                     );
-                    (hwnd_button, std::ptr::null_mut())
+                    (hwnd_button, std::ptr::null_mut(), std::ptr::null_mut())
                 }
-                _ => {
-                    // Two buttons (the only other supported size today).
-                    let (is_primary_0, label_0) = (&(*state).buttons)[0].clone();
-                    let (is_primary_1, label_1) = (&(*state).buttons)[1].clone();
-                    let _ = (is_primary_0, is_primary_1);
+                2 => {
+                    let (_is_primary_0, label_0) = (&(*state).buttons)[0].clone();
+                    let (_is_primary_1, label_1) = (&(*state).buttons)[1].clone();
                     let hwnd_primary = CreateWindowExW(
                         0,
                         wide(BUTTON_CLASS).as_ptr(),
@@ -806,7 +852,62 @@ unsafe extern "system" fn wndproc(
                         hinst,
                         std::ptr::null(),
                     );
-                    (hwnd_primary, hwnd_secondary)
+                    (hwnd_primary, hwnd_secondary, std::ptr::null_mut())
+                }
+                3 => {
+                    let (_is_primary_0, label_0) = (&(*state).buttons)[0].clone();
+                    let (_is_primary_1, label_1) = (&(*state).buttons)[1].clone();
+                    let (_is_primary_2, label_2) = (&(*state).buttons)[2].clone();
+                    let hwnd_tertiary = CreateWindowExW(
+                        0,
+                        wide(BUTTON_CLASS).as_ptr(),
+                        wide(label_2.as_str()).as_ptr(),
+                        WS_CHILD | WS_VISIBLE | (BS_PUSHBUTTON as u32),
+                        BUTTON_TERTIARY_X,
+                        BUTTON_Y,
+                        BUTTON_TERTIARY_W_PAIR,
+                        BUTTON_H,
+                        hwnd,
+                        IDC_BUTTON_TERTIARY as *mut _,
+                        hinst,
+                        std::ptr::null(),
+                    );
+                    let hwnd_primary = CreateWindowExW(
+                        0,
+                        wide(BUTTON_CLASS).as_ptr(),
+                        wide(label_0.as_str()).as_ptr(),
+                        WS_CHILD | WS_VISIBLE | (BS_DEFPUSHBUTTON as u32),
+                        BUTTON_PRIMARY_X_PAIR,
+                        BUTTON_Y,
+                        BUTTON_PRIMARY_W_PAIR,
+                        BUTTON_H,
+                        hwnd,
+                        IDC_BUTTON_PRIMARY as *mut _,
+                        hinst,
+                        std::ptr::null(),
+                    );
+                    let hwnd_secondary = CreateWindowExW(
+                        0,
+                        wide(BUTTON_CLASS).as_ptr(),
+                        wide(label_1.as_str()).as_ptr(),
+                        WS_CHILD | WS_VISIBLE | (BS_PUSHBUTTON as u32),
+                        BUTTON_SECONDARY_X,
+                        BUTTON_Y,
+                        BUTTON_SECONDARY_W_PAIR,
+                        BUTTON_H,
+                        hwnd,
+                        IDC_BUTTON_SECONDARY as *mut _,
+                        hinst,
+                        std::ptr::null(),
+                    );
+                    (hwnd_primary, hwnd_secondary, hwnd_tertiary)
+                }
+                _ => {
+                    // Out-of-range button count: render nothing. Caller
+                    // is responsible for validating input. Returned
+                    // handles stay null.
+                    let null = std::ptr::null_mut();
+                    (null, null, null)
                 }
             };
 
@@ -821,6 +922,7 @@ unsafe extern "system" fn wndproc(
             (*state).hwnd_info_subtext = hwnd_info_subtext;
             (*state).hwnd_button_primary = hwnd_primary;
             (*state).hwnd_button_secondary = hwnd_secondary;
+            (*state).hwnd_button_tertiary = hwnd_tertiary;
             (*state).hfont_heading = hfont_heading;
             (*state).hfont_subtitle = hfont_subtitle;
             (*state).hfont_content = hfont_content;
@@ -1070,11 +1172,30 @@ unsafe extern "system" fn wndproc(
         }
         WM_COMMAND => {
             let id = (wparam as u32) & 0xFFFF;
+            let state_ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *const State;
+            let buttons_len = if !state_ptr.is_null() {
+                unsafe { (&(*state_ptr)).buttons.len() }
+            } else {
+                0
+            };
             if id == IDC_BUTTON_PRIMARY as u32 {
                 unsafe {
                     PostQuitMessage(IDYES_I32);
                 }
-            } else if id == IDC_BUTTON_SECONDARY as u32 || id == IDCANCEL as u32 {
+            } else if id == IDC_BUTTON_SECONDARY as u32 && buttons_len == 3 {
+                // Middle button on a 3-button dialog → IDNO. 2-button
+                // dialogs (where `IDC_BUTTON_SECONDARY` is also wired
+                // up) fall through to the cancel branch below to
+                // preserve the historical return code.
+                unsafe {
+                    PostQuitMessage(IDNO_I32);
+                }
+            } else if id == IDC_BUTTON_SECONDARY as u32
+                || id == IDC_BUTTON_TERTIARY as u32
+                || id == IDCANCEL as u32
+            {
+                // 3-button: tertiary dismissal. 2-button: secondary
+                // dismissal. 1-button: X / Alt+F4 dismissal. All → IDCANCEL_I32.
                 unsafe {
                     PostQuitMessage(IDCANCEL_I32);
                 }

@@ -1,16 +1,18 @@
-//! "No JDK found" → download-and-install flow.
+﻿//! "No JDK found" → download-and-install flow.
 //!
 //! 1. **`find_cached_jdk`** scans `%LOCALAPPDATA%\snug\jdk\` for a
 //!    previously-downloaded JDK whose `java -version` reports a major
 //!    ≥ `min_java_major`. Hit → return silently, no prompt.
 //! 2. **`fetch_metadata`** hits Adoptium's v3 API for the latest
 //!    Temurin GA matching the requested major.
-//! 3. **`show_prompt`** opens a `TaskDialogIndirect` with three
-//!    command-link buttons (Download / Open in browser / Cancel), an
-//!    expandable details section, and a hyperlink to the download URL.
-//!    The "do not show again" checkbox has been **removed** per
-//!    product decision — the cache layer means the user only sees
-//!    the prompt when no usable JDK is on disk, so re-asking is fine.
+//! 3. **`prompt_window::show`** (in `prompt_window.rs`) renders the
+//!    "Java Runtime Required" dialog as a custom-painted modal on the
+//!    same paint path as `error_window` / `retry_window` /
+//!    `metadata_failed_window`. Three buttons (Download / Open in
+//!    browser / Cancel). The "do not show again" checkbox has been
+//!    **removed** per product decision — the cache layer means the
+//!    user only sees the prompt when no usable JDK is on disk, so
+//!    re-asking is fine.
 //! 4. **`progress_window::show`** renders a custom-painted modal
 //!    matching the user-facing mockup, drives the bar from the
 //!    worker thread, and auto-dismisses on completion or failure.
@@ -25,7 +27,7 @@
 //! | Cached JDK satisfies min    | return cached home, no GUI          |
 //! | No cache, user picks Open   | open URL in browser, no install     |
 //! | No cache, user picks Cancel | bail, no install                    |
-//! | No cache, user picks Download | progress dialog → worker thread → result |
+//! | No cache, user picks Download | progress dialog â†’ worker thread â†’ result |
 
 #![cfg(windows)]
 
@@ -49,12 +51,6 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 use windows_sys::Win32::Foundation::HWND;
-use windows_sys::Win32::UI::Controls::{
-    TD_ERROR_ICON, TD_INFORMATION_ICON, TD_SHIELD_ICON, TD_WARNING_ICON,
-    TDF_ALLOW_DIALOG_CANCELLATION, TDF_ENABLE_HYPERLINKS,
-    TDF_USE_COMMAND_LINKS,
-    TASKDIALOG_BUTTON, TASKDIALOGCONFIG, TASKDIALOGCONFIG_0, TASKDIALOGCONFIG_1,
-};
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     HICON, IDCANCEL, IDOK, IDYES, SW_SHOWNORMAL,
@@ -208,7 +204,7 @@ pub fn fetch_metadata(min_java_major: u16) -> Result<JdkMetadata, JdkError> {
     // array for current majors (verified against Adoptium 2026-09). The
     // `/v3/assets/feature_releases/{maj}/ga` endpoint returns the full
     // GA release list with `binaries[].package.{link,checksum,size}`
-    // and `version_data.semver` — exactly the fields `AdoptiumBinary`
+    // and `version_data.semver` â€” exactly the fields `AdoptiumBinary`
     // deserialises. We take the first element, which Adoptium returns
     // sorted newest-first by `timestamp`.
     let url = format!(
@@ -242,7 +238,7 @@ pub fn fetch_metadata(min_java_major: u16) -> Result<JdkMetadata, JdkError> {
 
     // The query filters narrow each release's `binaries[]` to at most
     // one entry. If the API ever returns more, prefer the `package`
-    // (zip) form over the `installer` (msi) form — both live on the
+    // (zip) form over the `installer` (msi) form â€” both live on the
     // same binary but the zip is what we extract.
     let binary = asset
         .binaries
@@ -270,269 +266,6 @@ pub fn fetch_metadata(min_java_major: u16) -> Result<JdkMetadata, JdkError> {
     })
 }
 
-// ===========================================================================
-//  TaskDialog config (no-callback version)
-// ===========================================================================
-
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
-pub enum IconKind {
-    Warning,
-    Error,
-    Info,
-    Shield,
-}
-
-#[derive(Clone)]
-pub struct CustomButton {
-    pub id: i32,
-    pub text: String,
-}
-
-pub struct Config {
-    parent: HWND,
-    title: String,
-    main: String,
-    content: String,
-    icon: IconKind,
-    psz_footer: Option<String>,
-    psz_expanded_information: Option<String>,
-    psz_expanded_control_text: String,
-    psz_collapsed_control_text: String,
-    buttons: Vec<CustomButton>,
-    default_button: i32,
-}
-
-impl Config {
-    pub fn new(parent: HWND, title: impl Into<String>, main: impl Into<String>) -> Self {
-        Self {
-            parent,
-            title: title.into(),
-            main: main.into(),
-            content: String::new(),
-            icon: IconKind::Shield,
-            psz_footer: None,
-            psz_expanded_information: None,
-            psz_expanded_control_text: "Show details".into(),
-            psz_collapsed_control_text: "Hide details".into(),
-            buttons: Vec::new(),
-            default_button: 0,
-        }
-    }
-
-    /// Build a `TASKDIALOGCONFIG` from this config. Doesn't call
-    /// into Windows — safe to use from any caller (including the
-    /// `MessageBoxW` fallback path that wants to inspect the raw
-    /// struct to render a simpler dialog).
-    fn to_taskdialogconfig(&self) -> TASKDIALOGCONFIG {
-        let title_w = wide(&self.title);
-        let main_w = wide(&self.main);
-        let content_w = wide(&self.content);
-        let footer_w = self.psz_footer.as_deref().map(wide);
-        let expanded_info_w = self.psz_expanded_information.as_deref().map(wide);
-        let expanded_ctrl_w = wide(&self.psz_expanded_control_text);
-        let collapsed_ctrl_w = wide(&self.psz_collapsed_control_text);
-        let main_icon = match self.icon {
-            IconKind::Warning => TD_WARNING_ICON_H,
-            IconKind::Error => TD_ERROR_ICON_H,
-            IconKind::Info => TD_INFORMATION_ICON_H,
-            IconKind::Shield => TD_SHIELD_ICON_H,
-        };
-        let button_texts: Vec<Vec<u16>> =
-            self.buttons.iter().map(|b| wide(&b.text)).collect();
-        let mut button_array: Vec<TASKDIALOG_BUTTON> = self
-            .buttons
-            .iter()
-            .zip(button_texts.iter())
-            .map(|(b, txt)| TASKDIALOG_BUTTON {
-                nButtonID: b.id,
-                pszButtonText: txt.as_ptr(),
-            })
-            .collect();
-        let c_buttons = button_array.len() as u32;
-
-        // TASKDIALOGCONFIG.dwFlags is i32 in windows-sys 0.59;
-        // bitwise-OR the i32 constants directly.
-        let dw_flags: i32 = TDF_USE_COMMAND_LINKS
-            | TDF_ENABLE_HYPERLINKS
-            | TDF_ALLOW_DIALOG_CANCELLATION;
-
-        TASKDIALOGCONFIG {
-            cbSize: std::mem::size_of::<TASKDIALOGCONFIG>() as u32,
-            hwndParent: self.parent,
-            hInstance: std::ptr::null_mut(),
-            dwFlags: dw_flags,
-            dwCommonButtons: 0,
-            pszWindowTitle: title_w.as_ptr(),
-            Anonymous1: TASKDIALOGCONFIG_0 { pszMainIcon: main_icon },
-            pszMainInstruction: main_w.as_ptr(),
-            pszContent: content_w.as_ptr(),
-            cButtons: c_buttons,
-            pButtons: if c_buttons == 0 {
-                std::ptr::null()
-            } else {
-                button_array.as_mut_ptr()
-            },
-            nDefaultButton: self.default_button,
-            cRadioButtons: 0,
-            pRadioButtons: std::ptr::null(),
-            nDefaultRadioButton: 0,
-            pszVerificationText: std::ptr::null(),
-            pszExpandedInformation: expanded_info_w
-                .as_ref()
-                .map(|v| v.as_ptr())
-                .unwrap_or(std::ptr::null()),
-            pszExpandedControlText: expanded_ctrl_w.as_ptr(),
-            pszCollapsedControlText: collapsed_ctrl_w.as_ptr(),
-            Anonymous2: TASKDIALOGCONFIG_1 {
-                pszFooterIcon: std::ptr::null(),
-            },
-            pszFooter: footer_w
-                .as_ref()
-                .map(|v| v.as_ptr())
-                .unwrap_or(std::ptr::null()),
-            pfCallback: None,
-            lpCallbackData: 0,
-            cxWidth: 0,
-        }
-    }
-
-    /// Show the dialog modally and return the user's chosen button id.
-    /// Falls back to `MessageBoxW` on pre-Vista systems.
-    pub fn show(&self) -> i32 {
-        let cfg = self.to_taskdialogconfig();
-        let mut button: i32 = 0;
-        let dialog_ok = unsafe { call_task_dialog_indirect(&cfg, &mut button) };
-        if !dialog_ok {
-            // Pre-Vista fallback: prompt the user via `MessageBoxW`
-            // (always present). Loses the custom button labels and
-            // expandable details, but keeps the install flow alive.
-            unsafe {
-                return prompt_messagebox(self.parent, &self.title, &self.main, &self.content);
-            }
-        }
-        button
-    }
-}
-
-const TD_ERROR_ICON_H: *const u16 = TD_ERROR_ICON;
-const TD_INFORMATION_ICON_H: *const u16 = TD_INFORMATION_ICON;
-const TD_SHIELD_ICON_H: *const u16 = TD_SHIELD_ICON;
-const TD_WARNING_ICON_H: *const u16 = TD_WARNING_ICON;
-
-fn wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
-// ===========================================================================
-//  `TaskDialogIndirect` runtime resolution (pre-Vista compat)
-// ===========================================================================
-//
-// `TaskDialogIndirect` is part of the v6 common controls, exported by
-// `comctl32.dll` only on Windows Vista and later. We must *not*
-// declare it via `windows_sys`'s `link!` macro: doing so would
-// produce a static import that the loader fails to resolve on
-// pre-Vista systems with "The procedure entry point … could not be
-// located".
-//
-// Instead we look the symbol up via `GetProcAddress` at first call.
-// If absent (or `LoadLibraryA` fails), the caller falls back to a
-// `MessageBoxW`-driven GUI flow.
-
-/// Returns `true` if a `TaskDialogIndirect` call was placed; the
-/// picked button id is in `*button`. Returns `false` if the function
-/// isn't available on this system.
-///
-/// We resolve `TaskDialogIndirect` at runtime via `LoadLibraryA` and
-/// `GetProcAddress` rather than linking it directly because:
-///
-/// 1. Some Windows installs (including some Windows 10 boxes) ship
-///    only comctl32 v5, which doesn't export `TaskDialogIndirect`.
-///    Linking directly makes the whole EXE fail to start with
-///    `STATUS_ENTRYPOINT_NOT_FOUND`.
-/// 2. With a runtime lookup, we can detect the absence and fall back
-///    to a `MessageBoxW` prompt — no bar, but at least the user
-///    still gets a working dialog.
-///
-/// The launcher's Cargo.toml embeds a v6-common-controls manifest
-/// (`assets\snug-default-manifest.xml`) so Windows loads comctl32 v6
-/// for the process. On a fully-patched Win 10 install both layers
-/// agree; on edge cases, this lookup degrades gracefully.
-unsafe fn call_task_dialog_indirect(cfg: *const TASKDIALOGCONFIG, button: &mut i32) -> bool {
-    type F = unsafe extern "system" fn(
-        *const TASKDIALOGCONFIG,
-        *mut i32,
-        *mut i32,
-        *mut windows_sys::Win32::Foundation::BOOL,
-    ) -> windows_sys::core::HRESULT;
-    static RESOLVED: std::sync::OnceLock<Option<F>> = std::sync::OnceLock::new();
-    let cell = RESOLVED.get_or_init(|| unsafe {
-        let lib = windows_sys::Win32::System::LibraryLoader::LoadLibraryA(
-            b"comctl32.dll\0".as_ptr() as *const u8,
-        );
-        if lib.is_null() {
-            log::log("call_task_dialog_indirect: LoadLibraryA(comctl32.dll) returned NULL");
-            return None;
-        }
-        let proc = windows_sys::Win32::System::LibraryLoader::GetProcAddress(
-            lib,
-            b"TaskDialogIndirect\0".as_ptr() as *const u8,
-        );
-        match proc {
-            None => {
-                log::log(
-                    "call_task_dialog_indirect: comctl32.dll loaded but does not export TaskDialogIndirect \
-                     — falling back to MessageBoxW (this is expected on Windows installs that ship only comctl32 v5; \
-                     apply snug-default-manifest.xml as the EXE manifest to opt into v6)",
-                );
-                None
-            }
-            Some(p) => Some(std::mem::transmute(p)),
-        }
-    });
-    match cell {
-        Some(f) => {
-            // SAFETY: `f` was returned by `GetProcAddress` for the
-            // v6 comctl32 `TaskDialogIndirect` entry.
-            let _hr = unsafe { f(cfg, button, std::ptr::null_mut(), std::ptr::null_mut()) };
-            true
-        }
-        None => false,
-    }
-}
-
-/// Fallback prompt using `MessageBoxW` (always available). Returns
-/// the picked id (mapped into our IDYES / IDNO / IDCANCEL range). Used
-/// when `TaskDialogIndirect` isn't available.
-unsafe fn prompt_messagebox(
-    parent: HWND,
-    title: &str,
-    main: &str,
-    content: &str,
-) -> i32 {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        MessageBoxW, MB_DEFBUTTON1, MB_ICONQUESTION, MB_YESNOCANCEL,
-    };
-    let mut text = String::new();
-    text.push_str(main);
-    text.push_str("\n\n");
-    text.push_str(content);
-    let title_w = wide(title);
-    let text_w = wide(&text);
-    let ret = unsafe {
-        MessageBoxW(
-            parent,
-            text_w.as_ptr(),
-            title_w.as_ptr(),
-            MB_YESNOCANCEL | MB_ICONQUESTION | MB_DEFBUTTON1,
-        )
-    };
-    // Map: Yes=IDYES=Download, No=IDNO=Open browser, Cancel=IDCANCEL
-    match ret {
-        r if r == 6 => 6, // IDYES = Download
-        r if r == 7 => 7, // IDNO   = Open browser
-        _ => 2,           // IDCANCEL or anything else
-    }
-}
 
 // ===========================================================================
 //  Progress dialog: callback + thread-local shared state
@@ -544,7 +277,7 @@ unsafe fn prompt_messagebox(
 /// `examples/progress_preview.rs` can build its own.
 pub struct ProgressShared {
     /// 0..=100 download percent. Set by the worker during phases
-    /// 0/1/2 — the progress window reads this and repaints the bar
+    /// 0/1/2 â€” the progress window reads this and repaints the bar
     /// in `WM_PAINT`.
     pub(crate) pct: AtomicU32,
     /// 0 = running, 1 = success, 2 = error, 3 = cancelled.
@@ -565,7 +298,7 @@ pub struct ProgressShared {
     /// Set to `true` by the progress window when the user clicks
     /// the "Install" button. The worker spins on this at the top of
     /// `worker_thread` so the download doesn't actually start until
-    /// the user has explicitly opted in — the progress window
+    /// the user has explicitly opted in â€” the progress window
     /// appears in a "ready to install" paused state.
     pub(crate) started: AtomicBool,
     /// Cancellation latch. Flipped to `true` by the progress window
@@ -579,7 +312,7 @@ pub struct ProgressShared {
     /// second Arc.
     pub(crate) cancel: AtomicBool,
     /// Optional `HBITMAP` handle (cast to `i32`) for a custom mascot
-    /// to draw in the 170×170 slot. `0` means "fall back to the EXE's
+    /// to draw in the 170Ã—170 slot. `0` means "fall back to the EXE's
     /// main icon resource" (the production path). The
     /// `progress_preview` bin embeds `assets/snug-icon.png` via
     /// `include_bytes!`, decodes it with the `image` crate, and
@@ -716,7 +449,7 @@ pub(crate) fn load_exe_main_icon_hicon() -> Option<HICON> {
 }
 
 /// Walk the running EXE's resource directory, find the icon group
-/// `editpe` stamped (`RT_GROUP_ICON` entry named `"MAINICON"` — also
+/// `editpe` stamped (`RT_GROUP_ICON` entry named `"MAINICON"` â€” also
 /// tries id=1 as a fallback for EXEs built by other tools), and load
 /// the entry whose bitmap dimensions are closest to `(cx, cy)`.
 /// Returns `None` if the EXE has no icon group at all.
@@ -724,7 +457,7 @@ pub(crate) fn load_exe_main_icon_hicon() -> Option<HICON> {
 /// This is the workaround for `editpe` v0.2 not stamping at integer
 /// id 1: it picks the icon group's sub-table by **name**, then reads
 /// the actual RT_ICON ids from the ICONDIR and `LoadImageW`s against
-/// one of those. The returned handle is `LR_SHARED` — the system owns
+/// one of those. The returned handle is `LR_SHARED` â€” the system owns
 /// it, no `DestroyIcon` needed.
 pub(crate) fn find_best_icon_hicon(cx: i32, cy: i32) -> Option<HICON> {
     use windows_sys::Win32::System::LibraryLoader::{
@@ -777,7 +510,7 @@ pub(crate) fn find_best_icon_hicon(cx: i32, cy: i32) -> Option<HICON> {
 
         // ICONDIR layout per `editpe`'s `IconDirectory` / `IconDirectoryEntry`:
         //   header: reserved:u16, type_:u16, count:u16  (6 bytes)
-        //   count × ICONDIRENTRY (14 bytes each, repr(C, packed(2))):
+        //   count Ã— ICONDIRENTRY (14 bytes each, repr(C, packed(2))):
         //     width:u8, height:u8, color_count:u8, reserved:u8
         //     planes:u16, bit_count:u16, bytes:u32, id:u16
         // Note: `editpe` replaces the standard Windows 4-byte `image_offset`
@@ -866,7 +599,7 @@ pub(crate) fn find_best_icon_hicon(cx: i32, cy: i32) -> Option<HICON> {
 
         // `CreateIconFromResourceEx` flags: `fIcon=1` (true) for icons,
         // `dwVer=0x00030000` for Win3.0+ format. `LR_SHARED` returns a
-        // shared handle the system manages — no `DestroyIcon` needed.
+        // shared handle the system manages â€” no `DestroyIcon` needed.
         let hicon = CreateIconFromResourceEx(
             pbits as *const u8,
             bytes,
@@ -899,7 +632,7 @@ pub(crate) fn find_best_icon_hicon(cx: i32, cy: i32) -> Option<HICON> {
 // ===========================================================================
 
 /// Download `url` to `dest` as a streaming copy. **No** SHA-256 is
-/// computed here — the file is hashed after the download in
+/// computed here â€” the file is hashed after the download in
 /// [`hash_file_sha256`], so multi-gigabyte zips don't pressure RAM.
 fn download_to_disk(
     url: &str,
@@ -1003,7 +736,7 @@ fn extract_jdk_zip(zip: &Path, dest_dir: &Path) -> Result<PathBuf, JdkError> {
 /// ```
 ///
 /// This helper walks a small depth cap and returns the first
-/// directory that actually contains `bin/java.exe` — that's the
+/// directory that actually contains `bin/java.exe` â€” that's the
 /// JAVA_HOME we need to hand to JNI. Returns `None` if no
 /// directory inside `root` (up to `MAX_JAVA_HOME_DEPTH` levels)
 /// contains the JDK layout, which means the zip is not a Temurin
@@ -1049,12 +782,12 @@ fn parse_java_version(text: &str) -> Option<u16> {
 // ===========================================================================
 
 /// Scan `install_root` for any directory containing `bin\java.exe`
-/// whose `-version` reports a major version ≥ `min_java_major`.
+/// whose `-version` reports a major version â‰¥ `min_java_major`.
 ///
 /// Each top-level entry under `install_root` is a previously-
 /// extracted Temurin install; the actual JAVA_HOME may be the entry
 /// itself (flat layout) or one nested directory inside it (Adoptium
-/// default — `jdk-25.0.4.1+1/bin/java.exe`). `find_java_home` walks
+/// default â€” `jdk-25.0.4.1+1/bin/java.exe`). `find_java_home` walks
 /// both shapes.
 fn find_cached_jdk(min_java_major: u16, install_root: &Path) -> Option<PathBuf> {
     let entries = std::fs::read_dir(install_root).ok()?;
@@ -1092,12 +825,12 @@ fn find_cached_jdk(min_java_major: u16, install_root: &Path) -> Option<PathBuf> 
 }
 
 // ===========================================================================
-//  Worker thread: download → hash → extract
+//  Worker thread: download â†’ hash â†’ extract
 // ===========================================================================
 
 // Monotonic progress-bar boundaries. The bar must only ever move
-// forward across phase transitions — earlier versions let it jump
-// 99 → 95 → 99 → 100 which read as "the bar reset". See
+// forward across phase transitions â€” earlier versions let it jump
+// 99 â†’ 95 â†’ 99 â†’ 100 which read as "the bar reset". See
 // `tests::bar_progress_is_monotonic_across_phases`.
 const PHASE_0_PCT_MAX: u32 = 95; // download ends here
 const PHASE_1_PCT_START: u32 = 96; // verify starts here
@@ -1120,7 +853,7 @@ fn worker_thread(
 
     // Wait for the user to click "Install" before doing anything.
     // The progress window pops up in a paused state with the bar at
-    // 0% and an "Install" button — only when the user clicks does
+    // 0% and an "Install" button â€” only when the user clicks does
     // the actual download / verify / extract start. We also exit
     // early if the window is closed (or another reason sets `done`)
     // before the user opts in.
@@ -1133,11 +866,11 @@ fn worker_thread(
 
     // The bar is split monotonically across the three phases so the user
     // never sees it move backwards:
-//   - phase 0 (download)   : 0 → 95%
-//   - phase 1 (verify SHA) : 95 → 98%
-//   - phase 2 (extract)    : 98 → 100%
-// The earlier 0→99→95→99→100 sequence made the bar look like it
-// reset when the user clicked Download — confusing.
+//   - phase 0 (download)   : 0 â†’ 95%
+//   - phase 1 (verify SHA) : 95 â†’ 98%
+//   - phase 2 (extract)    : 98 â†’ 100%
+// The earlier 0â†’99â†’95â†’99â†’100 sequence made the bar look like it
+// reset when the user clicked Download â€” confusing.
 
     // Phase 0: download. `on_progress` updates the bytes/pct shared
     // state so the dialog callback can render live text + bar.
@@ -1150,7 +883,7 @@ fn worker_thread(
         if total_bytes > 0 {
             // Scale phase 0 to 0..=PHASE_0_PCT_MAX. Phase 1 picks up at
             // PHASE_1_PCT_START and climbs to PHASE_1_PCT_END; phase 2
-            // takes PHASE_2_PCT_START → 100.
+            // takes PHASE_2_PCT_START â†’ 100.
             let pct = ((written as f64 / total_bytes as f64 * PHASE_0_PCT_MAX as f64) as u32)
                 .min(PHASE_0_PCT_MAX);
             shared.pct.store(pct, Ordering::SeqCst);
@@ -1182,8 +915,8 @@ fn worker_thread(
     shared.pct.store(PHASE_0_PCT_MAX, Ordering::SeqCst);
 
     // Phase 1: SHA-256. Hash is a single sequential pass over the
-    // file, so the bar climbs PHASE_1_PCT_START → PHASE_1_PCT_END
-    // within this phase and the callback renders "Verifying SHA-256…
+    // file, so the bar climbs PHASE_1_PCT_START â†’ PHASE_1_PCT_END
+    // within this phase and the callback renders "Verifying SHA-256â€¦
     // (Z%)" while it does.
     shared.phase.store(1, Ordering::SeqCst);
     log::log("phase 1 (verify SHA-256) starting");
@@ -1206,7 +939,7 @@ fn worker_thread(
             "phase 1: SHA-256 mismatch (expected {expected_sha}, computed {computed})"
         ));
         set_error(format!(
-            "SHA-256 mismatch — declared {}, computed {}",
+            "SHA-256 mismatch â€” declared {}, computed {}",
             expected_sha, computed
         ));
         shared.done.store(2, Ordering::SeqCst);
@@ -1230,7 +963,7 @@ fn worker_thread(
         return;
     }
     // Adoptium's zip carries a leading `jdk-<version>/` directory,
-    // so `install_dir/bin/java.exe` doesn't exist — the JDK home is
+    // so `install_dir/bin/java.exe` doesn't exist â€” the JDK home is
     // nested one level deeper. `find_java_home` walks the extracted
     // tree to the actual JAVA_HOME.
     let Some(home) = find_java_home(&install_dir) else {
@@ -1267,9 +1000,10 @@ fn worker_thread(
 /// - `fetch_metadata` (the Adoptium v3 API call) can fail with no
 ///   network, captive portal, corporate firewall, TLS/DNS issues, or
 ///   Adoptium downtime. On the GUI subsystem build, `eprintln!` is
-///   invisible — silently returning the error leaves the user with
-///   only the final `MessageBoxW` and no chance to recover. We pop a
-///   dedicated "could not reach Adoptium" dialog here instead, with
+///   invisible â€” silently returning the error leaves the user with
+///   only the final `show_launcher_error` dialog and no chance to
+///   recover. We pop a dedicated "could not reach Adoptium" dialog
+///   here instead, with
 ///   an "Open the download page in my browser" button so the user
 ///   can still install Temurin manually.
 pub fn maybe_install(
@@ -1279,7 +1013,7 @@ pub fn maybe_install(
 ) -> Result<Option<PathBuf>, JdkError> {
     std::fs::create_dir_all(install_root)?;
 
-    // 1. Cache hit — silent reuse.
+    // 1. Cache hit â€” silent reuse.
     if let Some(home) = find_cached_jdk(min_java_major, install_root) {
         log::log(&format!(
             "JDK cache hit: {} (meets min_java={})",
@@ -1324,11 +1058,11 @@ pub fn maybe_install(
     };
 
     // The "JDK wasn't found" install prompt has been removed per the
-    // current product decision — go straight to the download so the
+    // current product decision â€” go straight to the download so the
     // user sees the progress window immediately. The progress window's
     // abort button starts labelled "Install" (download is part of the
     // install flow) and switches to "Cancel" once phase 1 (verify) /
-    // phase 2 (extract) begins — see `progress_window::show`.
+    // phase 2 (extract) begins â€” see `progress_window::show`.
 
     // 3. Download with progress + SHA-on-disk + extract, with retries.
     // Install under `<install_root>/<major>/` so re-downloading after a
@@ -1338,7 +1072,7 @@ pub fn maybe_install(
     // `jdk-X.Y.Z+1/` inside, so `find_java_home` walks one level deeper
     // to find `bin/java.exe` and reports that as JAVA_HOME.
     //
-    // On a non-fatal failure we surface a Retry / Cancel TaskDialog
+    // On a non-fatal failure we surface a Retry / Cancel modal
     // and loop up to `MAX_DOWNLOAD_ATTEMPTS` times. Explicit user
     // cancellation (`done == 3` from `worker_thread`) exits the loop
     // immediately without asking.
@@ -1407,7 +1141,7 @@ pub fn maybe_install(
 enum AttemptOutcome {
     /// Worker finished all three phases; value is the resolved JAVA_HOME.
     Success(PathBuf),
-    /// Worker set `done == 3` — the user closed the progress dialog
+    /// Worker set `done == 3` â€” the user closed the progress dialog
     /// mid-stream. Distinct from "errored and chose to give up";
     /// never triggers a Retry prompt.
     Cancelled,
@@ -1417,7 +1151,7 @@ enum AttemptOutcome {
     Failed(String),
 }
 
-/// Run one download → SHA-256 → extract cycle. Cleans up any partial
+/// Run one download â†’ SHA-256 â†’ extract cycle. Cleans up any partial
 /// state from a previous attempt first (the temp zip and the
 /// extracted-tree directory under `<install_root>/<major>/`).
 ///
@@ -1481,12 +1215,11 @@ fn run_one_install_attempt(
     };
 
     // If the dialog was dismissed before the worker finished — user
-    // clicked Cancel, closed the window via X / Alt+F4, or the legacy
-    // TaskDialog path returned IDCANCEL — the worker is still alive
+    // clicked Cancel, closed the window via X / Alt+F4, or the
+    // dialog returned `IDCANCEL` — the worker is still alive
     // and `shared.cancel` is what aborts it. The default
     // `progress_window` path flips this flag itself in `WM_COMMAND` /
-    // `WM_CLOSE`, but the TaskDialog fallback relies on us doing it
-    // here. Either way, setting it twice is a no-op. Without this
+    // `WM_CLOSE`. Either way, setting it twice is a no-op. Without this
     // the worker would happily finish downloading and report
     // `done == 1` (success), and we'd return `AttemptOutcome::Success`
     // for a download the user explicitly cancelled.
@@ -1582,11 +1315,11 @@ pub fn show_retry_dialog(
 }
 
 /// "We could not reach Adoptium" dialog. Pops when
-/// `fetch_metadata` fails — either no internet, captive portal,
+/// `fetch_metadata` fails â€” either no internet, captive portal,
 /// corporate firewall, TLS/DNS issue, or Adoptium downtime. Without
 /// this, the GUI-subsystem launcher silently drops the failure to
 /// an invisible stderr line and the user only sees the final
-/// `MessageBoxW`.
+/// `show_launcher_error` dialog.
 ///
 /// Two buttons: **Open the download page in my browser** (carries
 /// the user to a Temurin release-filtered page so they can still
@@ -1601,10 +1334,10 @@ pub fn show_metadata_failed_dialog(parent: HWND, min_java: u16, error_detail: &s
     // The launcher formats `content` itself (with `{major}` and
     // `{error}` filled) before passing it in.
     //
-    // `MetadataFailedDialog` borrows `&str`s — every formatted
+    // `MetadataFailedDialog` borrows `&str`s â€” every formatted
     // string lives in a local `String` below; never inline
     // `dialogs::fill(...).as_str()` (its temporary drops before
-    // the dialog reads it — see `metadata_failed_window::show`'s
+    // the dialog reads it â€” see `metadata_failed_window::show`'s
     // `wide(dlg.title)` call).
     let error_content = dialogs::fill(
         d.jdk_install.metadata_failed.content.as_str(),
@@ -1669,7 +1402,7 @@ pub fn show_error_dialog(parent: HWND, title: &str, _main: &str, content: &str) 
 }
 
 fn open_in_browser(url: &str) -> Result<(), JdkError> {
-    let url_w = wide(url);
+    let url_w: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
     let result = unsafe {
         ShellExecuteW(
             std::ptr::null_mut(),
@@ -1714,7 +1447,7 @@ mod tests {
 
     #[test]
     fn wide_null_terminates() {
-        let w = wide("hi");
+        let w: Vec<u16> = "hi".encode_utf16().chain(std::iter::once(0)).collect();
         assert_eq!(w, vec![b'h' as u16, b'i' as u16, 0u16]);
     }
 
@@ -1779,12 +1512,12 @@ mod tests {
 
     /// Smoke-test for the Adoptium `/v3/assets/feature_releases/.../ga`
     /// JSON shape. If the API drifts again, this fails loudly with the
-    /// exact field name that's missing — no more silent `[]` returning
+    /// exact field name that's missing â€” no more silent `[]` returning
     /// a confusing "could not locate a Java 25+ JVM" error to the
     /// user.
     #[test]
     fn adoptium_feature_releases_json_shape_matches() {
-        // Minimal but representative snippet — only the fields we read.
+        // Minimal but representative snippet â€” only the fields we read.
         let body = r#"[
           {
             "binaries": [
@@ -1819,7 +1552,7 @@ mod tests {
     }
 
     /// The progress bar must never go backwards across phase
-    /// boundaries — the previous `99 → 95 → 99 → 100` sequence made
+    /// boundaries â€” the previous `99 â†’ 95 â†’ 99 â†’ 100` sequence made
     /// the bar look like it reset when the user clicked Download.
     /// Each boundary step here is what `worker_thread` actually
     /// stores into `shared.pct`; if anyone reorders or re-numbers the
@@ -1831,13 +1564,13 @@ mod tests {
         assert_eq!(PHASE_0_PCT_MAX, 95);
         assert!(PHASE_0_PCT_MAX > 0);
 
-        // Phase 0 → phase 1: no jump backwards.
+        // Phase 0 â†’ phase 1: no jump backwards.
         assert!(PHASE_1_PCT_START >= PHASE_0_PCT_MAX);
         // Phase 1 itself climbs.
         assert!(PHASE_1_PCT_END > PHASE_1_PCT_START);
         assert_eq!(PHASE_1_PCT_END, 98);
 
-        // Phase 1 → phase 2: no jump backwards.
+        // Phase 1 â†’ phase 2: no jump backwards.
         assert!(PHASE_2_PCT_START >= PHASE_1_PCT_END);
         assert_eq!(PHASE_2_PCT_START, 99);
 

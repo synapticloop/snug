@@ -40,12 +40,12 @@
 //! - `early-bail`      — `MessageBoxW` from `src/main.rs`. The fallback
 //!                        shown when the launcher can't even load its
 //!                        embedded payload.
-//! - `install-prompt-v5` — `MessageBoxW` from `jdk_install::prompt_messagebox`.
-//!                        The comctl32-v5 fallback the launcher shows
-//!                        when `TaskDialogIndirect` isn't available.
-//!                        Since `prompt_messagebox` is private, the
-//!                        example duplicates the call (same pattern as
-//!                        `early-bail`).
+//! - `install-prompt`  — `prompt_window::show`. Custom-painted
+//!                        modal on the same paint path as the rest of
+//!                        the dialog family (replaced the previous
+//!                        `TaskDialogIndirect` + `MessageBoxW` mirror).
+//!                        Variant name kept as `install-prompt-v5` for
+//!                        backward-compat with any saved bookmarks.
 //! - `java-error`      — `error_window::show` invoked from `main.rs`
 //!                        when a [`LauncherError`] (Java stacktrace,
 //!                        `MainClassNotFound`, `JniCreate`, etc.)
@@ -232,7 +232,7 @@ fn print_help() {
     eprintln!("  retry              Try again / Cancel prompt (show_retry_dialog)");
     eprintln!("  error              Terminal post-install-failure dialog (show_error_dialog)");
     eprintln!("  java-error         Launcher-runtime error dialog (show_launcher_error)");
-    eprintln!("  install-prompt-v5  MessageBoxW fallback for comctl32-v5 hosts (jdk_install::prompt_messagebox)");
+    eprintln!("  install-prompt-v5  prompt_window (custom-painted modal, same paint path as the rest of the dialog family)");
     eprintln!("  early-bail         MessageBoxW from src/main.rs (show_error_box)");
     eprintln!();
     eprintln!("options:");
@@ -466,49 +466,27 @@ fn run_java_error() -> Option<i32> {
 }
 
 fn run_install_prompt_v5() -> Option<i32> {
-    // Mirror `jdk_install::prompt_messagebox` exactly — the
-    // comctl32-v5 fallback the launcher shows when
-    // `TaskDialogIndirect` isn't available. We can't reach the
-    // private function from this example, so duplicate the call
-    // here — same pattern as `run_early_bail`. Sample copy comes
-    // from `[jdk_install.prompt]` in `dialogs.toml` so iterating on
-    // the production strings shows up here too.
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        MessageBoxW, MB_DEFBUTTON1, MB_ICONQUESTION, MB_YESNOCANCEL,
-    };
-
+    // Drives the install-prompt dialog via the same `prompt_window`
+    // path the launcher would use if the prompt were ever wired into
+    // production. `mascot_hbitmap = 0` makes `modal_window` fall back
+    // to the EXE's main icon, so the preview shows the brand-correct
+    // Snug character without us having to load anything here.
     let d = snug_launcher::dialogs::dialogs();
     let prompt = &d.jdk_install.prompt;
-    let title = prompt.title.as_str();
-    let main = prompt.main.as_str();
-    let content = prompt.content.as_str();
-
-    let mut text = String::new();
-    text.push_str(main);
-    text.push_str("\n\n");
-    text.push_str(content);
-
-    let title_w: Vec<u16> = OsStr::new(title)
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
-    let text_w: Vec<u16> = OsStr::new(text.as_str())
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
-    let result = unsafe {
-        MessageBoxW(
-            std::ptr::null_mut(),
-            text_w.as_ptr(),
-            title_w.as_ptr(),
-            MB_YESNOCANCEL | MB_ICONQUESTION | MB_DEFBUTTON1,
-        )
-    };
+    let choice = snug_launcher::prompt_window::show(
+        std::ptr::null_mut(),
+        0,
+        prompt,
+        "21.0.2",
+        192,
+        "https://api.adoptium.net/v3/binary/latest/21/ga/windows/x64/jdk/hotspot/normal/eclipse",
+        "9c629caaccc4e64aa0ea58bd0a3f43eaf903a4c1a3e2c2a6e9c5b1a8e8b3f1a0",
+    );
     eprintln!(
-        "dialogs_preview: kind={} MessageBoxW returned {result}",
+        "dialogs_preview: kind={} prompt_window choice = {choice:?}",
         Kind::InstallPromptV5.as_str()
     );
-    Some(result)
+    Some(choice as i32)
 }
 
 fn run_early_bail() -> Option<i32> {

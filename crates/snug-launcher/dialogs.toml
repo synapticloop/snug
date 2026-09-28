@@ -51,12 +51,6 @@ button_download = "Download Temurin {version} now"
 button_open_browser = "Open the download page in my browser"
 button_cancel = "Cancel"
 
-# The "Show details" / "Hide details" toggle is a Windows convention;
-# users expect it to read exactly this. Change only if you have a
-# strong reason.
-show_details = "Show details"
-hide_details = "Hide details"
-
 
 # --- Metadata-fetch failure prompt ----------------------------------------
 # Shown when api.adoptium.net is unreachable. Gives the user a path
@@ -110,17 +104,6 @@ info_subtext = "This runtime will be used for future application launches"
 # user sees a familiar word when there's an in-flight install to
 # abort. The "Cancel" label is reused from `prompt.button_cancel`.
 cancel_button_during_download = "Install"
-
-
-# --- Post-install success dialog ------------------------------------------
-
-[jdk_install.success]
-title = "JDK ready — Snug"
-main = "Eclipse Temurin was installed"
-content = """\
-OpenJDK {version} is now available at:\n\
-{home}\n\n\
-Snug will continue launching."""
 
 
 # --- Post-install failure dialog ------------------------------------------
