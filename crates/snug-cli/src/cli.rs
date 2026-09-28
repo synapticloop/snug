@@ -51,44 +51,11 @@ impl From<CliDownloadJdkMode> for DownloadJdkMode {
                   appears as `<App>.exe` (not `javaw.exe`) in Task Manager,\n\
                   and the launcher locates a compatible JDK on the target\n\
                   machine before falling back to an optional Temurin download.",
-    // Demo `help_template` — overrides clap's default rendering. Each
-    // `{placeholder}` is substituted at render time. Available tokens:
-    //   {name}            binary / command name
-    //   {version}         the version string set above
-    //   {about}           short about for `-h`, long about for `--help`
-    //                     (clap auto-picks)
-    //   {usage-heading}   the literal "Usage:" (or your override)
-    //   {usage}           the usage synopsis line
-    //   {all-args}        every arg + positional, grouped by help_heading
-    //   {positionals}     positionals only
-    //   {options}         option flags only
-    //   {subcommands}     subcommands (n/a — we don't have any)
-    //   {before-help}     the `before_help` text
-    //   {after-help}      the `after_help` text
-    //   {tab}             indentation helper (renders as 4 spaces)
-    //
-    // This template is identical to clap's default EXCEPT for two
-    // cosmetic tweaks that demonstrate the feature:
-    //   1. "Usage:" is replaced with "USAGE:" (uppercase).
-    //   2. `{all-args}` is used instead of separate `{positionals}` +
-    //      `{options}` blocks — this lets clap's per-arg `help_heading`
-    //      do all the work (and keeps our 6-section layout intact).
-    help_template = "\
-{name} {version}\n\
-{about}\n\
-\n\
-USAGE:\n  \
-{usage}\n\
-\n\
-{all-args}\n\
-\n\
-{after-help}",
     // Footer printed after the options list. Keeps the common
     // workflows in front of the user without re-listing every flag;
     // long-about covers the overview, after-help covers the recipes.
     after_help = "Examples:\n  \
-                  snug App.jar -o App.exe --name \"My App\" --company \"Acme\" \\\n  \
-                        --version 1.2.3 --min-java 25 --icon app.png\n\
+                  snug App.jar -o App.exe --name \"My App\" --company \"Acme\" --version 1.2.3 --min-java 25 --icon app.png\n\
                   \n  \
                   snug App.jar --dry-run                      # validate, don't build\n  \
                   snug App.jar --emit-payload > payload.bin   # write encoded payload\n  \
@@ -203,7 +170,7 @@ pub struct Cli {
     ///
     /// Repeatable. Examples:
     /// `--jvm-arg=-Xms256m --jvm-arg=-Xmx2g --jvm-arg=-Dfile.encoding=UTF-8`
-    #[arg(long = "jvm-arg", value_name = "ARG", allow_hyphen_values = true, help_heading = "Java runtime")]
+    #[arg(long = "jvm-arg", value_name = "OPTION", allow_hyphen_values = true, help_heading = "Java runtime")]
     pub jvm_args: Vec<String>,
 
     /// `.ico` or `.png` file used as the Windows Explorer icon for the EXE.
@@ -263,9 +230,12 @@ pub struct Cli {
     /// Modes:
     ///
     /// - omitted — no download flow at all.
+    ///
     /// - `--download-jdk` (no value) — `auto`: pop the dialog only if
     ///   JVM discovery fails. Equivalent to the legacy boolean flag.
+    ///
     /// - `--download-jdk=auto` — same as above, explicit.
+    ///
     /// - `--download-jdk=force` — always pop the dialog, bypassing
     ///   JVM discovery. Useful when the end user wants to install
     ///   Temurin regardless of what's on `JAVA_HOME` / `PATH`.
