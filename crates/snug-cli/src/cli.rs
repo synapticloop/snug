@@ -72,11 +72,11 @@ impl From<CliDownloadJdkMode> for DownloadJdkMode {
     // embedded in the no-args help output.
     disable_version_flag = true,
     version = env!("CARGO_PKG_VERSION"),
-    // Cap help wrap at 60 columns regardless of terminal width. clap's
+    // Cap help wrap at 80 columns regardless of terminal width. clap's
     // default formatter already indents continuation lines to match the
     // description column (hanging indent), so a fixed cap gives tidy
     // narrow help that's still readable in a wide terminal.
-    term_width = 60,
+    term_width = 80,
 )]
 pub struct Cli {
     /// Input fat JAR file. Omit to print help + version.
