@@ -100,6 +100,7 @@ set "STUB=bin\launcher-stub.exe"
 set "DEMO_JAR=assets\snug-javafx-demo.jar"
 set "DEMO_EXE=assets\snug-javafx-demo.exe"
 set "PREVIEW_PNG=assets\snug-preview.png"
+set "SNUG_CLI_PNG=assets\snug-runner.png"
 
 if "!CROSS_COMPILE!"=="1" (
     set "TARGET_TRIPLE=x86_64-pc-windows-gnu"
@@ -250,10 +251,17 @@ echo ==^> Skipping embedded-stub verification ^(--SkipVerify^)
 
 REM ---------------------------------------------------------------------------
 REM 6. Build the dev-only snug_preview + stamp_preview_icon binaries and stamp
-REM    the preview icon into snug_preview.exe. These live in src/bin/ and aren't
-REM    built by step 1's `cargo build -p snug-launcher` (which only targets the
-REM    primary bin). Skip with --SkipDevTools for CI pipelines that don't ship
-REM    dev artefacts.
+REM    icons into snug_preview.exe AND snug.exe. These live in src/bin/ and
+REM    aren't built by step 1's `cargo build -p snug-launcher` (which only
+REM    targets the primary bin). Skip with --SkipDevTools for CI pipelines
+REM    that don't ship dev artefacts.
+REM
+REM    snug.exe's own icon stamping (`assets\snug-runner.png`) is grouped
+REM    here because it reuses the just-built stamp_preview_icon helper.
+REM    Production user-facing EXEs (the demo) are stamped at package time
+REM    via the snug CLI's `--icon` flag, which is the supported path for
+REM    shipped artefacts; this snug.exe stamp is the dev-tool convention
+REM    applied to our own CLI.
 REM ---------------------------------------------------------------------------
 
 if "!SKIP_DEV_TOOLS!"=="1" goto skip_dev_tools
@@ -277,12 +285,26 @@ if not exist "!PREVIEW_PNG!" (
     echo [build-release] Preview icon PNG not found at !PREVIEW_PNG!.
     exit /b 1
 )
+if not exist "!SNUG_CLI_PNG!" (
+    echo [build-release] snug CLI icon PNG not found at !SNUG_CLI_PNG!.
+    exit /b 1
+)
 
+REM 6a. Stamp snug_preview.exe with assets\snug-preview.png.
 echo.
 echo ==^> !BUILT_STAMP_EXE! !BUILT_PREVIEW_EXE! !PREVIEW_PNG!
 "!BUILT_STAMP_EXE!" "!BUILT_PREVIEW_EXE!" "!PREVIEW_PNG!"
 if errorlevel 1 (
-    echo [build-release] icon stamp failed with exit code %errorlevel%
+    echo [build-release] snug_preview.exe icon stamp failed with exit code %errorlevel%
+    exit /b %errorlevel%
+)
+
+REM 6b. Stamp snug.exe with assets\snug-runner.png.
+echo.
+echo ==^> !BUILT_STAMP_EXE! !BUILT_CLI_EXE! !SNUG_CLI_PNG!
+"!BUILT_STAMP_EXE!" "!BUILT_CLI_EXE!" "!SNUG_CLI_PNG!"
+if errorlevel 1 (
+    echo [build-release] snug.exe icon stamp failed with exit code %errorlevel%
     exit /b %errorlevel%
 )
 
