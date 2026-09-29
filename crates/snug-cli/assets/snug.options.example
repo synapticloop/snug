@@ -153,6 +153,18 @@
 # --dry-run
 #   Validate inputs and print what would be built, but write nothing.
 #
+# --find-main
+#   List every class in the input JAR(s) that declares
+#   `public static void main(String[])`, marking the one your
+#   `--main-class` (or the manifest's `Main-Class`) resolves to:
+#
+#       snug App.jar --find-main
+#
+#   Useful for picking a main class on a fat JAR that ships several
+#   entry points. Diagnostic only: it writes nothing and never fails a
+#   build, so a main class that isn't in the list is reported, not
+#   rejected.
+#
 # --options /path/to/another/options
 #   Read a different options file instead of `./snug.options`.
 #

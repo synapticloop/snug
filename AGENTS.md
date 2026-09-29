@@ -141,6 +141,33 @@ precompiled `launcher-stub.exe` (v2).
   `--no-rcedit` flags are gone in favour of an in-process `editpe`
   integration. The new `--manifest <XML>` flag embeds an arbitrary
   Windows application manifest (XML).
+- **A `Main-Class` need not have a `main` method.** `--find-main` lists
+  every class in the input JAR(s) declaring `public static void
+  main(String[])` (`crates/snug-cli/src/classfile.rs` parses the method
+  table only — no bytecode). It is a **read-only diagnostic**: it never
+  fails a build, because a legitimately missing `main` is normal. The
+  committed `assets/snug-javafx-demo.jar` is the standing example: its
+  manifest names `synapticloop.snugjavafxdemo.HelloApplication`, a
+  JavaFX `Application` subclass with only a constructor and `start(Stage)`
+  — the launcher calls `Application.launch()` for it
+  (`crates/snug-launcher/src/platform/windows.rs`). So any future
+  "Main-Class must have a main method" check must special-case that
+  shape, and a scan cannot fully detect it (the superclass may live in a
+  different JAR or JDK module). The launcher already reports both
+  failure modes at runtime via `err.main_class_not_found` and
+  `err.no_main_method`, so build-time checks are about failing before
+  shipping, not about new diagnostics.
+- **`Main-Class` resolution is first-JAR-wins, and that is flagged.**
+  For a multi-JAR input, snug reads `Main-Class` from `jars.first()`,
+  which is the first JAR *sorted by filename* — a tie-break, not a
+  policy. When two JARs declare *different* values, or when the first
+  JAR declares none while a later one does, both `--find-main` and the
+  build print a warning naming the declarations and the choice, and
+  suggest `--main-class`. Both are **silent** when `--main-class` was
+  passed, and when several manifests agree on the same class (not a
+  conflict). The survey lives in
+  `manifest::survey_main_classes`, over in-memory bytes via
+  `manifest::read_main_class_from_bytes` — never a temp file.
 - **`snug.options` files** are supported. The CLI resolves an options
   file via `--options <path>` (explicit) or `snug.options` in the
   current working directory (default). One option per line, parsed as
