@@ -96,7 +96,12 @@ fn cli_options_override_file_options() {
         .output()
         .expect("spawn snug");
 
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "snug should exit 0 (code={:?}); stderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("min-java:    17"),
@@ -295,7 +300,12 @@ fn cwd_options_file_still_loaded_when_exe_dir_has_none() {
         .output()
         .expect("spawn snug");
 
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "snug should exit 0 (code={:?}); stderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("min-java:    21"),
