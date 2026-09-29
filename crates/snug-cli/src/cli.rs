@@ -55,10 +55,24 @@ impl From<CliDownloadJdkMode> for DownloadJdkMode {
                   #      ~ ~ ~ * ~ ~ ~\n\
                   \n\
                   ~ ~ Wrap a Java JARs into a native Windows .exe launcher. ~ ~\n\
+                  \n    \
+                  The produced EXE loads `jvm.dll` directly via JNI so it appears as `<App>.exe` \n    \
+                  (not `javaw.exe`) in Task Manager, and the launcher locates a compatible JDK on \n    \
+                  the target machine before falling back to an optional JDK download.\n\
                   \n\
-                  >  The produced EXE loads `jvm.dll` directly via JNI so it appears as `<App>.exe` \n\
-                  >  (not `javaw.exe`) in Task Manager, and the launcher locates a compatible JDK on \n\
-                  >  the target machine before falling back to an optional JDK download.",
+                  # Minimum required for a normal build:\n\n  \
+                  Input:\n    \
+                  --input <JAR|DIR>\n  \
+                  or\n    \
+                  [JAR]\n\n  \
+                  Application identity:\n    \
+                  --name <NAME>\n    \
+                  --company <COMPANY>\n\
+                  # Recommended before distribution:\n\n    \
+                  --version <VERSION>\n    \
+                  --description <TEXT>\n    \
+                  --icon <PNG/ICO>\n    \
+                  ",
     // Footer printed after the options list. Keeps the common
     // workflows in front of the user without re-listing every flag;
     // long-about covers the overview, after-help covers the recipes.
@@ -82,26 +96,26 @@ impl From<CliDownloadJdkMode> for DownloadJdkMode {
     version = env!("CARGO_PKG_VERSION"),
 )]
 pub struct Cli {
-    /// Input fat JAR file. Omit to print help + version.
+    /// Input fat JAR file or directory of JARs. Omit to print help + version.
     ///
-    /// Equivalent to `--input <jar>`; the positional form is kept for
+    /// Equivalent to `--input <path>`; the positional form is kept for
     /// shell convenience. `--input` and the positional are mutually
     /// exclusive — supply one or the other.
-    #[arg(help_heading = "Input / output")]
+    #[arg(value_name = "JAR|DIR", help_heading = "Input / output")]
     pub jar: Option<PathBuf>,
 
     /// Input source — either a single fat-JAR file or a directory
     /// containing one or more JARs.
     ///
     /// When the path is a file, it is wrapped as a single-JAR launcher
-    /// (identical to the positional `[JAR]` argument). When the path is
+    /// (identical to the positional `[JAR|DIR]` argument). When the path is
     /// a directory, every `*.jar` directly inside it is scanned, sorted
     /// by name, and embedded into the launcher as a multi-JAR classpath;
     /// the runtime launcher extracts them all to its per-user cache and
     /// concatenates them into `-classpath`. Use `--main-class` to
     /// override the manifest's `Main-Class` for multi-JAR builds.
     ///
-    /// `--input` and the positional `[JAR]` argument are mutually
+    /// `--input` and the positional `[JAR|DIR]` argument are mutually
     /// exclusive; supply one or the other. Suitable for `snug.options`
     /// so the JAR location doesn't need to live on the command line.
     #[arg(
@@ -278,10 +292,15 @@ pub struct Cli {
     /// `--localization` flag still produces a working launcher.
     ///
     /// Pass a single `--localization your-locale.txt` for a
-    /// full-translation build, or many (one per locale) to ship a
-    /// multilingual launcher. Use the bare-stub
-    /// `snug-localisations.en.txt` shipped in this repo as a template
-    /// for the keys.
+    /// full-translation build, many (one per locale) to ship a
+    /// multilingual launcher, or a directory containing
+    /// `snug-localisations.<tag>.txt` files. A directory entry is
+    /// scanned top-level only (subdirectories are not searched); every
+    /// file in the directory must match the pattern (a stray `.bak`,
+    /// README, or typo'd name fails the build with a clear error),
+    /// and the expanded list combines freely with explicit-file flags.
+    /// Use the bare-stub `snug-localisations.en.txt` shipped in this
+    /// repo as a template for the keys.
     ///
     /// The CLI warns at build time about any keys the bundle is
     /// missing relative to the built-in English baseline — keep the
@@ -289,7 +308,7 @@ pub struct Cli {
     /// localized message.
     #[arg(
         long = "localization",
-        value_name = "TXT",
+        value_name = "TXT|DIR",
         value_parser = crate::localization::validate_localization_path,
         help_heading = "Build behaviour"
     )]
