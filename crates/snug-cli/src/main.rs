@@ -43,12 +43,14 @@ fn run() -> Result<()> {
         return init_options::run(&target, parsed.init_options_force, parsed.init_options_stdout);
     }
 
-    // Resolve the options file (explicit `--options <path>` or
-    // CWD-relative `snug.options`) before clap sees anything. Tokens
+    // Resolve the options file (explicit `--options <path>`, else
+    // `snug.options` next to the snug executable, else
+    // `snug.options` in the CWD) before clap sees anything. Tokens
     // from the file are prepended to the real CLI args so command-line
     // values win on conflict (clap's "last wins" semantics).
     let cwd = std::env::current_dir().context("reading current working directory")?;
-    let options_path = options_file::resolve(&raw_args, &cwd);
+    let exe_dir = options_file::current_exe_dir();
+    let options_path = options_file::resolve(&raw_args, &cwd, exe_dir.as_deref());
     let file_tokens = match &options_path {
         Some(p) => options_file::load(p)
             .with_context(|| format!("loading options file {}", p.display()))?,

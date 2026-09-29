@@ -21,6 +21,10 @@
 #  - Command-line flags always override file values.
 #  - Repeatable flags (`--jvm-arg`, `--localization`) accumulate from
 #    both sources.
+#  - Lookup order when `--options` is not given: `snug.options` next
+#    to the snug executable first, then `snug.options` in the current
+#    working directory. So a `snug.exe` shipped alongside its
+#    `snug.options` carries its defaults wherever it is run from.
 #
 #  Most lines below are commented out — uncomment the ones you need and
 #  replace the placeholder values. Anything left commented is ignored.

@@ -169,12 +169,19 @@ precompiled `launcher-stub.exe` (v2).
   `manifest::survey_main_classes`, over in-memory bytes via
   `manifest::read_main_class_from_bytes` — never a temp file.
 - **`snug.options` files** are supported. The CLI resolves an options
-  file via `--options <path>` (explicit) or `snug.options` in the
-  current working directory (default). One option per line, parsed as
+  file via `--options <path>` (explicit) or, with no flag,
+  `snug.options` **next to the snug executable first, then**
+  `snug.options` in the current working directory. So a
+  `snug.exe` shipped alongside its `snug.options` carries its
+  defaults wherever it is invoked from; the CWD copy is the
+  fallback, not the primary. One option per line, parsed as
   shell-like tokens (so `--name "My App"` works with quotes and
-  escapes); `#`-prefixed lines are comments. CLI flags always override
-  file values (the file's matching flag is stripped at merge time).
-  Repeatable flags (`--jvm-arg`) accumulate from both sources.
+  escapes); `#`-prefixed lines are comments. CLI flags always
+  override file values (the file's matching flag is stripped at
+  merge time). Repeatable flags (`--jvm-arg`) accumulate from both
+  sources. Resolution lives in `options_file::resolve`, which takes
+  the CWD and the exe dir (`options_file::current_exe_dir()`) so the
+  precedence order is testable without spawning the binary.
 - Profile `release` is tuned for tiny binaries (`opt-level = "z"`, LTO,
   `panic = "abort"`, stripped). The launcher should be ~hundreds of KB
   not megabytes.

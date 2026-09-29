@@ -14,7 +14,9 @@
 # for the snug jar -> exe builder/launcher.
 #
 #  - This file will be loaded automatically when `snug` runs from this
-#    directory.
+#    directory. A `snug.options` sitting next to the `snug` executable
+#    takes precedence over this one, so a portable `snug.exe` + its
+#    defaults travel together.
 #  - CLI flags will __ALWAYS__ override values in this file.
 #  - `#`-prefixed lines are comments and are ignored
 #  - Each line is parsed as shell-like tokens, so you __MUST__ quote any value

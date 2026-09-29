@@ -159,10 +159,12 @@ snug app.jar -o App.exe --dry-run
 snug app.jar --emit-payload
 
 # Use a `snug.options` file for default settings (CLI flags always override).
+# Snug looks for `snug.options` next to the snug executable first, then in
+# the current working directory; `--options <path>` picks a specific file.
 # Each line is parsed as if it were on the command line; `#` is a comment.
 # `--input` (file or directory) and every other flag can live here too,
 # so the JAR location doesn't have to be on the command line:
-#   # snug.options (in cwd)
+#   # snug.options (next to snug.exe, or in cwd)
 #   --input path/to/app.jar         # or path/to/lib-dir/
 #   --name "My App"
 #   --company "SynapticLoop"
