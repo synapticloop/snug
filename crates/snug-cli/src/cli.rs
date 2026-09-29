@@ -148,9 +148,19 @@ pub struct Cli {
     /// Application version (e.g. `1.2.3`).
     ///
     /// Maps to `ProductVersion` / `FileVersion` in the Windows version
-    /// resource; use a dotted quad (`1.2.3.0`) if you need exact bits,
-    /// otherwise the missing build/revision default to zero.
-    #[arg(long = "version", value_name = "VERSION", help_heading = "Application metadata")]
+    /// resource. The Windows quad holds four 16-bit components, so pass
+    /// 1–4 dot-separated numbers with no quotes — a bare `1.2.3.4`.
+    /// Trailing components may be omitted and default to zero
+    /// (`1.2.3` → `1.2.3.0`); each component must be 0–65535.
+    ///
+    /// Anything else is rejected before the build starts rather than
+    /// being silently zero-filled into the version resource.
+    #[arg(
+        long = "version",
+        value_name = "VERSION",
+        value_parser = crate::resources::validate_app_version,
+        help_heading = "Application metadata"
+    )]
     pub version: Option<String>,
 
     /// Short description (Windows `FileDescription`).
