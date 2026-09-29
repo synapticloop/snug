@@ -880,7 +880,10 @@ mod tests {
         assert!(parse_version_subkey("21.0.5").unwrap() > parse_version_subkey("21.0.1").unwrap());
         assert_eq!(parse_version_subkey("21").unwrap(), 21_000_000);
         assert_eq!(parse_version_subkey("21.0").unwrap(), 21_000_000);
-        assert_eq!(parse_version_subkey("21.0.5").unwrap(), 21_000_500);
+        // Packing is `major*1_000_000 + minor*1_000 + patch`, so the
+        // patch level occupies the *ones* place: 21.0.5 -> 21_000_005,
+        // not 21_000_500.
+        assert_eq!(parse_version_subkey("21.0.5").unwrap(), 21_000_005);
         // Build suffix is ignored — major.minor.patch is enough to
         // disambiguate patch levels for registry ordering.
         assert_eq!(
