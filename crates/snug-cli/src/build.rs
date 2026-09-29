@@ -3,20 +3,20 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use editpe::Image;
 use image::GenericImageView;
 
 use crate::cli::Cli;
 use crate::localization;
-use crate::manifest::read_main_class;
+use crate::manifest::{read_main_class_from_bytes, survey_main_classes};
 use crate::resources::ResourcePlan;
 use crate::stub::STUB_BYTES;
-use snug_launcher::payload_locator::PAYLOAD_RESOURCE_NAME;
 use snug_format::{
-    embedded_file, encode, AppMetadata, EmbeddedFile, LauncherBehavior, LauncherConfig,
-    SnugEmbedded, SnugPayload, SplashConfig, SplashImage,
+    AppMetadata, EmbeddedFile, LauncherBehavior, LauncherConfig, SnugEmbedded, SnugPayload,
+    SplashConfig, SplashImage, embedded_file, encode,
 };
+use snug_launcher::payload_locator::PAYLOAD_RESOURCE_NAME;
 
 /// Build the full [`SnugPayload`] that the launcher will consume.
 ///
@@ -33,36 +33,28 @@ use snug_format::{
 /// (unless `--main-class` overrides), and assembles a complete
 /// [`SnugPayload`].
 pub fn build_payload(cli: &Cli) -> Result<SnugPayload> {
-    let (input_path, jars) = resolve_input(cli)?;
+    let (input_path, jars, labels) = resolve_input(cli)?;
 
     // --- Resolve main class ---------------------------------------------
     // For multi-JAR builds, Main-Class is read from the first JAR's
     // manifest. CLI `--main-class` always overrides.
-    let main_class_jar = jars.first().map(|ef| &ef.bytes).ok_or_else(|| {
-        anyhow::anyhow!("at least one JAR is required to read Main-Class")
-    })?;
+    //
+    // "First" is the first JAR *sorted by filename* — see
+    // `resolve_input`. For a multi-JAR input that is an ordering
+    // accident, not a decision, so the ambiguity is surfaced rather
+    // than resolved silently.
     let main_class = match &cli.main_class {
         Some(cls) => Some(cls.clone()),
         None => {
-            // We need a path for read_main_class; if the input was a
-            // directory, write the first JAR to a temp file so the
-            // existing manifest parser can read it. Cleaner: refactor
-            // read_main_class to take bytes directly. For now, read
-            // from a temp file.
-            let tmp = std::env::temp_dir().join(format!(
-                "snug-manifest-{}-{}.jar",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
-                    .unwrap_or(0)
-            ));
-            std::fs::write(&tmp, main_class_jar)?;
-            let result = read_main_class(&tmp);
-            let _ = std::fs::remove_file(&tmp);
-            result.context("reading Main-Class from JAR manifest")?
+            let first = jars.first().ok_or_else(|| {
+                anyhow::anyhow!("at least one JAR is required to read Main-Class")
+            })?;
+            read_main_class_from_bytes(&first.bytes)
+                .context("reading Main-Class from JAR manifest")?
         }
     };
+
+    warn_on_ambiguous_manifests(&jars, &labels, &main_class, cli.main_class.is_some());
 
     // --- Optional icon ---------------------------------------------------
     let icon = match &cli.icon {
@@ -163,63 +155,95 @@ fn collect_localizations(cli: &Cli) -> Result<Vec<snug_format::Localization>> {
     let mut paths: Vec<std::path::PathBuf> = cli.localizations.clone();
     paths.sort_by(|a, b| a.cmp(b));
     let bundles = localization::collect(&paths)?;
-    localization::ensure_unique_tags(&bundles)
-        .context("validating localization bundle tags")?;
+    localization::ensure_unique_tags(&bundles).context("validating localization bundle tags")?;
     Ok(bundles)
 }
 
-/// Resolve `[JAR]` vs `--input <JAR|DIR>` and return the resolved
-/// path plus the embedded JAR(s).
-fn resolve_input(cli: &Cli) -> Result<(PathBuf, Vec<EmbeddedFile>)> {
+/// Resolve `[JAR]` vs `--input <JAR|DIR>` down to a concrete path,
+/// returning it alongside whether it names a directory.
+///
+/// Deliberately does **no** work beyond a single `stat`: the
+/// `--find-main` diagnostic uses this to get to the JARs without
+/// reading, hashing, and embedding them, which on a 200 MB fat JAR
+/// would cost far more than the scan it's there to enable.
+pub fn resolve_input_path(cli: &Cli) -> Result<(PathBuf, bool)> {
     let input_path = match (&cli.jar, &cli.input) {
         (Some(p), None) => p.clone(),
         (None, Some(p)) => p.clone(),
         (None, None) => bail!(
             "an input source is required (pass a JAR as the positional argument, or use --input <JAR|DIR>)"
         ),
-        (Some(_), Some(_)) => bail!(
-            "the positional [JAR] argument and --input are mutually exclusive"
-        ),
+        (Some(_), Some(_)) => {
+            bail!("the positional [JAR] argument and --input are mutually exclusive")
+        }
     };
 
     let meta = std::fs::metadata(&input_path)
         .with_context(|| format!("stat-ing input {}", input_path.display()))?;
 
-    if meta.is_file() {
+    let is_dir = if meta.is_dir() {
+        true
+    } else if meta.is_file() {
+        false
+    } else {
+        bail!(
+            "{} is neither a regular file nor a directory",
+            input_path.display()
+        );
+    };
+
+    Ok((input_path, is_dir))
+}
+
+/// Every `*.jar` directly inside `dir`, sorted by path for
+/// determinism. Subdirectories are not searched.
+pub fn jar_paths_in(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut jar_paths: Vec<PathBuf> = std::fs::read_dir(dir)
+        .with_context(|| format!("reading directory {}", dir.display()))?
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("jar") {
+                Some(path)
+            } else {
+                None
+            }
+        })
+        .collect();
+    jar_paths.sort();
+
+    if jar_paths.is_empty() {
+        bail!(
+            "no *.jar files found in {} (--input directory must contain at least one JAR)",
+            dir.display()
+        );
+    }
+
+    Ok(jar_paths)
+}
+
+/// Resolve `[JAR]` vs `--input <JAR|DIR>` and return the resolved
+/// path, the embedded JAR(s), and a display label per JAR (indexes
+/// align with the embedded list).
+fn resolve_input(cli: &Cli) -> Result<(PathBuf, Vec<EmbeddedFile>, Vec<String>)> {
+    let (input_path, is_dir) = resolve_input_path(cli)?;
+
+    if !is_dir {
         // Single-JAR input.
         let bytes = std::fs::read(&input_path)
             .with_context(|| format!("reading JAR {}", input_path.display()))?;
         if bytes.is_empty() {
             bail!("{} is empty", input_path.display());
         }
-        Ok((input_path, vec![embedded_file(bytes)]))
-    } else if meta.is_dir() {
+        let label = file_name_of(&input_path);
+        Ok((input_path, vec![embedded_file(bytes)], vec![label]))
+    } else {
         // Multi-JAR input: scan the directory for `*.jar`, sort by
         // filename for determinism.
-        let mut jar_paths: Vec<PathBuf> = std::fs::read_dir(&input_path)
-            .with_context(|| format!("reading directory {}", input_path.display()))?
-            .filter_map(|entry| {
-                let entry = entry.ok()?;
-                let path = entry.path();
-                if path.is_file()
-                    && path.extension().and_then(|e| e.to_str()) == Some("jar")
-                {
-                    Some(path)
-                } else {
-                    None
-                }
-            })
-            .collect();
-        jar_paths.sort();
-
-        if jar_paths.is_empty() {
-            bail!(
-                "no *.jar files found in {} (--input directory must contain at least one JAR)",
-                input_path.display()
-            );
-        }
+        let jar_paths = jar_paths_in(&input_path)?;
 
         let mut jars = Vec::with_capacity(jar_paths.len());
+        let mut labels = Vec::with_capacity(jar_paths.len());
         for jar_path in &jar_paths {
             let bytes = std::fs::read(jar_path)
                 .with_context(|| format!("reading JAR {}", jar_path.display()))?;
@@ -227,19 +251,122 @@ fn resolve_input(cli: &Cli) -> Result<(PathBuf, Vec<EmbeddedFile>)> {
                 bail!("{} is empty", jar_path.display());
             }
             jars.push(embedded_file(bytes));
+            labels.push(file_name_of(jar_path));
         }
         eprintln!(
             "snug: indexed {} JAR(s) from {}",
             jars.len(),
             input_path.display()
         );
-        Ok((input_path, jars))
-    } else {
-        bail!(
-            "{} is neither a regular file nor a directory",
-            input_path.display()
+        Ok((input_path, jars, labels))
+    }
+}
+
+fn file_name_of(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+/// Flag an ambiguous `Main-Class` source on a multi-JAR input.
+///
+/// Snug resolves `Main-Class` from the **first** JAR, which is the
+/// first entry sorted by filename. That is a defensible tie-break and
+/// an indefensible *policy*: a directory of JARs routinely contains
+/// more than one `Main-Class` (a fat JAR plus a bundled runnable tool,
+/// or a dependency that is itself executable), and which one wins then
+/// depends on filenames rather than anything the user decided.
+///
+/// A warning is the right severity — the build genuinely works, and
+/// failing instead would break the legitimate case of a directory
+/// where the alphabetical winner is correct on purpose. Silent would
+/// be the failure mode to avoid, so name what was chosen and how to
+/// change it.
+///
+/// Two shapes get flagged, both of which otherwise produce a launcher
+/// pointing at a class the user didn't choose (or at nothing):
+///
+/// - the manifests disagree, and filename order silently picked one;
+/// - the *first* JAR declares nothing while a later one does, so snug
+///   embeds no main class at all despite one being available.
+///
+/// No-op when `--main-class` was passed, because then the user has
+/// already answered the question this warning asks.
+fn warn_on_ambiguous_manifests(
+    jars: &[EmbeddedFile],
+    labels: &[String],
+    main_class: &Option<String>,
+    explicit: bool,
+) {
+    if explicit || jars.len() < 2 {
+        return;
+    }
+
+    let declarations = survey_main_classes(
+        jars.iter()
+            .zip(labels)
+            .map(|(file, label)| (label.clone(), file.bytes.clone())),
+    );
+    if declarations.is_empty() {
+        return;
+    }
+
+    // The first JAR is what snug actually reads. If it declares
+    // nothing, we embedded no main class even though one was on offer.
+    if main_class.is_none() {
+        eprintln!(
+            "snug: warning: {} (the first JAR by filename) declares no Main-Class, \
+             so the built launcher will have none.",
+            labels[0]
+        );
+        eprintln!("snug: note:    other JAR(s) in this directory do declare one:");
+        for declaration in &declarations {
+            eprintln!(
+                "snug:            {} -> {}",
+                declaration.jar, declaration.main_class
+            );
+        }
+        eprintln!(
+            "snug: note:    pass --main-class <CLASS> to choose one, e.g. \
+             --main-class {}",
+            declarations[0].main_class
+        );
+        return;
+    }
+
+    // Several JARs declaring the *same* class is not a conflict — the
+    // answer doesn't depend on ordering, so there's nothing to warn
+    // about.
+    let distinct: std::collections::BTreeSet<&str> =
+        declarations.iter().map(|d| d.main_class.as_str()).collect();
+    if distinct.len() < 2 {
+        return;
+    }
+
+    eprintln!(
+        "snug: warning: {} JARs declare different Main-Class values:",
+        distinct.len()
+    );
+    for declaration in &declarations {
+        eprintln!(
+            "snug:          {} -> {}",
+            declaration.jar, declaration.main_class
         );
     }
+
+    // `declarations` is in JAR order and snug reads the first JAR, so
+    // index 0 is the one in use. Match on position rather than on the
+    // class value — two JARs can declare the same class, and a
+    // value-based match would credit the wrong one.
+    eprintln!(
+        "snug: note:    using {} (from {}, the first JAR by filename)",
+        declarations[0].main_class, declarations[0].jar
+    );
+    eprintln!(
+        "snug: note:    pass --main-class <CLASS> to choose explicitly, e.g. \
+         --main-class {}",
+        declarations[0].main_class
+    );
 }
 
 fn load_embedded_file(path: &std::path::Path, label: &str) -> Result<EmbeddedFile> {
@@ -275,7 +402,10 @@ fn parse_splash_max(value: &str) -> Option<(u32, u32)> {
         return Some((640, 360));
     }
     let low = v.to_ascii_lowercase();
-    if matches!(low.as_str(), "off" | "none" | "unlimited" | "disable" | "no" | "false") {
+    if matches!(
+        low.as_str(),
+        "off" | "none" | "unlimited" | "disable" | "no" | "false"
+    ) {
         return None;
     }
     let (w_str, h_str) = v
@@ -359,10 +489,7 @@ pub fn build_exe(cli: &Cli, payload: &SnugPayload) -> Result<PathBuf> {
     // directory in place.
     let mut image = Image::parse(STUB_BYTES).context("parsing embedded stub as PE image")?;
 
-    let mut resources = image
-        .resource_directory()
-        .cloned()
-        .unwrap_or_default();
+    let mut resources = image.resource_directory().cloned().unwrap_or_default();
 
     // Embed the snug payload as an RT_RCDATA resource entry.
     resources
@@ -420,6 +547,7 @@ fn _silence_path(_: &Path) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::manifest::read_main_class;
     use std::io::Write;
     use zip::write::SimpleFileOptions;
 
