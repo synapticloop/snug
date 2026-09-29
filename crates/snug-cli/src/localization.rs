@@ -85,8 +85,16 @@ pub fn tag_from_path(path: &Path) -> Option<String> {
 /// didn't reject it.
 pub fn validate_localization_path(s: &str) -> Result<PathBuf, String> {
     let path = PathBuf::from(s);
-    if !path.is_file() {
-        return Err(format!("not a file: {}", path.display()));
+    // Accept either a single file or a directory. A directory entry is
+    // expanded by `collect()` at build time; here we just confirm it
+    // exists so the user gets a clear error rather than a silent miss.
+    let meta = std::fs::metadata(&path)
+        .map_err(|e| format!("reading {}: {e}", path.display()))?;
+    if meta.is_dir() {
+        return Ok(path);
+    }
+    if !meta.is_file() {
+        return Err(format!("not a file or directory: {}", path.display()));
     }
     if tag_from_path(&path).is_none() {
         return Err(format!(
@@ -123,8 +131,17 @@ pub fn collect(user_paths: &[PathBuf]) -> Result<Vec<Localization>> {
         .context("parsing built-in English baseline")?;
     bundles.push(baseline);
 
-    // 2. User bundles, in CLI / options-file order.
-    for path in user_paths {
+    // 2. Expand user inputs. A directory entry is replaced with the
+    //    sorted list of `snug-localisations.<tag>.txt` files directly
+    //    inside it (subdirectories are skipped — top-level scan only).
+    //    Explicit-file entries pass through unchanged, so callers can
+    //    freely mix `--localization <dir>` and `--localization <file>`.
+    //    Every file inside a passed directory MUST match the pattern;
+    //    a stray file is almost always a typo (e.g. `.bak`, wrong case)
+    //    so we fail the build rather than silently skip it.
+    let expanded = expand_user_paths(user_paths)?;
+
+    for path in &expanded {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading localization file {}", path.display()))?;
         let tag = tag_from_path(path).with_context(|| {
@@ -145,6 +162,55 @@ pub fn collect(user_paths: &[PathBuf]) -> Result<Vec<Localization>> {
     warn_on_missing_keys(&bundles);
 
     Ok(bundles)
+}
+
+/// Walk `user_paths`, expanding any directory entries into the sorted
+/// list of `snug-localisations.<tag>.txt` files directly inside. A
+/// directory containing zero matching files, or any non-matching file,
+/// is a build error — directory mode is opt-in and we want typos to be
+/// loud, not silently ignored.
+fn expand_user_paths(user_paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let mut expanded: Vec<PathBuf> = Vec::with_capacity(user_paths.len());
+    for path in user_paths {
+        let meta = std::fs::metadata(path)
+            .with_context(|| format!("stat-ing localization entry {}", path.display()))?;
+        if meta.is_dir() {
+            let mut entries: Vec<PathBuf> = std::fs::read_dir(path)
+                .with_context(|| {
+                    format!("reading localization directory {}", path.display())
+                })?
+                .filter_map(|entry| entry.ok().map(|e| e.path()))
+                // Subdirectories are not descended into — top-level scan only.
+                .filter(|p| p.is_file())
+                .collect();
+            // Sort for determinism across platforms (read_dir order is OS-specific).
+            entries.sort();
+            if entries.is_empty() {
+                bail!(
+                    "localization directory `{}` contains no `snug-localisations.<tag>.txt` files \
+                     (top-level scan; subdirectories are not searched)",
+                    path.display()
+                );
+            }
+            // Every file in the directory must match the canonical pattern.
+            // A non-matching file is almost always a typo or a `.bak` left
+            // behind, so fail loudly rather than silently skipping.
+            for entry in &entries {
+                if tag_from_path(entry).is_none() {
+                    bail!(
+                        "localization directory `{}` contains non-matching file `{}` \
+                         (expected `snug-localisations.<tag>.txt`)",
+                        path.display(),
+                        entry.display()
+                    );
+                }
+            }
+            expanded.extend(entries);
+        } else {
+            expanded.push(path.clone());
+        }
+    }
+    Ok(expanded)
 }
 
 /// Emit a stderr warning for every key in the built-in English
@@ -349,9 +415,19 @@ mod tests {
     }
 
     #[test]
-    fn validate_localization_path_rejects_missing_file() {
+    fn validate_localization_path_rejects_missing_path() {
         let err = validate_localization_path("C:/does/not/exist.txt").unwrap_err();
-        assert!(err.contains("not a file"), "unexpected error: {err}");
+        assert!(err.contains("reading"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn validate_localization_path_accepts_directory() {
+        // A directory entry passes the validator without per-file parsing;
+        // `collect()` is responsible for expanding and validating the
+        // contents.
+        let dir = tmpdir();
+        let validated = validate_localization_path(dir.to_str().unwrap()).unwrap();
+        assert_eq!(validated, dir);
     }
 
     #[test]
@@ -364,5 +440,101 @@ mod tests {
             err.contains("missing `=` separator"),
             "unexpected error: {err}"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // Directory expansion (--localization <dir>)
+    // ------------------------------------------------------------------
+
+    /// Helper: write a minimal-but-valid `snug-localisations.<tag>.txt`
+    /// file into `dir` covering every key in the built-in English
+    /// baseline, so `collect()` doesn't emit missing-key warnings during
+    /// the test. Returns the path of the written file.
+    fn write_full_bundle(dir: &Path, tag: &str) -> PathBuf {
+        // Pull the canonical key set from the baseline itself so the
+        // test stays in sync if the baseline grows.
+        let baseline = Localization::parse(DEFAULT_EN_TAG, DEFAULT_EN_TEXT).unwrap();
+        let mut text = String::new();
+        for (k, _) in &baseline.entries {
+            // Value is irrelevant for these tests — we only care about
+            // tag presence and file-parsing success.
+            text.push_str(&format!("{k} = x\n"));
+        }
+        let path = dir.join(format!("snug-localisations.{tag}.txt"));
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
+    #[test]
+    fn collect_expands_directory_of_canonical_files() {
+        let dir = tmpdir();
+        write_full_bundle(&dir, "de");
+        write_full_bundle(&dir, "ja");
+        write_full_bundle(&dir, "pt-BR");
+        let bundles = collect(&[dir.clone()]).unwrap();
+        // baseline + 3 expanded files
+        assert_eq!(bundles.len(), 4);
+        assert_eq!(bundles[0].tag, DEFAULT_EN_TAG);
+        let user_tags: std::collections::HashSet<&str> =
+            bundles[1..].iter().map(|b| b.tag.as_str()).collect();
+        assert_eq!(
+            user_tags,
+            ["de", "ja", "pt-BR"].into_iter().collect()
+        );
+    }
+
+    #[test]
+    fn collect_directory_errors_on_non_matching_file() {
+        let dir = tmpdir();
+        write_full_bundle(&dir, "de");
+        // A stray README next to the canonical bundle must fail the build.
+        std::fs::write(dir.join("README.md"), "hello\n").unwrap();
+        let err = collect(&[dir.clone()]).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("non-matching file") && msg.contains("README.md"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn collect_directory_errors_on_empty_directory() {
+        let dir = tmpdir();
+        let err = collect(&[dir.clone()]).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("contains no `snug-localisations"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn collect_directory_skips_subdirectories() {
+        // Subdirectories must be ignored (top-level scan only); the
+        // nested canonical file is NOT picked up.
+        let dir = tmpdir();
+        let nested = dir.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        write_full_bundle(&nested, "de");
+        let err = collect(&[dir.clone()]).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("contains no `snug-localisations"),
+            "subdir should be skipped; unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn collect_mixes_directory_and_explicit_file() {
+        // Directory entries combine with explicit-file entries.
+        let dir = tmpdir();
+        write_full_bundle(&dir, "ja");
+        let extra = tmpdir();
+        let extra_file = write_full_bundle(&extra, "de");
+        let bundles = collect(&[dir.clone(), extra_file.clone()]).unwrap();
+        assert_eq!(bundles.len(), 3); // baseline + ja + de
+        let tags: std::collections::HashSet<&str> =
+            bundles[1..].iter().map(|b| b.tag.as_str()).collect();
+        assert_eq!(tags, ["ja", "de"].into_iter().collect());
     }
 }
