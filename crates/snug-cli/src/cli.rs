@@ -45,23 +45,19 @@ impl From<CliDownloadJdkMode> for DownloadJdkMode {
 #[command(
     name = "snug",
     about = "Wrap a Java fat JAR into a native Windows .exe launcher",
-    long_about = "###############################################################################\n\
-                  #                                                                             #\n\
-                  #                          .-----.-----.--.--.-----.                          #\n\
-                  #                          |__ --|     |  |  |  _  |                          #\n\
-                  #                          |_____|__|__|_____|___  |                          #\n\
-                  #                                ... .-..    |_____|                          #\n\
-                  #                                                                             #\n\
-                  #                                ~ ~ ~ * ~ ~ ~                                #\n\
-                  #                                                                             #\n\
-                  ###############################################################################\n\
+    long_about = "\n\
+                  # .-----.-----.--.--.-----.\n\
+                  # |__ --|     |  |  |  _  |\n\
+                  # |_____|__|__|_____|___  |\n\
+                  #       ... .-..    |_____|\n\
+                  \n\
+                  #      ~ ~ ~ * ~ ~ ~\n\
                   \n\
                   Wrap a Java fat JAR into a native Windows .exe launcher.\n\
                   \n\
-                  The produced EXE loads `jvm.dll` directly via JNI so it\n\
-                  appears as `<App>.exe` (not `javaw.exe`) in Task Manager,\n\
-                  and the launcher locates a compatible JDK on the target\n\
-                  machine before falling back to an optional Temurin download.",
+                  The produced EXE loads `jvm.dll` directly via JNI so it appears as `<App>.exe` \n\
+                  (not `javaw.exe`) in Task Manager, and the launcher locates a compatible JDK on \n\
+                  the target machine before falling back to an optional JDK download.",
     // Footer printed after the options list. Keeps the common
     // workflows in front of the user without re-listing every flag;
     // long-about covers the overview, after-help covers the recipes.
