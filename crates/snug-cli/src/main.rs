@@ -62,6 +62,16 @@ fn run() -> Result<()> {
         eprintln!("snug: loaded options from {}", p.display());
     }
 
+    // `--find-main` is a standalone diagnostic: scan, print, exit. It
+    // runs before the no-input help branch so `--find-main` with no
+    // JAR gets a specific error rather than the full help text, and
+    // well before `build_payload` so it doesn't read, hash, or embed
+    // the JAR — on a 200 MB fat JAR that would cost far more than the
+    // scan itself.
+    if cli.find_main {
+        return snug_cli::find_main::run(&cli);
+    }
+
     // No input source supplied (positional `[JAR]` or `--input`):
     // print help + snug's own version, exit 0.
     // (clap's own `--help` is handled automatically by ArgAction::Help.)

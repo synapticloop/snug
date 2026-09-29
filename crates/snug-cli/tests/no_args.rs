@@ -56,6 +56,7 @@ fn snug_no_args_prints_help_with_version() {
         "--splash",
         "--jvm-arg",
         "--snug-version",
+        "--find-main",
     ] {
         assert!(
             stdout.contains(needle),

@@ -334,6 +334,26 @@ pub struct Cli {
     #[arg(long = "dry-run", help_heading = "Build behaviour")]
     pub dry_run: bool,
 
+    /// List every class in the input JAR(s) that declares a
+    /// `public static void main(String[])`, then report whether the
+    /// main class snug would use is one of them.
+    ///
+    /// Use it to pick a value for `--main-class` on a fat JAR that
+    /// ships several entry points, or to confirm the one already
+    /// configured. The matching class is marked inline with `<--`.
+    ///
+    /// Purely diagnostic: it writes no files, builds no EXE, and
+    /// never fails a build — including when your main class is absent
+    /// from the list. That case is genuinely ambiguous, because a
+    /// JavaFX `Application` subclass has no `main` method and snug's
+    /// launcher supports those directly.
+    ///
+    /// Reads only the front of each `.class` entry, so it costs about
+    /// a second on a 5,000-class fat JAR and nothing at all on builds
+    /// that don't pass this flag.
+    #[arg(long = "find-main", help_heading = "Build behaviour")]
+    pub find_main: bool,
+
     /// Print snug's own version (from `Cargo.toml`) and exit.
     ///
     /// Distinct from `--version <APP-VERSION>`, which sets the
