@@ -46,6 +46,7 @@ impl From<CliDownloadJdkMode> for DownloadJdkMode {
     name = "snug",
     about = "Wrap a Java fat JAR into a native Windows .exe launcher",
     long_about = "\n\
+                  \n\
                   # .-----.-----.--.--.-----.\n\
                   # |__ --|     |  |  |  _  |\n\
                   # |_____|__|__|_____|___  |\n\
@@ -53,16 +54,16 @@ impl From<CliDownloadJdkMode> for DownloadJdkMode {
                   \n\
                   #      ~ ~ ~ * ~ ~ ~\n\
                   \n\
-                  Wrap a Java fat JAR into a native Windows .exe launcher.\n\
+                  ~ ~ Wrap a Java JARs into a native Windows .exe launcher. ~ ~\n\
                   \n\
-                  The produced EXE loads `jvm.dll` directly via JNI so it appears as `<App>.exe` \n\
-                  (not `javaw.exe`) in Task Manager, and the launcher locates a compatible JDK on \n\
-                  the target machine before falling back to an optional JDK download.",
+                  >  The produced EXE loads `jvm.dll` directly via JNI so it appears as `<App>.exe` \n\
+                  >  (not `javaw.exe`) in Task Manager, and the launcher locates a compatible JDK on \n\
+                  >  the target machine before falling back to an optional JDK download.",
     // Footer printed after the options list. Keeps the common
     // workflows in front of the user without re-listing every flag;
     // long-about covers the overview, after-help covers the recipes.
-    after_help = "Examples:\n  \
-                  snug App.jar -o App.exe --name \"My App\" --company \"Acme\" --version 1.2.3 --min-java 25 --icon app.png\n\
+    after_help = "Examples:\n\n  \
+                  snug App.jar -o App.exe --name \"My App\" --company \"My Company\" --version 1.2.3 --min-java 25 --icon app.png\n\
                   \n  \
                   snug App.jar --dry-run                      # validate, don't build\n  \
                   snug App.jar --emit-payload > payload.bin   # write encoded payload\n  \
@@ -71,7 +72,7 @@ impl From<CliDownloadJdkMode> for DownloadJdkMode {
                   Each `--localization your-locale.txt` you pass is embedded in the\n\
                   launcher alongside the built-in English baseline; the user's Windows\n\
                   UI language picks the right bundle at runtime. See README and the\n\
-                  `snug-localisations.en.txt` baseline for the full key inventory.",
+                  `snug-localisations.en.txt` baseline for the full key inventory.\n\n",
     // The brief uses `--version <VER>` to set the application version,
     // which clashes with clap's auto-generated `--version` flag. We
     // disable the auto-version and treat our `--version` as the app
