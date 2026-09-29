@@ -209,9 +209,77 @@ fn build_version_info(app: &AppMetadata) -> VersionInfo {
     }
 }
 
+/// Validate a `--version` value at the CLI boundary.
+///
+/// The Windows `VS_FIXEDFILEINFO` quad packs exactly four `u16`
+/// components, so a usable value is 1–4 dot-separated runs of ASCII
+/// digits, each ≤ 65535. Trailing components may be omitted; missing
+/// ones default to zero (`1.2.3` → `1.2.3.0`).
+///
+/// This exists because [`parse_version_quad`] uses
+/// `filter_map(..ok())` and would otherwise *silently* drop
+/// unparseable segments — `--version v1.2` would stamp `0.0.0.0` and
+/// the build would still report success. Rejecting bad input here
+/// turns a silent mis-stamp into a clear CLI error.
+///
+/// Wired in as a clap `value_parser`, so it applies equally to values
+/// from `snug.options` (the options-file merge re-feeds tokens through
+/// clap rather than bypassing it).
+pub fn validate_app_version(s: &str) -> Result<String, String> {
+    // `u16::MAX` is the per-component ceiling. Windows has no wider
+    // representation for a quad component.
+    const MAX_COMPONENT: u64 = u16::MAX as u64;
+
+    // `s.split('.')` always yields at least one item, so an empty
+    // `--version ""` is caught by the empty-component branch below.
+    let mut count = 0usize;
+    for part in s.split('.') {
+        count += 1;
+        if count > 4 {
+            return Err(format!(
+                "too many components in `{s}`: expected at most 4 \
+                 (e.g. `1.2.3` or `1.2.3.4`)"
+            ));
+        }
+        if part.is_empty() {
+            return Err(format!(
+                "empty version component in `{s}`: expected 1-4 \
+                 dot-separated numbers (e.g. `1.2.3` or `1.2.3.4`)"
+            ));
+        }
+        // Digits only — this rejects signs (`+1`, `-1`), whitespace,
+        // and anything alphabetic, all of which `u16::from_str` would
+        // otherwise accept or silently mishandle.
+        if !part.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(format!(
+                "version component `{part}` in `{s}` is not a plain number: \
+                 expected 1-4 dot-separated numbers (e.g. `1.2.3` or `1.2.3.4`)"
+            ));
+        }
+        // `part` is digits-only, so this parse cannot overflow u64 in
+        // practice; guard anyway so a pathological 400-digit component
+        // surfaces as our error rather than a `ParseIntError`.
+        match part.parse::<u64>() {
+            Ok(n) if n <= MAX_COMPONENT => {}
+            _ => {
+                return Err(format!(
+                    "version component `{part}` in `{s}` is out of range: \
+                     each component must be 0-{MAX_COMPONENT}"
+                ))
+            }
+        }
+    }
+    Ok(s.to_string())
+}
+
 /// Parse `"A.B.C.D"` (each component optional, defaults to 0) and pack
 /// it into the Windows `VS_FIXEDFILEINFO` representation:
 /// `major: (MAJOR << 16) | MINOR`, `minor: (PATCH << 16) | BUILD`.
+///
+/// This is intentionally lenient — it runs on already-validated input
+/// from [`validate_app_version`], and additionally tolerates callers
+/// that construct `AppMetadata` directly (tests, library consumers)
+/// without going through clap.
 fn parse_version_quad(s: &str) -> VersionU32 {
     let mut parts = s.split('.').filter_map(|p| p.parse::<u16>().ok());
     let major = parts.next().unwrap_or(0);
@@ -307,5 +375,98 @@ mod tests {
             table.strings.get("LegalCopyright").map(String::as_str),
             Some("© 2026 Co")
         );
+    }
+
+    // ------------------------------------------------------------------
+    // validate_app_version (--version value_parser)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn validate_app_version_accepts_one_to_four_components() {
+        for good in [
+            "0", "1", "25", "1.2", "1.2.3", "1.2.3.4", "0.0.0.0", "65535.0.0.0",
+        ] {
+            assert_eq!(
+                validate_app_version(good).unwrap(),
+                good,
+                "expected `{good}` to be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_app_version_rejects_too_many_components() {
+        let err = validate_app_version("1.2.3.4.5").unwrap_err();
+        assert!(err.contains("too many components"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn validate_app_version_rejects_empty_components() {
+        for bad in ["", ".1", "1.", "1..2", "1.2.3."] {
+            let err = validate_app_version(bad).unwrap_err();
+            assert!(
+                err.contains("empty version component"),
+                "expected `{bad}` to be rejected as empty, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_app_version_rejects_non_numeric_components() {
+        // These are exactly the cases that used to be silently zero-filled
+        // by `parse_version_quad`'s `filter_map(..ok())`.
+        for bad in ["v1.2.3", "1.2.3.beta", "not.a.version", "1.x.3.4"] {
+            let err = validate_app_version(bad).unwrap_err();
+            assert!(
+                err.contains("is not a plain number"),
+                "expected `{bad}` to be rejected as non-numeric, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_app_version_rejects_signed_components() {
+        // `u16::from_str` would happily accept a leading `+`; we don't.
+        for bad in ["+1.2", "-1.2", "1.+2"] {
+            let err = validate_app_version(bad).unwrap_err();
+            assert!(
+                err.contains("is not a plain number"),
+                "expected `{bad}` to be rejected, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_app_version_rejects_components_above_u16_max() {
+        for bad in ["65536", "1.65536.0.0", "99999.0"] {
+            let err = validate_app_version(bad).unwrap_err();
+            assert!(
+                err.contains("out of range"),
+                "expected `{bad}` to be rejected as out of range, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_app_version_rejects_absurdly_long_component() {
+        // Guards the `parse::<u64>()` path: a 400-digit component must
+        // surface our message, not a ParseIntError.
+        let bad = format!("{}.0", "9".repeat(400));
+        let err = validate_app_version(&bad).unwrap_err();
+        assert!(err.contains("out of range"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn validate_app_version_guards_against_lenient_parse_zero_fill() {
+        // Regression pin: each of these used to succeed at the CLI and
+        // stamp 0.0.0.0 (or a partial quad) into the PE version resource.
+        // Now they must all be rejected up front.
+        for bad in ["v1.2", "1.2.3.beta", "1.2.3.4.5", "1.99999.3.4"] {
+            assert!(
+                validate_app_version(bad).is_err(),
+                "expected `{bad}` to be rejected so it can't silently \
+                 zero-fill the version resource"
+            );
+        }
     }
 }
