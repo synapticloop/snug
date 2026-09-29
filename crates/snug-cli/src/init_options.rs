@@ -26,10 +26,11 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 
 /// Path-snug provides when `--init-options` is given with no
-/// explicit value. Matches the default lookup path used by
-/// `options_file::resolve` — same string on both sides, so
-/// `snug --init-options` writes the file the next `snug` invocation
-/// will read.
+/// explicit value. Matches the file name looked up by
+/// `options_file::resolve`, which searches the snug executable's
+/// directory first and the current working directory second — the
+/// same string on both sides, so `snug --init-options` writes a file
+/// the next `snug` invocation will read.
 pub const DEFAULT_PATH: &str = "snug.options";
 
 /// The example template text, embedded at compile time.

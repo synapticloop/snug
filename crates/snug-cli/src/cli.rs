@@ -362,8 +362,9 @@ pub struct Cli {
     #[arg(long = "snug-version", action = clap::ArgAction::Version, help_heading = "CLI tooling")]
     pub snug_version: (),
 
-    /// Path to a snug options file. Default: `snug.options` in the
-    /// current working directory, if present.
+    /// Path to a snug options file. Default: `snug.options` next to the
+    /// snug executable, then `snug.options` in the current working
+    /// directory, if present.
     ///
     /// Format: one option per line, parsed as if it were supplied on
     /// the command line (so `--name "My App"` works, quoting and
@@ -378,7 +379,7 @@ pub struct Cli {
     /// The example covers every CLI flag with a commented-out
     /// demonstration, suitable for dropping into a project root and
     /// editing. The path is optional: `--init-options` writes
-    /// `./snug.options` (the default lookup path), and
+    /// `./snug.options` (the CWD default lookup path), and
     /// `--init-options=cfg/build.options` writes a custom path.
     ///
     /// By default refuses to overwrite an existing file; pass

@@ -2,7 +2,8 @@
 //!
 //! The CLI accepts an optional `--options <path>` flag pointing at a
 //! file containing one option per line. If no flag is given, `snug`
-//! looks for `snug.options` in the current working directory.
+//! looks for `snug.options` next to the `snug` executable first, then
+//! in the current working directory.
 //!
 //! The file is parsed line by line, with each line tokenised as if it
 //! were supplied on the command line (via `shell_words`). Lines starting
@@ -33,8 +34,9 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
-/// Default options-file name looked up in the current working directory
-/// when `--options` is not supplied.
+/// Default options-file name looked up next to the `snug` executable
+/// and then in the current working directory when `--options` is not
+/// supplied.
 pub const DEFAULT_OPTIONS_FILE: &str = "snug.options";
 
 /// Errors that can arise while resolving or loading a `snug.options`
@@ -61,21 +63,36 @@ pub enum OptionsFileError {
 
 /// Resolve the options-file path from the raw command-line arguments.
 ///
-/// - If `--options <path>` or `--options=<path>` is present, returns
-///   that path (and the caller is expected to fail loudly if it does
-///   not exist — explicit user intent).
-/// - Otherwise, returns `cwd/snug.options` *only if it exists*. Returns
-///   `None` if the default file is absent (no error).
-pub fn resolve(raw_args: &[String], cwd: &Path) -> Option<PathBuf> {
+/// Precedence, highest first:
+///
+/// 1. An explicit `--options <path>` / `--options=<path>` flag. The
+///    caller is expected to fail loudly if the path does not exist —
+///    explicit user intent.
+/// 2. `<exe_dir>/snug.options`, if it exists. This lets a portable
+///    `snug.exe` shipped alongside a `snug.options` carry its defaults
+///    with it, regardless of where it is invoked from.
+/// 3. `<cwd>/snug.options`, if it exists.
+///
+/// `exe_dir` is `None` when the executable's own location is unknown.
+/// Returns `None` when no candidate file is present (no error).
+pub fn resolve(raw_args: &[String], cwd: &Path, exe_dir: Option<&Path>) -> Option<PathBuf> {
     if let Some(p) = find_options_flag(raw_args) {
         return Some(p);
     }
-    let default = cwd.join(DEFAULT_OPTIONS_FILE);
-    if default.is_file() {
-        Some(default)
-    } else {
-        None
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(dir) = exe_dir {
+        candidates.push(dir.join(DEFAULT_OPTIONS_FILE));
     }
+    candidates.push(cwd.join(DEFAULT_OPTIONS_FILE));
+    candidates.into_iter().find(|p| p.is_file())
+}
+
+/// The directory containing the running `snug` executable, or `None` if
+/// the platform refuses to report it.
+pub fn current_exe_dir() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
 }
 
 /// Walk the raw argv looking for `--options <path>` or `--options=<path>`.
@@ -383,7 +400,7 @@ mod tests {
         // Default file also exists, but the explicit flag wins.
         std::fs::write(dir.join(DEFAULT_OPTIONS_FILE), "--name Y\n").unwrap();
         let raw = args(&["snug", "--options", explicit.to_str().unwrap()]);
-        let resolved = resolve(&raw, &dir).unwrap();
+        let resolved = resolve(&raw, &dir, None).unwrap();
         assert_eq!(resolved, explicit);
     }
 
@@ -392,7 +409,7 @@ mod tests {
         let dir = tempdir();
         std::fs::write(dir.join(DEFAULT_OPTIONS_FILE), "--name Y\n").unwrap();
         let raw = args(&["snug", "app.jar"]);
-        let resolved = resolve(&raw, &dir).unwrap();
+        let resolved = resolve(&raw, &dir, None).unwrap();
         assert_eq!(resolved, dir.join(DEFAULT_OPTIONS_FILE));
     }
 
@@ -400,7 +417,61 @@ mod tests {
     fn resolve_returns_none_when_no_file_present() {
         let dir = tempdir();
         let raw = args(&["snug", "app.jar"]);
-        assert_eq!(resolve(&raw, &dir), None);
+        assert_eq!(resolve(&raw, &dir, None), None);
+    }
+
+    #[test]
+    fn resolve_prefers_exe_dir_over_cwd() {
+        let exe_dir = tempdir();
+        let cwd = tempdir();
+        std::fs::write(exe_dir.join(DEFAULT_OPTIONS_FILE), "--name ExeDir\n").unwrap();
+        std::fs::write(cwd.join(DEFAULT_OPTIONS_FILE), "--name Cwd\n").unwrap();
+        let raw = args(&["snug", "app.jar"]);
+        let resolved = resolve(&raw, &cwd, Some(&exe_dir)).unwrap();
+        assert_eq!(resolved, exe_dir.join(DEFAULT_OPTIONS_FILE));
+    }
+
+    #[test]
+    fn resolve_uses_cwd_when_exe_dir_has_no_default() {
+        let exe_dir = tempdir();
+        let cwd = tempdir();
+        std::fs::write(cwd.join(DEFAULT_OPTIONS_FILE), "--name Cwd\n").unwrap();
+        let raw = args(&["snug", "app.jar"]);
+        let resolved = resolve(&raw, &cwd, Some(&exe_dir)).unwrap();
+        assert_eq!(resolved, cwd.join(DEFAULT_OPTIONS_FILE));
+    }
+
+    #[test]
+    fn resolve_explicit_flag_beats_exe_dir_default() {
+        let exe_dir = tempdir();
+        let cwd = tempdir();
+        std::fs::write(exe_dir.join(DEFAULT_OPTIONS_FILE), "--name ExeDir\n").unwrap();
+        let explicit = cwd.join("custom.opts");
+        std::fs::write(&explicit, "--name Custom\n").unwrap();
+        let raw = args(&["snug", "--options", explicit.to_str().unwrap()]);
+        let resolved = resolve(&raw, &cwd, Some(&exe_dir)).unwrap();
+        assert_eq!(resolved, explicit);
+    }
+
+    #[test]
+    fn resolve_ignores_directory_named_like_the_default() {
+        let exe_dir = tempdir();
+        let cwd = tempdir();
+        // A *directory* called snug.options next to the exe must not be
+        // treated as a config file; the CWD one wins instead.
+        std::fs::create_dir_all(exe_dir.join(DEFAULT_OPTIONS_FILE)).unwrap();
+        std::fs::write(cwd.join(DEFAULT_OPTIONS_FILE), "--name Cwd\n").unwrap();
+        let raw = args(&["snug", "app.jar"]);
+        let resolved = resolve(&raw, &cwd, Some(&exe_dir)).unwrap();
+        assert_eq!(resolved, cwd.join(DEFAULT_OPTIONS_FILE));
+    }
+
+    #[test]
+    fn resolve_exe_dir_equal_to_cwd_yields_one_hit() {
+        let dir = tempdir();
+        std::fs::write(dir.join(DEFAULT_OPTIONS_FILE), "--name Same\n").unwrap();
+        let raw = args(&["snug", "app.jar"]);
+        assert_eq!(resolve(&raw, &dir, Some(&dir)), Some(dir.join(DEFAULT_OPTIONS_FILE)));
     }
 
     fn tempdir() -> std::path::PathBuf {
