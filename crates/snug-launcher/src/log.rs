@@ -94,8 +94,25 @@ fn unix_secs() -> u64 {
 mod tests {
     use super::*;
 
+    /// Serialises the tests in this module.
+    ///
+    /// `FILE` is a process-global: `init()` rebinds it to whichever
+    /// file that caller asked for, so two tests running concurrently
+    /// fight over the one writer. Left unserialised, the
+    /// truncation test's `log()` calls land in whatever file the
+    /// neighbouring test last initialised, and it reads back empty.
+    ///
+    /// Poisoning is tolerated — one failing test shouldn't cascade
+    /// into every other test in the module.
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn serialised() -> std::sync::MutexGuard<'static, ()> {
+        TEST_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     #[test]
     fn init_truncates_existing_log() {
+        let _guard = serialised();
         // Init, write, init again — the second init should wipe the
         // first session's content.
         let dir = std::env::temp_dir().join(format!(
@@ -123,6 +140,7 @@ mod tests {
 
     #[test]
     fn init_creates_parent_dirs() {
+        let _guard = serialised();
         let dir = std::env::temp_dir().join(format!(
             "snug-log-nested-{}-{}",
             std::process::id(),
@@ -139,9 +157,12 @@ mod tests {
 
     #[test]
     fn log_without_init_does_not_panic() {
-        // Tests can't easily simulate "no init called" because the
-        // module-level `static FILE` is shared across tests; we just
-        // assert that `log()` doesn't panic regardless of init state.
+        let _guard = serialised();
+        // We can't truly simulate "no init called" — `init()` in a
+        // sibling test would have rebound the global, and with
+        // `TEST_LOCK` held the sibling can't run concurrently
+        // either. So this just asserts `log()` is panic-free
+        // regardless of init state.
         log("orphaned log line should not crash");
     }
 }
