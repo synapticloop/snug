@@ -7,7 +7,11 @@ members = [
 ]
 
 [workspace.package]
-version = "0.3.0"
+# Single source of truth for the snug version. All three crates
+# inherit it via `version.workspace = true`, so this is the only
+# place a bump is needed. See "Versioning" in AGENTS.md for the
+# increment rule (and the pre-1.0 ceiling).
+version = "0.3.1"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
