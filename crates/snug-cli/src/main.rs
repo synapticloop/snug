@@ -10,7 +10,7 @@ use clap::{CommandFactory, Parser};
 
 use snug_cli::build::{build_exe, build_payload, output_path};
 use snug_cli::cli::Cli;
-use snug_cli::init_options;
+use snug_cli::{init_localizations, init_options};
 use snug_cli::options_file;
 use snug_format::SnugEmbedded;
 
@@ -27,20 +27,36 @@ fn main() -> ExitCode {
 fn run() -> Result<()> {
     let raw_args: Vec<String> = std::env::args().collect();
 
-    // `--init-options` short-circuits everything: write the embedded
-    // example, exit. We also skip options-file loading in this case —
-    // there's no point reading a file we're about to write (or that
-    // the user is about to overwrite). Use a dedicated mini-parser
-    // here so clap handles every form (`--init-options`,
+    // The `--init-*` family short-circuits everything: write the
+    // starter files, exit. We also skip options-file loading in this
+    // case — there's no point reading a file we're about to write (or
+    // that the user is about to overwrite). Use a dedicated
+    // mini-parser here so clap handles every form (`--init-options`,
     // `--init-options=PATH`, `--init-options PATH`) consistently and
     // we don't depend on the full `Cli` validation passing.
-    if raw_args
-        .iter()
-        .any(|a| a == "--init-options" || a.starts_with("--init-options="))
-    {
-        let parsed = InitOptionsCli::parse_from(&raw_args);
-        let target = parsed.init_options.unwrap_or_default();
-        return init_options::run(&target, parsed.init_options_force, parsed.init_options_stdout);
+    //
+    // Both init modes can be combined: `snug --init-options
+    // --init-localizations` lays down a `snug.options` *and* a starter
+    // `localisations/` directory in one call, which is the whole
+    // "start a new project from nothing" gesture.
+    if raw_args.iter().any(|a| is_init_flag(a)) {
+        let parsed = InitCli::parse_from(&raw_args);
+        if let Some(target) = parsed.init_options {
+            init_options::run(
+                &target,
+                parsed.init_options_force,
+                parsed.init_options_stdout,
+            )?;
+        }
+        if let Some(dir) = parsed.init_localizations {
+            init_localizations::run(
+                &dir,
+                &parsed.init_localizations_tag,
+                parsed.init_localizations_force,
+                parsed.init_localizations_stdout,
+            )?;
+        }
+        return Ok(());
     }
 
     // Resolve the options file (explicit `--options <path>`, else
@@ -72,6 +88,18 @@ fn run() -> Result<()> {
     // scan itself.
     if cli.find_main {
         return snug_cli::find_main::run(&cli);
+    }
+
+    // `--init-localizations-tag` carries a value, so unlike the
+    // boolean modifiers it can't quietly do nothing: reaching here
+    // means the user passed a locale without asking to scaffold one,
+    // and a build would swallow the value without a word. Say so.
+    if !cli.init_localizations_tag.is_empty() && cli.init_localizations.is_none() {
+        anyhow::bail!(
+            "--init-localizations-tag has no effect without --init-localizations\n\
+             hint: snug --init-localizations --init-localizations-tag {}",
+            cli.init_localizations_tag.join(" --init-localizations-tag ")
+        );
     }
 
     // No input source supplied (positional `[JAR]` or `--input`):
@@ -188,29 +216,43 @@ fn hex_lower(bytes: &[u8]) -> String {
     out
 }
 
-/// Tiny `clap`-derived parser used to extract just the
-/// `--init-options*` flags before the full `Cli` parses.
+/// Does this raw argv token select the early-exit init branch?
+///
+/// Matches the mode flags only, not their `--force` / `--stdout`
+/// modifiers: `snug --init-options-force` alone is not an init
+/// invocation, it's a build-mode flag that happens to be inert, and
+/// it should fall through to the normal parse exactly as it did
+/// before this branch existed.
+fn is_init_flag(arg: &str) -> bool {
+    arg == "--init-options"
+        || arg.starts_with("--init-options=")
+        || arg == "--init-localizations"
+        || arg.starts_with("--init-localizations=")
+}
+
+/// Tiny `clap`-derived parser used to extract just the `--init-*` flags
+/// before the full `Cli` parses.
 ///
 /// We keep it minimal because the full `Cli` struct enforces
 /// `conflicts_with = "jar"` / `conflicts_with = "input"` on
-/// `--init-options`, and we want the flag to work without a JAR
-/// (the whole point is bootstrapping a `snug.options` from scratch).
+/// `--init-options`, and we want the flags to work without a JAR
+/// (the whole point is bootstrapping a project from scratch).
 /// Validating the rest of the surface in this early-exit branch
 /// would reject legitimate invocations.
 ///
 /// ## Strictness
 ///
-/// By design, `--init-options` is mutually exclusive with **every**
-/// other CLI flag — the whole point of the mode is "write the
-/// example, exit, do nothing else". The enforcement is delegated to
-/// clap's default "no unknown arguments" behaviour: `InitOptionsCli`
-/// declares only the three `--init-options*` flags, so any other
-/// argument fails parsing. The `tests` module below locks this down
-/// — if anyone later adds a fourth flag here without thinking
-/// through the implications, the strict-mode test catches the
-/// regression.
+/// By design, the `--init-*` family is mutually exclusive with **every**
+/// other CLI flag — the point of the mode is "write the starter
+/// files, exit, do nothing else". The only thing you may combine is
+/// the init modes themselves. The enforcement is delegated to clap's
+/// default "no unknown arguments" behaviour: [`InitCli`] declares only
+/// the `--init-*` flags, so any other argument fails parsing. The
+/// `tests` module below locks this down — if anyone later adds an
+/// unrelated flag here without thinking through the implications, the
+/// strict-mode tests catch the regression.
 #[derive(Debug, clap::Parser)]
-struct InitOptionsCli {
+struct InitCli {
     /// Target path. Optional — defaults to `./snug.options` (the
     /// same path `options_file::resolve` reads on a normal
     /// invocation, so writing here means the next `snug` run will
@@ -230,6 +272,34 @@ struct InitOptionsCli {
     /// Print to stdout instead of writing to disk.
     #[arg(long = "init-options-stdout")]
     init_options_stdout: bool,
+
+    /// Target directory. Optional — defaults to `./localisations`
+    /// relative to the *current working directory* (where snug was
+    /// invoked from), not the executable's own directory. Created if
+    /// missing.
+    #[arg(
+        long = "init-localizations",
+        value_name = "DIR",
+        num_args = 0..=1,
+        default_missing_value = init_localizations::DEFAULT_DIR,
+    )]
+    init_localizations: Option<String>,
+
+    /// Scaffold an extra `snug-localisations.<tag>.txt` translation
+    /// template in the target directory. Repeatable; the English
+    /// baseline is always written regardless.
+    #[arg(long = "init-localizations-tag", value_name = "TAG")]
+    init_localizations_tag: Vec<String>,
+
+    /// Overwrite existing bundles in the `--init-localizations`
+    /// target directory.
+    #[arg(long = "init-localizations-force")]
+    init_localizations_force: bool,
+
+    /// Print the `--init-localizations` templates to stdout instead
+    /// of writing them to disk.
+    #[arg(long = "init-localizations-stdout")]
+    init_localizations_stdout: bool,
 }
 
 #[cfg(test)]
@@ -237,17 +307,33 @@ mod tests {
     use super::*;
     use clap::Parser;
 
-    /// Pull the three init-options flags out of an arg vector,
-    /// returning `None` if the arg vector contains anything other
-    /// than the recognised flags. Used by the strict-mode tests
-    /// below — they're really asserting on `Err(_)`, but spelling
-    /// that out as a helper makes the intent obvious.
-    fn parse_or_reject(args: &[&str]) -> Result<InitOptionsCli, clap::Error> {
+    /// Pull the init flags out of an arg vector, returning `None` if
+    /// the arg vector contains anything other than the recognised
+    /// flags. Used by the strict-mode tests below — they're really
+    /// asserting on `Err(_)`, but spelling that out as a helper makes
+    /// the intent obvious.
+    fn parse_or_reject(args: &[&str]) -> Result<InitCli, clap::Error> {
         // `parse_from` prepends argv[0]; we use a fixed binary
         // name to keep error messages stable across hosts.
         let mut argv = vec!["snug"];
         argv.extend_from_slice(args);
-        InitOptionsCli::try_parse_from(argv)
+        InitCli::try_parse_from(argv)
+    }
+
+    #[test]
+    fn is_init_flag_matches_modes_but_not_modifiers() {
+        assert!(is_init_flag("--init-options"));
+        assert!(is_init_flag("--init-options=cfg/build.options"));
+        assert!(is_init_flag("--init-localizations"));
+        assert!(is_init_flag("--init-localizations=i18n"));
+        // Modifiers alone don't select the branch — they fall through
+        // to the normal parse.
+        assert!(!is_init_flag("--init-options-force"));
+        assert!(!is_init_flag("--init-localizations-force"));
+        assert!(!is_init_flag("--init-localizations-stdout"));
+        assert!(!is_init_flag("--init-localizations-tag"));
+        assert!(!is_init_flag("--init-options-extra"));
+        assert!(!is_init_flag("MyApp.jar"));
     }
 
     #[test]
@@ -281,6 +367,86 @@ mod tests {
         assert_eq!(p.init_options.as_deref(), Some("foo.options"));
         assert!(p.init_options_force);
         assert!(p.init_options_stdout);
+    }
+
+    // ---- --init-localizations ----
+
+    #[test]
+    fn accepts_bare_init_localizations() {
+        let p = parse_or_reject(&["--init-localizations"]).unwrap();
+        assert_eq!(
+            p.init_localizations.as_deref(),
+            Some(init_localizations::DEFAULT_DIR)
+        );
+        assert!(p.init_localizations_tag.is_empty());
+        assert!(!p.init_localizations_force);
+        assert!(!p.init_localizations_stdout);
+    }
+
+    #[test]
+    fn accepts_init_localizations_with_equals_and_space_forms() {
+        let p = parse_or_reject(&["--init-localizations=i18n"]).unwrap();
+        assert_eq!(p.init_localizations.as_deref(), Some("i18n"));
+        let p = parse_or_reject(&["--init-localizations", "cfg/i18n"]).unwrap();
+        assert_eq!(p.init_localizations.as_deref(), Some("cfg/i18n"));
+    }
+
+    #[test]
+    fn accepts_repeated_init_localizations_tags() {
+        let p = parse_or_reject(&[
+            "--init-localizations",
+            "--init-localizations-tag",
+            "de",
+            "--init-localizations-tag",
+            "pt-BR",
+        ])
+        .unwrap();
+        assert_eq!(p.init_localizations_tag, vec!["de", "pt-BR"]);
+    }
+
+    #[test]
+    fn accepts_init_localizations_with_force_and_stdout() {
+        let p = parse_or_reject(&[
+            "--init-localizations",
+            "--init-localizations-force",
+            "--init-localizations-stdout",
+        ])
+        .unwrap();
+        assert!(p.init_localizations_force);
+        assert!(p.init_localizations_stdout);
+    }
+
+    #[test]
+    fn accepts_both_init_modes_together() {
+        // The "bootstrap a project in one call" gesture: options file
+        // plus translation scaffolds, each with its own modifiers.
+        let p = parse_or_reject(&[
+            "--init-options",
+            "--init-localizations",
+            "--init-localizations-tag",
+            "de",
+        ])
+        .unwrap();
+        assert_eq!(p.init_options.as_deref(), Some(init_options::DEFAULT_PATH));
+        assert_eq!(
+            p.init_localizations.as_deref(),
+            Some(init_localizations::DEFAULT_DIR)
+        );
+        assert_eq!(p.init_localizations_tag, vec!["de"]);
+    }
+
+    #[test]
+    fn init_localizations_tag_without_mode_is_rejected_loudly() {
+        // The early-exit branch is not entered (no mode flag), so this
+        // reaches the full `Cli` — where the tag is declared for help
+        // purposes. A build must not silently swallow the value, so
+        // `main` bails with a hint instead. Parsing alone still
+        // succeeds; the check is a runtime guard, not a clap rule.
+        let p = parse_or_reject(&["--init-localizations-tag", "de"]);
+        // The mini-parser accepts it (it declares the flag), so this
+        // assertion documents that the *branch* is what excludes it.
+        assert_eq!(p.unwrap().init_localizations_tag, vec!["de"]);
+        assert!(!is_init_flag("--init-localizations-tag"));
     }
 
     // ---- strict-mode: any non-init-options flag is rejected ----

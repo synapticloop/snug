@@ -5,12 +5,13 @@
 #  This is the example `snug.options` file that `snug --init-options`
 #  writes to disk. Drop it in your project root and edit any flag below:
 #
-#      snug --init-options            # writes ./snug.options (refuses to
-#                                    #   overwrite without --force)
-#      snug --init-options --force    # overwrite an existing file
-#      snug --init-options build.cfg  # write to a custom path
-#      snug --init-options --stdout   # print to stdout (for piping or
-#                                    #   version control)
+#      snug --init-options                     # writes ./snug.options
+#                                              #   (refuses to overwrite
+#                                              #    without --init-options-force)
+#      snug --init-options-force               # overwrite an existing file
+#      snug --init-options build.cfg           # write to a custom path
+#      snug --init-options-stdout              # print to stdout (for piping
+#                                              #   or version control)
 #
 #  Format
 #  ------
@@ -144,6 +145,24 @@
 #
 # --localization i18n/snug-localisations.de.txt
 # --localization i18n/snug-localisations.fr.txt
+#
+# Scaffolding a translations directory from scratch:
+#
+#   snug --init-localizations                     # writes ./localisations/
+#                                                #   containing the full
+#                                                #   snug-localisations.en.txt
+#                                                #   key inventory
+#   snug --init-localizations --init-localizations-tag de
+#   snug --init-localizations --init-localizations-tag de \
+#                                   --init-localizations-tag pt-BR
+#   snug --init-localizations i18n                # custom directory
+#   snug --init-localizations-force               # overwrite existing bundles
+#   snug --init-localizations-stdout              # print to stdout
+#
+# The default target is `./localisations` relative to the directory you
+# ran snug from. Only `snug-localisations.<tag>.txt` files may live in
+# it — a stray README or `.bak` makes `--localization <dir>` fail the
+# build.
 
 
 # ----------------------------------------------------------------------------

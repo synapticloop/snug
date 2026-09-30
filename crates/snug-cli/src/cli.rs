@@ -81,7 +81,7 @@ impl From<CliDownloadJdkMode> for DownloadJdkMode {
                   \n  \
                   snug App.jar --dry-run                      # validate, don't build\n  \
                   snug App.jar --emit-payload > payload.bin   # write encoded payload\n  \
-                  snug --init-options                         # write a starter snug.options\n\
+                  snug --init-options                         # write a starter snug.options\n  \n                  snug --init-localizations --init-localizations-tag de  # starter localisations/\n\
                   \n\
                   Each `--localization your-locale.txt` you pass is embedded in the\n\
                   launcher alongside the built-in English baseline; the user's Windows\n\
@@ -411,4 +411,60 @@ pub struct Cli {
     /// writing it to disk. Has no effect without `--init-options`.
     #[arg(long = "init-options-stdout", help_heading = "CLI tooling")]
     pub init_options_stdout: bool,
+
+    /// Write a starter `localisations/` directory of
+    /// `snug-localisations.<tag>.txt` bundles, then exit without
+    /// performing a build.
+    ///
+    /// The English baseline is always written; add more languages with
+    /// `--init-localizations-tag de` (repeatable). The directory
+    /// contains only files matching `snug-localisations.<tag>.txt`,
+    /// so it can be handed straight to `--localization
+    /// localisations` on a later build.
+    ///
+    /// The directory defaults to `./localisations` — the directory
+    /// `snug` was invoked from, not the executable's own directory.
+    /// Pass a path to write elsewhere.
+    ///
+    /// By default refuses to overwrite existing bundles; pass
+    /// `--init-localizations-force` to overwrite silently. Pass
+    /// `--init-localizations-stdout` to print to stdout instead of
+    /// writing (useful for piping or version control).
+    ///
+    /// Can be combined with `--init-options` to lay down a whole
+    /// project skeleton in one call.
+    #[arg(
+        long = "init-localizations",
+        value_name = "DIR",
+        num_args = 0..=1,
+        default_missing_value = "localisations",
+        conflicts_with = "jar",
+        conflicts_with = "input",
+        help_heading = "CLI tooling"
+    )]
+    pub init_localizations: Option<String>,
+
+    /// Scaffold an extra `snug-localisations.<tag>.txt` translation
+    /// template in the `--init-localizations` directory. Repeatable.
+    /// The template carries every baseline key with the English value
+    /// in place, ready to translate. Has no effect without
+    /// `--init-localizations`.
+    #[arg(
+        long = "init-localizations-tag",
+        value_name = "TAG",
+        help_heading = "CLI tooling"
+    )]
+    pub init_localizations_tag: Vec<String>,
+
+    /// Overwrite existing bundles in the `--init-localizations`
+    /// directory instead of refusing. Has no effect without
+    /// `--init-localizations`.
+    #[arg(long = "init-localizations-force", help_heading = "CLI tooling")]
+    pub init_localizations_force: bool,
+
+    /// Print the `--init-localizations` templates to stdout instead
+    /// of writing them to disk. Has no effect without
+    /// `--init-localizations`.
+    #[arg(long = "init-localizations-stdout", help_heading = "CLI tooling")]
+    pub init_localizations_stdout: bool,
 }

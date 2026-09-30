@@ -7,6 +7,7 @@ pub mod build;
 pub mod classfile;
 pub mod cli;
 pub mod find_main;
+pub mod init_localizations;
 pub mod init_options;
 pub mod localization;
 pub mod manifest;

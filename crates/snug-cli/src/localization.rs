@@ -22,6 +22,12 @@
 //! `en`, the built-in baseline is still embedded — so the launcher has
 //! a working fallback even when every locale-specific bundle is absent.
 //!
+//! Passing a bundle of your own tagged `en` *replaces* the built-in
+//! baseline in place rather than colliding with it: shipping your own
+//! English copy is legitimate, and the scaffolded `localisations/`
+//! directory always contains one. A second `en` in the same build is
+//! still an error (see [`ensure_unique_tags`]).
+//!
 //! ## Validation
 //!
 //! Build-time validation is intentionally non-fatal for missing keys:
@@ -122,16 +128,19 @@ pub fn validate_localization_path(s: &str) -> Result<PathBuf, String> {
 /// (in CLI / `snug.options` order) override earlier ones at the key
 /// level, with the user's full BCP 47 tag winning over the built-in
 /// baseline at runtime.
+///
+/// A user bundle tagged `en` takes over the baseline slot instead of
+/// being appended as a second `en`; see the module docs. A *second*
+/// `en` is left in the list so [`ensure_unique_tags`] rejects it.
 pub fn collect(user_paths: &[PathBuf]) -> Result<Vec<Localization>> {
+    // The English baseline always occupies slot 0 so it stays the
+    // lowest priority in the launcher's merge chain. A user-supplied
+    // `en` bundle takes that slot over (see below) rather than being
+    // appended as a second `en`.
+    let mut baseline_override: Option<Localization> = None;
     let mut bundles: Vec<Localization> = Vec::new();
 
-    // 1. Built-in English baseline — always first so it's the lowest
-    //    priority in the bundle chain.
-    let baseline = Localization::parse(DEFAULT_EN_TAG, DEFAULT_EN_TEXT)
-        .context("parsing built-in English baseline")?;
-    bundles.push(baseline);
-
-    // 2. Expand user inputs. A directory entry is replaced with the
+    // 1. Expand user inputs. A directory entry is replaced with the
     //    sorted list of `snug-localisations.<tag>.txt` files directly
     //    inside it (subdirectories are skipped — top-level scan only).
     //    Explicit-file entries pass through unchanged, so callers can
@@ -152,16 +161,41 @@ pub fn collect(user_paths: &[PathBuf]) -> Result<Vec<Localization>> {
         })?;
         let bundle = Localization::parse(&tag, &text)
             .with_context(|| format!("parsing localization file {}", path.display()))?;
+
+        // A user-supplied `en` bundle *replaces* the built-in
+        // baseline instead of colliding with it. Shipping your own
+        // English copy is a legitimate thing to want — you may reword
+        // the launcher chrome for your product — and the scaffolded
+        // `localisations/` directory (`snug --init-localizations`)
+        // always contains one, so the naive append would make the
+        // obvious `--localization localisations` fail with a
+        // duplicate-tag error. A *second* `en` is still pushed and
+        // still rejected by `ensure_unique_tags`: that's a genuine
+        // ambiguity, not a baseline override.
+        if tag == DEFAULT_EN_TAG && baseline_override.is_none() {
+            baseline_override = Some(bundle);
+            continue;
+        }
         bundles.push(bundle);
     }
+
+    // 2. Slot 0: the user's English bundle if they supplied one,
+    //    otherwise the built-in baseline.
+    let baseline = match baseline_override {
+        Some(bundle) => bundle,
+        None => Localization::parse(DEFAULT_EN_TAG, DEFAULT_EN_TEXT)
+            .context("parsing built-in English baseline")?,
+    };
+    let mut out = vec![baseline];
+    out.extend(bundles);
 
     // 3. Build-time warning: a user bundle is "missing" any baseline key
     //    we couldn't find. Don't fail the build — the launcher falls
     //    back to the built-in English for those — but make it loud so
     //    the user notices.
-    warn_on_missing_keys(&bundles);
+    warn_on_missing_keys(&out);
 
-    Ok(bundles)
+    Ok(out)
 }
 
 /// Walk `user_paths`, expanding any directory entries into the sorted
@@ -345,6 +379,67 @@ mod tests {
         assert!(bundles[0].get("err.jvm_not_found").is_some());
         assert!(bundles[0].get("splash.title").is_some());
         assert!(bundles[0].get("launcher.bare_stub.hint").is_some());
+    }
+
+    // ------------------------------------------------------------------
+    // User-supplied `en` replaces the built-in baseline
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn collect_user_english_replaces_the_builtin_baseline() {
+        let dir = tmpdir();
+        let path = dir.join("snug-localisations.en.txt");
+        std::fs::write(&path, "err.zip = Our own English copy\n").unwrap();
+        let bundles = collect(&[path]).unwrap();
+        // One `en`, not two: the duplicate-tag check in the build path
+        // would otherwise reject this outright.
+        assert_eq!(bundles.len(), 1);
+        assert_eq!(bundles[0].tag, DEFAULT_EN_TAG);
+        assert_eq!(bundles[0].get("err.zip"), Some("Our own English copy"));
+        assert!(ensure_unique_tags(&bundles).is_ok());
+    }
+
+    #[test]
+    fn collect_user_english_sits_alongside_other_locales() {
+        let dir = tmpdir();
+        std::fs::write(
+            dir.join("snug-localisations.en.txt"),
+            "err.zip = Our own English copy\n",
+        )
+        .unwrap();
+        write_full_bundle(&dir, "de");
+        let bundles = collect(&[dir.clone()]).unwrap();
+        let tags: std::collections::HashSet<&str> =
+            bundles.iter().map(|b| b.tag.as_str()).collect();
+        assert_eq!(tags, ["en", "de"].into_iter().collect());
+        // Slot 0 is still the English one — lowest merge priority.
+        assert_eq!(bundles[0].tag, DEFAULT_EN_TAG);
+        assert!(ensure_unique_tags(&bundles).is_ok());
+    }
+
+    #[test]
+    fn collect_rejects_a_second_english_bundle() {
+        // The override is a baseline replacement, not a free pass for
+        // duplicates: two `en` files reached by explicit flags (a
+        // single directory can't hold two files of the same name) are
+        // a real ambiguity, so the first replaces the baseline and the
+        // second still collides.
+        let a = tmpdir();
+        let b = tmpdir();
+        let first = a.join("snug-localisations.en.txt");
+        let second = b.join("snug-localisations.en.txt");
+        std::fs::write(&first, "err.zip = one\n").unwrap();
+        std::fs::write(&second, "err.zip = two\n").unwrap();
+
+        let bundles = collect(&[first, second]).unwrap();
+        assert_eq!(bundles.len(), 2);
+        assert_eq!(bundles[0].tag, DEFAULT_EN_TAG);
+        assert_eq!(bundles[0].get("err.zip"), Some("one"));
+        let err = ensure_unique_tags(&bundles).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("duplicate localization tag `en`"),
+            "unexpected error: {err:#}"
+        );
     }
 
     #[test]
