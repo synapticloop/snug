@@ -143,6 +143,10 @@ mod tests {
             "--options",
             "--snug-version",
             "--init-options",
+            "--init-localizations",
+            "--init-localizations-tag",
+            "--init-localizations-force",
+            "--init-localizations-stdout",
         ] {
             assert!(
                 EXAMPLE.contains(keyword),

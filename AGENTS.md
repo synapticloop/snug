@@ -182,6 +182,35 @@ precompiled `launcher-stub.exe` (v2).
   sources. Resolution lives in `options_file::resolve`, which takes
   the CWD and the exe dir (`options_file::current_exe_dir()`) so the
   precedence order is testable without spawning the binary.
+- **The `--init-*` family scaffolds project files and exits.** Two modes,
+  both short-circuiting before options-file loading and before the
+  JAR-required check, both strict (a dedicated mini-parser in
+  `main.rs` accepts *only* `--init-*` flags, so
+  `snug App.jar --init-options` is an error, not a build):
+  `--init-options` writes the example `snug.options`
+  (`init_options.rs`), and `--init-localizations` writes a
+  `localisations/` directory of `snug-localisations.<tag>.txt` bundles
+  (`init_localizations.rs`). Each has `--force` and `--stdout`
+  modifiers, and they can be combined in one call to lay down a whole
+  project skeleton. `--init-localizations` defaults to
+  `./localisations` relative to the **CWD — the directory snug was
+  invoked from, not the executable's own directory**; that is the
+  deliberate opposite of the `snug.options` *read* order above,
+  because translations are per-project source rather than a shipped
+  artefact, and it matches `--init-options`' own CWD-relative
+  default. `--init-localizations-tag <TAG>` (repeatable) scaffolds an
+  extra translation template; `en` is always written.
+- **A user-supplied `en` bundle replaces the built-in English
+  baseline**, it does not collide with it: `localization::collect`
+  puts the first user `en` in the baseline slot (position 0, lowest
+  merge priority) instead of appending a second one, which
+  `ensure_unique_tags` would reject. Without this, the obvious
+  `--localization localisations` after `snug --init-localizations`
+  would fail with a duplicate-tag error, since the scaffold always
+  contains an `en` file. A *second* `en` in one build is still an
+  error. The scaffold directory must contain nothing but
+  `snug-localisations.<tag>.txt` files: `expand_user_paths` fails the
+  build on any other entry, so no README, no `.bak`.
 - Profile `release` is tuned for tiny binaries (`opt-level = "z"`, LTO,
   `panic = "abort"`, stripped). The launcher should be ~hundreds of KB
   not megabytes.
@@ -195,7 +224,10 @@ cargo test --workspace
 `snug-format` has integration roundtrip tests in
 `crates/snug-format/tests/roundtrip.rs`. `snug-cli` has unit tests for
 manifest parsing and payload assembly in `src/manifest.rs` and
-`src/build.rs`.
+`src/build.rs`, and end-to-end tests for the `--init-*` modes in
+`tests/init_modes.rs` (these spawn the real binary in a temp CWD —
+the CWD-relative default isn't observable from a unit test without
+mutating process-global state).
 
 ## Out-of-scope questions to defer
 
