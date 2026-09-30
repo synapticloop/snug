@@ -65,15 +65,29 @@ const WINDOW_TITLE: &str = "snug dialog preview\0";
 
 /// Window dimensions (logical pixels at 96 DPI).
 ///
-/// `LAUNCHER_W` / `LAUNCHER_H` describe the **client area**, not the
-/// raw window size — the title bar (~30 px) is added on top at
-/// `CreateWindowExW` time via `AdjustWindowRectEx`. Treating the
-/// constants as client dimensions means the body layout
-/// (`BTN_FIRST_Y`, `BTN_CLOSE_MARGIN_BOTTOM`) is computed in the
-/// same coordinate system the buttons actually live in, so the
-/// Close button can never end up below the visible area.
+/// `LAUNCHER_W` / `launcher_client_height()` describe the **client
+/// area**, not the raw window size — the title bar (~30 px) is added
+/// on top at `CreateWindowExW` time via `AdjustWindowRectEx`. Treating
+/// the values as client dimensions means the body layout
+/// (`BTN_FIRST_Y`, `BTN_CLOSE_MARGIN_BOTTOM`) is computed in the same
+/// coordinate system the buttons actually live in, so the Close button
+/// can never end up below the visible area.
 const LAUNCHER_W: i32 = 480;
-const LAUNCHER_H: i32 = 760;
+
+/// Height of the client area, **derived from the content** so the
+/// Close button always sits just below the last dialog row. The
+/// previous hardcoded 760 left ~148 px of dead space between the
+/// last button (ends at y=560) and Close (started at y=708).
+///
+/// Deriving it means adding or removing a dialog in
+/// [`DIALOG_BUTTONS`] resizes the window automatically — no second
+/// edit to forget.
+const fn launcher_client_height() -> i32 {
+    let rows = DIALOG_BUTTONS.len() as i32;
+    // Bottom edge of the last dialog row.
+    let last_row_bottom = BTN_FIRST_Y + (rows - 1) * (BTN_H + BTN_GAP) + BTN_H;
+    last_row_bottom + BTN_CLOSE_GAP + BTN_CLOSE_H + BTN_CLOSE_MARGIN_BOTTOM
+}
 
 /// Header icon painted at the top of the launcher window's client
 /// area — the EXE's embedded MAINICON, centred horizontally. 128 px
@@ -93,6 +107,9 @@ const BTN_FIRST_Y: i32 = 200;
 const BTN_CLOSE_W: i32 = 96;
 const BTN_CLOSE_H: i32 = 36;
 const BTN_CLOSE_MARGIN_BOTTOM: i32 = 16;
+/// Vertical gap between the last dialog row and the Close button.
+/// 16 px reads as a clear separator without looking detached.
+const BTN_CLOSE_GAP: i32 = 16;
 
 /// Subtitle text painted in `WM_PAINT`. `SUBTITLE_Y` sits directly
 /// below the header icon (icon ends at y=136) with a 16 px gap.
@@ -284,6 +301,21 @@ const ID_BTN_PROMPT_V5: usize = 1007;
 const ID_BTN_EARLY_BAIL: usize = 1008;
 const ID_BTN_CLOSE: usize = 1099;
 
+/// The dialog buttons, in display order. Hoisted to module scope so
+/// [`launcher_client_height`] can derive the window height from
+/// `DIALOG_BUTTONS.len()` — adding a dialog here resizes the window
+/// automatically.
+const DIALOG_BUTTONS: &[(&str, usize)] = &[
+    ("Progress (animated)", ID_BTN_PROGRESS_ANIM),
+    ("Progress (static @ 50%)", ID_BTN_PROGRESS_STATIC),
+    ("Metadata failed", ID_BTN_METADATA_FAILED),
+    ("Retry (try 2 of 3)", ID_BTN_RETRY),
+    ("Error (post-install)", ID_BTN_ERROR),
+    ("Java error (with update link)", ID_BTN_JAVA_ERROR),
+    ("Install prompt (custom-painted)", ID_BTN_PROMPT_V5),
+    ("Early bail (MessageBoxW)", ID_BTN_EARLY_BAIL),
+];
+
 // ============================================================================
 //  Entry point
 // ============================================================================
@@ -329,17 +361,18 @@ fn main() {
         };
         let _atom = RegisterClassExW(&wc);
 
-        // `LAUNCHER_W` / `LAUNCHER_H` describe the **client area**.
-        // `AdjustWindowRectEx` adds the title-bar / non-client chrome
-        // to that rectangle, so we hand the *expanded* dimensions to
-        // `CreateWindowExW`. Centring on the primary monitor uses the
-        // expanded width/height (which is what the user actually sees
-        // on the desktop), not the client area.
+        // `LAUNCHER_W` / `launcher_client_height()` describe the
+        // **client area**. `AdjustWindowRectEx` adds the title-bar /
+        // non-client chrome to that rectangle, so we hand the
+        // *expanded* dimensions to `CreateWindowExW`. Centring on the
+        // primary monitor uses the expanded width/height (which is
+        // what the user actually sees on the desktop), not the client
+        // area.
         let mut client_rect = RECT {
             left: 0,
             top: 0,
             right: LAUNCHER_W,
-            bottom: LAUNCHER_H,
+            bottom: launcher_client_height(),
         };
         AdjustWindowRectEx(
             &mut client_rect,
@@ -421,18 +454,12 @@ unsafe extern "system" fn wndproc(
             // on process exit.
             let hfont = create_button_font();
 
-            // Body buttons (8 stacked).
+            // Body buttons. Labels + control IDs come from the
+            // module-level `DIALOG_BUTTONS` list so the window height
+            // (see `launcher_client_height`) can't drift out of sync
+            // with the row count.
             let hinst = GetModuleHandleW(std::ptr::null());
-            let buttons: &[(&str, usize)] = &[
-                ("Progress (animated)", ID_BTN_PROGRESS_ANIM),
-                ("Progress (static @ 50%)", ID_BTN_PROGRESS_STATIC),
-                ("Metadata failed", ID_BTN_METADATA_FAILED),
-                ("Retry (try 2 of 3)", ID_BTN_RETRY),
-                ("Error (post-install)", ID_BTN_ERROR),
-                ("Java error (with update link)", ID_BTN_JAVA_ERROR),
-                ("Install prompt (custom-painted)", ID_BTN_PROMPT_V5),
-                ("Early bail (MessageBoxW)", ID_BTN_EARLY_BAIL),
-            ];
+            let buttons: &[(&str, usize)] = DIALOG_BUTTONS;
             for (i, (label, id)) in buttons.iter().enumerate() {
                 let y = BTN_FIRST_Y + (i as i32) * (BTN_H + BTN_GAP);
                 let btn = CreateWindowExW(
@@ -454,8 +481,12 @@ unsafe extern "system" fn wndproc(
                 }
             }
 
-            // Close button — bottom right.
-            let close_y = LAUNCHER_H - BTN_CLOSE_MARGIN_BOTTOM - BTN_CLOSE_H;
+            // Close button — bottom right, positioned relative to the
+            // last dialog row so it stays put as the list grows.
+            let close_y = BTN_FIRST_Y
+                + (DIALOG_BUTTONS.len() as i32 - 1) * (BTN_H + BTN_GAP)
+                + BTN_H
+                + BTN_CLOSE_GAP;
             let close = CreateWindowExW(
                 0,
                 wide("BUTTON").as_ptr(),
@@ -727,7 +758,12 @@ fn run_install_prompt_v5() {
 fn run_early_bail() {
     use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
 
-    let title = "snug launcher";
+    // Mirrors `localize::lookup("launcher.fallback_messagebox.title")`
+    // in `main.rs::show_error_box`. That key resolves from the built-in
+    // English baseline on this path (`localize::init` has not run yet),
+    // so read the baseline rather than hardcoding the string — keeps the
+    // preview in step if the key is ever retitled.
+    let title = snug_launcher::localize::lookup("launcher.fallback_messagebox.title");
     let body = "FATAL: failed to read snug payload from RCDATA resource.\n\
                 This binary may be corrupted or stamped with the wrong manifest.\n\
                 Re-download the launcher from the original source.";
@@ -736,7 +772,7 @@ fn run_early_bail() {
         MessageBoxW(
             std::ptr::null_mut(),
             wide(body).as_ptr(),
-            wide(title).as_ptr(),
+            wide(&title).as_ptr(),
             MB_OK | MB_ICONERROR,
         )
     };

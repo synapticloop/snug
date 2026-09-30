@@ -492,7 +492,11 @@ fn run_install_prompt_v5() -> Option<i32> {
 fn run_early_bail() -> Option<i32> {
     // Mirror `src/main.rs::show_error_box` exactly — that's what the
     // launcher shows when it can't even load its embedded payload.
-    let title: Vec<u16> = OsStr::new("snug launcher")
+    // The title comes from the same localization key the launcher
+    // uses, so a retitle in `snug-localisations.en.txt` shows up here
+    // without a second edit.
+    let title_str = snug_launcher::localize::lookup("launcher.fallback_messagebox.title");
+    let title: Vec<u16> = OsStr::new(&title_str)
         .encode_wide()
         .chain(Some(0))
         .collect();

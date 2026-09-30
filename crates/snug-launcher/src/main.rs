@@ -135,8 +135,21 @@ fn show_launcher_error(err: &LauncherError) {
 /// can't reach the custom error window — no payload available, or
 /// even finding the current EXE failed.
 ///
+/// Intentionally *not* custom-painted. By the time we get here the
+/// process is already in a bad state (can't read its own path, or
+/// the embedded payload is corrupt), and building the full
+/// `modal_window` chrome — font creation, window-class registration,
+/// mascot bitmaps — during that path trades a real robustness win
+/// for polish nobody will ever see. A stock `MessageBoxW` is the
+/// right call for a broken-build diagnostic.
+///
 /// Title comes from the `launcher.fallback_messagebox.title`
-/// localization key (always available via the built-in baseline).
+/// localization key, but note that `localize::init()` has not run
+/// yet on either call site (see the comment on that key in
+/// `snug-localisations.en.txt`) — so this always renders the
+/// built-in English baseline. The *body* text does localize, because
+/// it comes through `error::localize_launcher_error`, which falls
+/// back to the same baseline.
 #[cfg(windows)]
 fn show_error_box(msg: &str) {
     use std::ffi::OsStr;

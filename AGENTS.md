@@ -123,6 +123,34 @@ precompiled `launcher-stub.exe` (v2).
 | 7 | Per-user cache + old-version cleanup           | planned    |
 | 8 | GitHub Actions CI (windows-latest release)     | planned    |
 
+## Versioning
+
+Snug is **pre-1.0 and stays that way until the project is declared
+finished.** Bump the version on every change; never land on `1.0.0`
+by accident.
+
+- **Single source of truth:** `[workspace.package] version` in the
+  root `Cargo.toml`. All three crates inherit it via
+  `version.workspace = true`, so that one line is the only thing to
+  edit. `snug --snug-version` and `cargo metadata` read the compiled
+  value; `snug-launcher/src/main.rs` exposes it as `env!("CARGO_PKG_VERSION")`.
+- **Default increment is the micro (patch) number:**
+  `0.2.0` → `0.2.1` → `0.2.2`. Use this for fixes, copy changes,
+  refactors, and anything that doesn't alter the CLI surface or the
+  embedded-payload format.
+- **Minor increments for notable milestones:** `0.2.x` → `0.3.0`. Use
+  this for new CLI flags, new dialogs, launcher-runtime features, or
+  any change to `snug-format`'s wire layout that requires a
+  `format_version` bump.
+- **Hard ceiling:** while the project is in development the major
+  number stays `0`. Do **not** bump to `1.0.0` (or any `1.x`) as part
+  of ordinary work — `1.0.0` is reserved for an explicit decision by
+  the maintainer that snug is finished. If the minor number would
+  otherwise creep past `0.9.x`, keep incrementing the micro number
+  instead (`0.9.4` → `0.9.5`) rather than rolling over to `1.0.0`.
+- `vendor/editpe` carries its own upstream version and is **not**
+  part of this scheme.
+
 ## Conventions
 
 - Rust edition **2024**, MSRV **1.85**.

@@ -118,8 +118,25 @@ jdk.err.dialog = Dialog: {0}
 # Launcher entry-point fallback (`snug_launcher::main`)
 # ----------------------------------------------------------------------------
 # Title shown in the MessageBoxW used when even the custom error window
-# can't run (no payload available, or self-path lookup failed).
-launcher.fallback_messagebox.title = snug launcher
+# can't run (self-path lookup failed, or the embedded payload is corrupt).
+#
+# ENGLISH-ONLY BY CONSTRUCTION. This key resolves via
+# `localize::lookup`, but both call sites (`LauncherError::SelfPath`
+# from `main.rs:40` and `LauncherError::Format` from `find_in_file`
+# at `main.rs:42`) fire *before* `localize::init()` runs at
+# `main.rs:60`. The merged user + built-in bundle is therefore never
+# wired up on this path, so this string always renders from the
+# baseline below and a shipped app cannot override it.
+#
+# Translators: don't bother translating this one. The keys that DO
+# localize on a working build are `err.*` (via
+# `error::localize_launcher_error`) and `launcher.bare_stub.*`.
+#
+# Deliberately not styled like the `[launcher.error]` dialog title:
+# the box is stock Win32 chrome on a broken-build path, so it reads
+# as tool identity rather than a product dialog. It does follow the
+# "— Snug" brand convention.
+launcher.fallback_messagebox.title = Launcher error — Snug
 
 # Bare-stub diagnostic — emitted to stderr when the EXE was built without
 # a payload. Also used by the messagebox fallback.
