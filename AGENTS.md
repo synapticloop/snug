@@ -523,6 +523,41 @@ by accident.
     passes explicit paths, so the release pipeline never relied on the
     default; only the zero-argument path a developer uses while
     iterating on an icon was broken.
+  - **`release\` is the shipping folder, and it ignores itself.**
+    `build-release.cmd` step 8 stages `snug.exe`,
+    `Build with Snug.exe` and `snug-javafx-demo.jar` in there; the
+    nested `.gitignore` hides everything but itself, so a fresh clone
+    has the directory and the rules without a single artefact. The two
+    EXEs are staged *together* on purpose — same co-location invariant
+    as step 7, now enforced at the shipping boundary. Step 8 never
+    empties the directory: a build script that silently deletes is a
+    thing you regret, so an artefact dropped from the pipeline lingers
+    into the next run. Use `--Clean` plus a fresh folder when you need
+    a guaranteed-clean release.
+- **cmd.exe has three quoting traps in `build-release.cmd`, all hit
+  while writing step 8.** Each produced a silent no-op or a silent
+  exit-1 rather than a parse error, so all three had to be found by
+  reading the captured output, not the exit code:
+  - **A `for` loop inside a `call`ed subroutine does not work.**
+    `for %%I in (...) do echo ... ^(...)` under `:stage` interacts
+    badly with the second expansion pass `CALL` performs: the escaped
+    parens get mangled, the rest of the subroutine is swallowed along
+    with its `exit /b`, and the caller then reads a stale errorlevel.
+    A `for` at top level is fine — the "Sizes:" block depends on it.
+    Keep the subroutine free of `for`, `%%` and escaped parens.
+  - **A trailing `\` inside quotes on an `if exist` line is a hazard.**
+    `if not exist "release\"` puts the backslash immediately before the
+    closing quote, which some parsers treat as an escaped quote. Use
+    `if not exist "release"` and let `mkdir` add the separator.
+  - **A subroutine placed after the summary needs an explicit end of
+    main flow.** With only `endlocal` between them, the script runs off
+    the end of the summary and falls *into* the subroutine with no
+    arguments, printing a bogus line and exiting via the subroutine's
+    own `exit /b`. Terminate with `endlocal` + `exit /b 0` before the
+    label; `CALL` still reaches it because the call happens earlier,
+    while the `setlocal` scope is still open.
+  This is the strongest argument yet for porting the pipeline to
+  xtask — see the release-pipeline note below.
 - **A drag-and-drop needs no drag-drop API.** Windows launches the target
   EXE with the dropped paths appended to its command line, so
   `argv[1..]` *is* the drop and "double-clicked" is the empty case. That
