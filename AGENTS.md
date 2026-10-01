@@ -525,15 +525,24 @@ by accident.
     iterating on an icon was broken.
   - **`release\` is the shipping folder, and it ignores itself.**
     `build-release.cmd` step 8 stages `snug.exe`,
-    `Build with Snug.exe` and `snug-javafx-demo.jar` in there; the
-    nested `.gitignore` hides everything but itself, so a fresh clone
-    has the directory and the rules without a single artefact. The two
-    EXEs are staged *together* on purpose — same co-location invariant
-    as step 7, now enforced at the shipping boundary. Step 8 never
-    empties the directory: a build script that silently deletes is a
-    thing you regret, so an artefact dropped from the pipeline lingers
-    into the next run. Use `--Clean` plus a fresh folder when you need
-    a guaranteed-clean release.
+    `Build with Snug.exe`, `snug_preview.exe` and
+    `snug-javafx-demo.jar` in there; the nested `.gitignore` hides
+    everything but itself, so a fresh clone has the directory and the
+    rules without a single artefact. The two shipping EXEs are staged
+    *together* on purpose — same co-location invariant as step 7, now
+    enforced at the shipping boundary. The demo JAR is there so someone
+    can try the whole drop-a-JAR flow before writing a JAR of their
+    own, which is the entire pitch of the tool.
+    `snug_preview.exe` is a dev tool and ships anyway: it is how you
+    look at snug's dialogs and error copy without building and
+    launching an app. It comes from step 6, so `--SkipDevTools` leaves
+    it unbuilt and `:stage` warns instead of aborting — but note a
+    *stale* `target\release\snug_preview.exe` from an earlier build
+    still gets staged, because staging checks the path, not this run's
+    flags. Step 8 never empties the directory either: a build script
+    that silently deletes is a thing you regret, so an artefact dropped
+    from the pipeline lingers into the next run. Use `--Clean` plus a
+    fresh folder when you need a guaranteed-clean release.
 - **cmd.exe has three quoting traps in `build-release.cmd`, all hit
   while writing step 8.** Each produced a silent no-op or a silent
   exit-1 rather than a parse error, so all three had to be found by
