@@ -41,6 +41,32 @@ impl From<CliDownloadJdkMode> for DownloadJdkMode {
     }
 }
 
+/// Reject a relative `--cache-dir`.
+///
+/// The value is baked into the payload at build time and used by the
+/// launcher at *runtime*, on a machine the builder never sees, launched
+/// by a user with an arbitrary working directory. A relative path would
+/// silently resolve against whatever CWD that happens to be, so the
+/// cache would scatter — or fail to be found at all.
+///
+/// Deliberately does **not** require the directory to exist: the
+/// launcher creates the tree on first launch, and building on a
+/// machine that has never run the app is the normal case.
+fn validate_cache_dir(s: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(s);
+    if s.trim().is_empty() {
+        return Err("cache directory path is empty".to_string());
+    }
+    if !path.is_absolute() {
+        return Err(format!(
+            "cache directory must be an absolute path, got `{s}` \
+             (it is resolved at runtime against the end user's working \
+             directory, which snug cannot know)"
+        ));
+    }
+    Ok(path)
+}
+
 #[derive(Debug, Clone, Parser)]
 #[command(
     name = "snug",
@@ -285,6 +311,28 @@ pub struct Cli {
         help_heading = "Build behaviour"
     )]
     pub download_jdk: CliDownloadJdkMode,
+
+    /// Override the per-user cache root the launcher extracts JARs into.
+    ///
+    /// By default the launcher uses
+    /// `%LOCALAPPDATA%\snug\<company>\<app>\` on Windows (and
+    /// `$HOME/.cache/snug/<company>/<app>/` elsewhere). Point this at a
+    /// different volume when the system drive is small or slow — a
+    /// large fat JAR is copied there in full on first launch, and
+    /// snug's retention policy keeps several generations.
+    ///
+    /// The path is stamped into the payload at build time, so it must
+    /// be **absolute**: a relative path would resolve against whatever
+    /// working directory the end user happens to launch the EXE from.
+    /// Must exist or be creatable at runtime; snug creates the
+    /// directory tree on first launch.
+    #[arg(
+        long = "cache-dir",
+        value_name = "DIR",
+        value_parser = validate_cache_dir,
+        help_heading = "Build behaviour"
+    )]
+    pub cache_dir: Option<PathBuf>,
 
     /// Localization bundle to embed in the launcher, formatted as a
     /// flat `key = value` text file (Java-`.properties`-style).
