@@ -28,7 +28,8 @@
 #    snug --options /path/to/snug.options
 #
 # Note: The file does not need to be named snug.options - it can be called
-# anything you would like
+# anything you would like - but it is recommended to follow the convention
+# and name it snug.options
 
 --name "Snug JavaFX Demo"
 --company "SynapticLoop"

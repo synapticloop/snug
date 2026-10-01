@@ -160,6 +160,24 @@ const SUBTITLE_H: i32 = 50;
 const CONTENT_Y: i32 = 108;
 const CONTENT_H: i32 = 88;
 
+/// Height of the error-content control, which gives way to the link
+/// block when this dialog has one.
+///
+/// The link rows span the full width, so they cannot dodge the content
+/// column the way a mascot-width row could -- and the window is a fixed
+/// height, so something has to yield. It has to be the content: the
+/// link is optional, and only [`ModalDialog::link_url`]'s dialog ever
+/// pays for it. Every other dialog keeps the full `CONTENT_H`, which
+/// matters because the install prompt runs four lines of body copy and
+/// shrinking this globally clipped its last line.
+fn content_height(has_link: bool) -> i32 {
+    if has_link {
+        CONTENT_H - LINK_GAP - LINK_BLOCK_H
+    } else {
+        CONTENT_H
+    }
+}
+
 const INFO_BOX_X: i32 = MARGIN;
 /// Symmetric: the box used to be `WINDOW_W - MARGIN * 3`, which left
 /// twice the left margin as whitespace on the right (16 px in, 32 px
@@ -217,44 +235,29 @@ const BUTTON_GAP: i32 = INFO_PAD;
 const BUTTON_RIGHT: i32 = WINDOW_W - MARGIN;
 const BUTTON_Y: i32 = INFO_BOX_Y + INFO_BOX_H + BOTTOM_PAD;
 
-/// Optional "Check for a newer version" link row, painted below the
-/// info box. Reserved only when [`ModalDialog::link_url`] is `Some`
-/// and non-empty. The URL is opened via
-/// `ShellExecuteW(..., "open", url, ...)`.
-///
-/// It shares the `BOTTOM_PAD` gap between the box and the buttons, so
-/// under the mascot: this is the one dialog in the family
-/// with a link, the row is single-line, and the buttons are pinned to
-/// the window bottom, so the link has to fit the gap rather than
-/// claim a row of its own.
 /// Optional "Check for a newer version" block, painted as **two
 /// stacked rows under the mascot**: the label, then the URL beneath it.
-/// The URL is opened via `ShellExecuteW(..., "open", url, ...)`.
+/// The URL is opened via `ShellExecuteW(..., "open", url, ...)` and is
+/// the only clickable part; the label is plain text.
 ///
-/// Only the URL row is clickable; the label is plain text.
-///
-/// `LINK_URL_W` is the mascot's width, and it is a real constraint
-/// rather than a preference: the error-content control occupies
-/// `CONTENT_Y .. CONTENT_Y + CONTENT_H` (108..196) in the column to
-/// the right, and this block starts at y=170. Letting the URL run wider
-/// than the mascot would push it into that control, so it wraps inside
-/// the mascot column instead -- which also keeps it visually grouped
-/// under the artwork. The label sits on its own row at the content
-/// font; it measures ~165 px, which just fits the inter-column gap
-/// before `TEXT_X` (186), so it needs no clipping of its own.
+/// Both rows span the full dialog width inside the standard margin, so
+/// they line up with the info box above them. A URL needs ~234 px, so
+/// at this width it is a single line and never wraps.
 const LINK_TEXT_X: i32 = MARGIN;
-/// The label gets the full content width rather than the mascot
-/// column: at the content font "Check for a newer version:" measures
-/// ~180 px, so capping it at the mascot width (154 px) clipped it
-/// mid-word and capping it at the inter-column gap (170 px) clipped
-/// it too. The URL below it still wraps inside the mascot column --
-/// see `LINK_URL_W`.
-const LINK_LABEL_W: i32 = WINDOW_W - MARGIN * 2;
-const LINK_LABEL_Y: i32 = MASCOT_Y + MASCOT_H;
-const LINK_LABEL_H: i32 = INFO_SUBTEXT_H;
+const LINK_W: i32 = WINDOW_W - MARGIN * 2;
+const LINK_GAP: i32 = 4;
+/// The label paints in the **content** font (13 pt), not the 9 pt info
+/// font, so its row cannot borrow `INFO_SUBTEXT_H` (16 px) -- that
+/// clipped the text top and bottom. 20 px clears Segoe UI 13 pt at
+/// 96 DPI. `LINK_LABEL_Y` is derived from the info box, so making the
+/// row taller moves the whole block up by the same amount.
+const LINK_LABEL_H: i32 = 20;
+const LINK_URL_H: i32 = INFO_SUBTEXT_H;
+const LINK_BLOCK_H: i32 = LINK_LABEL_H + LINK_URL_H;
+/// Anchored to the info box rather than the mascot, because the block
+/// has to sit clear of the content column -- see `content_height`.
+const LINK_LABEL_Y: i32 = INFO_BOX_Y - LINK_GAP - LINK_BLOCK_H;
 const LINK_URL_Y: i32 = LINK_LABEL_Y + LINK_LABEL_H;
-const LINK_URL_H: i32 = INFO_SUBTEXT_H * 2;
-const LINK_URL_W: i32 = MASCOT_W;
 
 /// Width/height we ask for when loading the EXE icon for the mascot
 /// slot. Asking for 256 selects a detailed source for the 154 px
@@ -804,12 +807,12 @@ unsafe extern "system" fn wndproc(
 
                     // The clickable target is the URL row, clamped to
                     // the width it actually paints in: it wraps inside
-                    // `LINK_URL_W`, so a single-line measurement can
+                    // `LINK_W`, so a single-line measurement can
                     // overshoot and must not be trusted as-is.
                     (*state).link_url_rect = RECT {
                         left: LINK_TEXT_X,
                         top: LINK_URL_Y,
-                        right: LINK_TEXT_X + url_w.min(LINK_URL_W),
+                        right: LINK_TEXT_X + url_w.min(LINK_W),
                         bottom: LINK_URL_Y + LINK_URL_H,
                     };
                     let _ = label_w;
@@ -879,7 +882,7 @@ unsafe extern "system" fn wndproc(
                 TEXT_X,
                 CONTENT_Y,
                 TEXT_W,
-                CONTENT_H,
+                content_height(!(&(*state).link_url_text).is_empty()),
                 hwnd,
                 IDC_CONTENT as *mut _,
                 hinst,
@@ -1157,7 +1160,7 @@ unsafe extern "system" fn wndproc(
                 let mut label_rc = RECT {
                     left: LINK_TEXT_X,
                     top: LINK_LABEL_Y,
-                    right: LINK_TEXT_X + LINK_LABEL_W,
+                    right: LINK_TEXT_X + LINK_W,
                     bottom: LINK_LABEL_Y + LINK_LABEL_H,
                 };
                 let _ = DrawTextW(
@@ -1177,7 +1180,7 @@ unsafe extern "system" fn wndproc(
                 let mut url_paint_rc = RECT {
                     left: LINK_TEXT_X,
                     top: LINK_URL_Y,
-                    right: LINK_TEXT_X + LINK_URL_W,
+                    right: LINK_TEXT_X + LINK_W,
                     bottom: LINK_URL_Y + LINK_URL_H,
                 };
                 let _ = DrawTextW(
