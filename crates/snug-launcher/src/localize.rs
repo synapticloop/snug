@@ -41,7 +41,8 @@
 //! workspace, so the copy the CLI bakes into the payload and the copy
 //! compiled into this fallback are the same bytes by construction.
 
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{OnceLock, RwLock};
 
 use snug_format::Localization;
 
@@ -54,9 +55,33 @@ pub use snug_format::DEFAULT_EN_TAG as DEFAULT_TAG;
 /// CLI-embedded payload copy can never drift.
 pub use snug_format::DEFAULT_EN_TEXT;
 
-/// Global lookup state. Initialised once via [`init`] and read via
-/// [`bundles`].
-static BUNDLES: OnceLock<Bundles> = OnceLock::new();
+/// Global lookup state, read via [`lookup`] and replaced wholesale by
+/// [`set_bundles`].
+///
+/// This is an `RwLock` rather than a `OnceLock` because the preview
+/// binary needs to *switch* language while it runs, and a `OnceLock`
+/// is frozen after the first write. The production launcher still only
+/// ever writes once, at `main.rs` — so the lock is uncontended there
+/// and the read cost is far below the `String` allocation [`lookup`]
+/// already does on every call.
+static BUNDLES: RwLock<Bundles> = RwLock::new(Bundles { chain: Vec::new() });
+
+/// Bumped by every [`set_bundles`] call.
+///
+/// Consumers that cache derived state — currently `dialogs::DIALOGS`,
+/// which snapshots ~54 resolved strings — record the generation they
+/// built from and rebuild when it moves. Without this a language switch
+/// would leave every cached string in the old language.
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// The generation the current bundle chain belongs to.
+///
+/// Compare against a cached value to decide whether derived state is
+/// stale. Monotonic; never returns the same value twice for different
+/// chain contents.
+pub fn generation() -> u64 {
+    GENERATION.load(Ordering::Acquire)
+}
 
 /// A complete priority chain of localization bundles, ready for
 /// lookup. Built by [`Bundles::load`] and stashed in [`BUNDLES`].
@@ -147,28 +172,56 @@ impl Bundles {
     pub fn len(&self) -> usize {
         self.chain.len()
     }
+
+    /// True when the chain holds no user bundles — i.e. lookups should
+    /// fall through to the compiled-in baseline. This is the initial
+    /// state of [`BUNDLES`], before any [`set_bundles`] call.
+    pub fn is_empty(&self) -> bool {
+        self.chain.is_empty()
+    }
+
+    /// Look up `key` across the chain, returning the winning value
+    /// without allocating. `None` when no bundle in the chain has it.
+    ///
+    /// The allocating [`Bundles::raw_lookup`] is for tests and
+    /// diagnostics; [`lookup`] uses this so the read lock is held for
+    /// the length of a comparison rather than a heap write.
+    pub fn get(&self, key: &str) -> Option<&str> {
+        self.chain.iter().find_map(|b| b.get(key))
+    }
+
+    /// The tags present in the chain, in priority order. Used by the
+    /// preview binary to build its language dropdown.
+    pub fn tags(&self) -> Vec<String> {
+        self.chain.iter().map(|b| b.tag.clone()).collect()
+    }
 }
 
-/// Initialise the global lookup state. Call exactly once, as early as
-/// possible after the payload has been decoded. Subsequent calls are
-/// silently ignored — the first call wins.
+/// Initialise the global lookup state. Call as early as possible
+/// after the payload has been decoded.
 ///
-/// We don't `expect`/panic on re-init: in practice the launcher
-/// always calls `init` from one place (`platform::windows::run`),
-/// but defensive coding here means a future refactor that adds a
-/// second init site doesn't crash production builds.
+/// Thin alias over [`set_bundles`], kept because `main.rs` reads as
+/// "init once at startup" and that's exactly what it does. Unlike the
+/// old `OnceLock`, calling it twice now *replaces* the chain rather
+/// than being ignored — the preview binary depends on that.
 pub fn init(payload_bundles: &[Localization]) {
-    let bundles = Bundles::load(payload_bundles);
-    let _ = BUNDLES.set(bundles);
+    set_bundles(payload_bundles);
 }
 
-/// Returns the initialised bundle chain, or `None` if [`init`] was
-/// never called. Callers (`t`, `t_with_subs`) handle `None` by
-/// returning the raw key, so it's safe to use the lookup macros from
-/// any point in the launcher's lifetime — including before `init`
-/// runs, where they'll just return the key string.
-fn bundles() -> Option<&'static Bundles> {
-    BUNDLES.get()
+/// Replace the active bundle chain and bump [`generation`].
+///
+/// Any consumer caching resolved strings should rebuild when the
+/// generation moves; `dialogs::dialogs()` does.
+pub fn set_bundles(payload_bundles: &[Localization]) {
+    let next = Bundles::load(payload_bundles);
+    // A poisoned lock means some other thread panicked while holding
+    // it. `into_inner` hands back the guard either way, and the data
+    // we are about to install is freshly built, so recovering beats
+    // propagating a panic into a dialog.
+    let mut guard = BUNDLES.write().unwrap_or_else(|e| e.into_inner());
+    *guard = next;
+    drop(guard);
+    GENERATION.fetch_add(1, Ordering::Release);
 }
 
 /// The built-in English baseline, parsed once and independent of
@@ -198,13 +251,22 @@ fn builtin() -> Option<&'static Localization> {
 /// falls back to the compiled-in English baseline. Only a key that is
 /// in neither returns the key string itself.
 pub fn lookup(key: &str) -> String {
-    match bundles() {
-        Some(b) => b.raw_lookup(key),
-        None => builtin()
-            .and_then(|b| b.get(key))
-            .unwrap_or(key)
-            .to_string(),
-    }
+    // The read lock is taken for the comparison only, then dropped
+    // before the `String` is built, so it is never held across an
+    // allocation. `into_inner` on a poisoned lock still yields valid
+    // data — poisoning records that some thread panicked, not that
+    // the bundle chain is corrupt.
+    let from_chain = {
+        let guard = BUNDLES.read().unwrap_or_else(|e| e.into_inner());
+        if guard.is_empty() {
+            None
+        } else {
+            guard.get(key).map(str::to_string)
+        }
+    };
+    from_chain
+        .or_else(|| builtin().and_then(|b| b.get(key)).map(str::to_string))
+        .unwrap_or_else(|| key.to_string())
 }
 
 /// Substitute `{name}` placeholders in `template` with the

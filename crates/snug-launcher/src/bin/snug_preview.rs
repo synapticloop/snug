@@ -21,7 +21,10 @@
 //!
 //! ```text
 //! snug_preview [OPTIONS]
-//!   -h, --help    print the option list and every previewable dialog
+//!   -h, --help                        print the option list and every
+//!                                     previewable dialog
+//!       --localisation <FILE|DIR>     load localisations to pick from
+//!       --localization <FILE|DIR>     (alias; both spellings accepted)
 //! ```
 //!
 //! With no options it opens the launcher window. `--help` is handled
@@ -31,6 +34,18 @@
 //! here read `argv` before, so there is no prior meaning for a stray
 //! argument to preserve, and silently launching the GUI after a
 //! mistyped flag is its own small time-waster.
+//!
+//! `--localisation` takes a `snug-localisations.<tag>.txt` or a
+//! directory of them, and is repeatable. Everything it finds lands in
+//! a **Language** dropdown above the dialog buttons; picking one swaps
+//! the launcher's active bundle chain, so dialogs opened afterwards
+//! render in that language. The built-in English baseline is always in
+//! the list, last — unless you supply your own
+//! `snug-localisations.en.txt`, which takes its place, matching the rule
+//! the build applies to a shipped launcher.
+//!
+//! Switching affects dialogs opened *afterwards*: a window already on
+//! screen captured its copy when it was built and keeps it.
 //!
 //! Each dialog is **detached** from the launcher's lifecycle — they
 //! are top-level windows (no parent HWND) and run on their own
@@ -45,7 +60,7 @@
 #![cfg(windows)]
 
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::thread;
 use std::time::Duration;
 
@@ -57,18 +72,20 @@ use windows_sys::Win32::Graphics::Gdi::{
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    DrawIconEx, GetMessageW, GetSystemMetrics, LoadCursorW, LoadImageW, MSG,
-    PostThreadMessageW, RegisterClassExW, SendMessageW, SM_CXSCREEN, SM_CYSCREEN,
-    TranslateMessage, BS_PUSHBUTTON, DI_NORMAL, HICON, ICON_BIG, ICON_SMALL, IDC_ARROW,
-    IMAGE_ICON, LR_SHARED, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_NCDESTROY, WM_PAINT,
-    WM_QUIT, WM_SETICON, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_OVERLAPPED,
-    WS_SYSMENU, WS_VISIBLE,
+    AdjustWindowRectEx, CB_ADDSTRING, CB_GETCURSEL, CB_RESETCONTENT, CB_SETCURSEL, CBN_SELCHANGE,
+    CBS_DROPDOWNLIST, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, DrawIconEx,
+    GetDlgItem, GetMessageW, GetSystemMetrics, LoadCursorW, LoadImageW, MSG, PostThreadMessageW,
+    RegisterClassExW, SendMessageW, SM_CXSCREEN, SM_CYSCREEN, TranslateMessage, BS_PUSHBUTTON,
+    DI_NORMAL, HICON, ICON_BIG, ICON_SMALL, IDC_ARROW, IMAGE_ICON, LR_SHARED, WM_CLOSE, WM_COMMAND,
+    WM_CREATE, WM_DESTROY, WM_NCDESTROY, WM_PAINT, WM_QUIT, WM_SETICON, WNDCLASSEXW, WS_CAPTION,
+    WS_CHILD, WS_EX_TOPMOST, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
+use snug_format::Localization;
 use snug_launcher::dialogs;
 use snug_launcher::error_window;
 use snug_launcher::jdk_install::{self, ProgressShared};
+use snug_launcher::localize;
 use snug_launcher::progress_window;
 
 // ============================================================================
@@ -118,7 +135,6 @@ const BTN_X: i32 = 24;
 const BTN_W: i32 = LAUNCHER_W - 48;
 const BTN_H: i32 = 38;
 const BTN_GAP: i32 = 8;
-const BTN_FIRST_Y: i32 = 200;
 const BTN_CLOSE_W: i32 = 96;
 const BTN_CLOSE_H: i32 = 36;
 const BTN_CLOSE_MARGIN_BOTTOM: i32 = 16;
@@ -130,6 +146,21 @@ const BTN_CLOSE_GAP: i32 = 16;
 /// below the header icon (icon ends at y=136) with a 16 px gap.
 const SUBTITLE_TEXT: &str = "Click a button to open the corresponding dialog.";
 const SUBTITLE_Y: i32 = 152;
+
+/// Language picker — a `COMBOBOX` between the subtitle and the dialog
+/// buttons, so a translation can be flipped on before opening a dialog
+/// instead of requiring a rebuild.
+///
+/// `BTN_FIRST_Y` sits below `COMBO_Y + COMBO_H`, which is why the
+/// button block starts where it does.
+const COMBO_LABEL_TEXT: &str = "Language:";
+const COMBO_LABEL_Y: i32 = 180;
+const COMBO_X: i32 = BTN_X;
+const COMBO_Y: i32 = 200;
+const COMBO_W: i32 = 240;
+const COMBO_H: i32 = 34;
+/// Grows to fit a few more locales without touching the constants.
+const BTN_FIRST_Y: i32 = 248;
 
 /// `WM_SETFONT` isn't exported as a named constant by windows-sys
 /// 0.59. Value from winuser.h.
@@ -315,6 +346,9 @@ const ID_BTN_JAVA_ERROR: usize = 1006;
 const ID_BTN_PROMPT_V5: usize = 1007;
 const ID_BTN_EARLY_BAIL: usize = 1008;
 const ID_BTN_CLOSE: usize = 1099;
+/// Language dropdown. Distinct id range from the dialog buttons so a
+/// `WM_COMMAND` id match can't confuse the two.
+const ID_COMBO_LANGUAGE: usize = 1100;
 
 /// The dialog buttons, in display order. Hoisted to module scope so
 /// [`launcher_client_height`] can derive the window height from
@@ -330,6 +364,103 @@ const DIALOG_BUTTONS: &[(&str, usize)] = &[
     ("Install prompt (custom-painted)", ID_BTN_PROMPT_V5),
     ("Early bail (MessageBoxW)", ID_BTN_EARLY_BAIL),
 ];
+
+// ============================================================================
+//  Localisation registry
+// ============================================================================
+//
+//  Holds every bundle the user handed us via `--localisation`, in the
+//  order it was discovered. The dropdown indexes straight into this
+//  vector, so the combo's item `i` is always `LOCALISATIONS[i]`.
+//
+//  `en` is always present as the last entry: either the built-in
+//  baseline, or the user's own `en` bundle when they supplied one —
+//  which replaces the baseline rather than shadowing it, matching the
+//  build-time rule in `snug-cli`'s `localization::collect`. Having it
+//  last means the fallback is the baseline the launcher itself ships.
+
+static LOCALISATIONS: RwLock<Vec<Localization>> = RwLock::new(Vec::new());
+
+/// A snapshot of the registry, in dropdown order.
+fn localisations() -> Vec<Localization> {
+    LOCALISATIONS
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
+/// Build the registry from the paths the user passed to
+/// `--localisation`, and return it.
+///
+/// A path may be a single `snug-localisations.<tag>.txt` or a
+/// directory of them; directory expansion is the same
+/// `snug_format::discover_localization_files` the `snug` CLI uses, so
+/// both resolve a given path identically.
+///
+/// The built-in English baseline is appended last unless the user
+/// supplied their own `en`, in which case theirs takes the slot.
+fn build_localisations(entries: &[std::path::PathBuf]) -> Result<Vec<Localization>, String> {
+    let files = snug_format::discover_localization_files(entries).map_err(|e| e.to_string())?;
+
+    let mut user: Vec<Localization> = Vec::new();
+    for path in &files {
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| format!("reading {}: {e}", path.display()))?;
+        let tag = snug_format::tag_from_path(path).ok_or_else(|| {
+            format!(
+                "extracting locale tag from {} (expected `snug-localisations.<tag>.txt`)",
+                path.display()
+            )
+        })?;
+        if user.iter().any(|b| b.tag == tag) {
+            return Err(format!(
+                "duplicate localisation tag `{tag}` — pass each tag exactly once"
+            ));
+        }
+        let bundle =
+            Localization::parse(&tag, &text).map_err(|e| format!("parsing {}: {e}", path.display()))?;
+        user.push(bundle);
+    }
+
+    if user.iter().any(|b| b.tag == snug_format::DEFAULT_EN_TAG) {
+        // The user's `en` is already the baseline; nothing to append.
+        return Ok(user);
+    }
+
+    let builtin = Localization::parse(
+        snug_format::DEFAULT_EN_TAG,
+        snug_format::DEFAULT_EN_TEXT,
+    )
+    .map_err(|e| format!("parsing the built-in English baseline: {e}"))?;
+    user.push(builtin);
+    Ok(user)
+}
+
+/// Install a registry and make `index` the active language.
+fn activate_localisations(bundles: Vec<Localization>, index: usize) {
+    if let Ok(mut slot) = LOCALISATIONS.write() {
+        *slot = bundles;
+    }
+    select_language(index);
+}
+
+/// Point the launcher's bundle chain at registry entry `index`.
+///
+/// The chain handed to `localize::set_bundles` is just that one
+/// bundle: `Bundles::load` appends the built-in baseline behind it
+/// automatically, so untranslated keys fall back to English exactly
+/// as they would in a shipped build.
+fn select_language(index: usize) {
+    let bundles = localisations();
+    if bundles.is_empty() {
+        return;
+    }
+    let chosen = bundles
+        .get(index.min(bundles.len() - 1))
+        .cloned()
+        .unwrap_or_else(|| bundles[0].clone());
+    localize::set_bundles(std::slice::from_ref(&chosen));
+}
 
 // ============================================================================
 //  Command line
@@ -351,7 +482,7 @@ const DIALOG_BUTTONS: &[(&str, usize)] = &[
 #[derive(Debug, PartialEq, Eq)]
 enum Cli {
     /// Pop the launcher window and wait for its message loop.
-    Run,
+    Run { localisations: Vec<std::path::PathBuf> },
     /// Print [`help_text`] on stdout and exit 0.
     ShowHelp,
     /// Unrecognised input: report it, print usage on stderr, exit 2.
@@ -360,28 +491,44 @@ enum Cli {
 
 /// Parse the arguments after the executable name.
 ///
-/// Unknown flags are an error rather than being ignored. Nothing here
-/// used to read `argv` at all, so there is no established meaning for a
-/// stray argument to preserve — and silently launching the GUI after
-/// someone mistypes `--helpp` is exactly the kind of thing that wastes
-/// an afternoon.
+/// `--localisation` and `--localization` are accepted as aliases of
+/// each other. The CLI elsewhere is American-spelled
+/// (`--localization`, `localisations/` for the scaffold directory is
+/// the one British holdout), but this tool is used interactively by
+/// people who type either, and a flag that only answers to one
+/// spelling is a small papercut with no upside.
 fn parse_args<I, S>(args: I) -> Cli
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
+    let mut localisations: Vec<std::path::PathBuf> = Vec::new();
     let mut it = args.into_iter().peekable();
     while let Some(arg) = it.next() {
         match arg.as_ref() {
             "-h" | "--help" => return Cli::ShowHelp,
+            "--localisation" | "--localization" => {
+                // Both spellings of the flag may be repeated; they
+                // accumulate into one list, same as the shipped CLI's
+                // repeatable `--localization`.
+                match it.next() {
+                    Some(value) => localisations.push(std::path::PathBuf::from(value.as_ref())),
+                    None => {
+                        return Cli::Error(format!(
+                            "{} requires a <FILE|DIR> argument",
+                            arg.as_ref()
+                        ));
+                    }
+                }
+            }
             other => {
                 // A bare value is as unexpected as a bad flag: every
-                // option this binary has is a standalone switch.
+                // option that takes a value names it explicitly.
                 return Cli::Error(format!("unrecognised argument: {other}"));
             }
         }
     }
-    Cli::Run
+    Cli::Run { localisations }
 }
 
 /// The `--help` body.
@@ -401,6 +548,15 @@ fn help_text() -> String {
     out.push_str("    -h, --help    Print this help and exit.\n");
     out.push_str("                  With no options, the launcher window opens with one\n");
     out.push_str("                  button per dialog kind below.\n\n");
+    out.push_str("        --localisation <FILE|DIR>    Load localisations to preview, then pick\n");
+    out.push_str("        --localization <FILE|DIR>    from the Language dropdown. Repeatable.\n");
+    out.push_str("            <FILE>  snug-localisations.<tag>.txt\n");
+    out.push_str("            <DIR>   a directory of them, scanned top-level only\n");
+    out.push_str("\n");
+    out.push_str("            Both spellings of the flag are accepted. The built-in\n");
+    out.push_str("            English baseline is always in the dropdown; supplying\n");
+    out.push_str("            your own snug-localisations.en.txt replaces it, the\n");
+    out.push_str("            same rule the build applies to a shipped launcher.\n\n");
     out.push_str("DIALOGS:\n");
     for (label, _) in DIALOG_BUTTONS {
         out.push_str(&format!("    {label}\n"));
@@ -411,6 +567,9 @@ fn help_text() -> String {
     out.push_str("    closing the launcher does not destroy them and you can open\n");
     out.push_str("    several side by side. The process exits only when every\n");
     out.push_str("    open window has been dismissed.\n\n");
+    out.push_str("    Changing the language affects dialogs opened afterwards;\n");
+    out.push_str("    windows already on screen keep the copy they were built\n");
+    out.push_str("    with. Close and reopen them to see the new language.\n\n");
     out.push_str("    Open one dialog directly with:\n");
     out.push_str("        cargo run --example dialogs_preview -- --kind <KIND>\n");
     out
@@ -423,7 +582,10 @@ fn help_text() -> String {
 fn main() {
     // Handled before any Win32 work: `--help` must work on a headless
     // CI runner and must not open a window that then blocks forever.
-    match parse_args(std::env::args().skip(1)) {
+    // Localisation loading is here too, for the same reason — a bad
+    // path should fail loudly in the terminal, not behind a window
+    // that swallows the message.
+    let requested = match parse_args(std::env::args().skip(1)) {
         Cli::ShowHelp => {
             print!("{}", help_text());
             return;
@@ -433,8 +595,20 @@ fn main() {
             eprintln!("Try 'snug_preview --help' for more information.");
             std::process::exit(2);
         }
-        Cli::Run => {}
-    }
+        Cli::Run { localisations } => localisations,
+    };
+
+    // Seed the registry before the window exists, so `WM_CREATE` can
+    // populate the dropdown from a fully-built list. With no
+    // `--localisation` this is just the built-in English baseline.
+    let bundles = match build_localisations(&requested) {
+        Ok(bundles) => bundles,
+        Err(msg) => {
+            eprintln!("snug_preview: {msg}");
+            std::process::exit(2);
+        }
+    };
+    activate_localisations(bundles, 0);
 
     unsafe {
         // Capture the launcher main thread id up front so the
@@ -568,12 +742,49 @@ unsafe extern "system" fn wndproc(
             // last user-owned resource, the OS reclaims everything
             // on process exit.
             let hfont = create_button_font();
+            let hinst = GetModuleHandleW(std::ptr::null());
+
+            // Language dropdown, above the dialog buttons. Populated
+            // from the registry seeded in `main` before the window
+            // existed, so item `i` is always `localisations()[i]`.
+            let combo = CreateWindowExW(
+                0,
+                wide("COMBOBOX").as_ptr(),
+                std::ptr::null(),
+                WS_CHILD
+                    | WS_VISIBLE
+                    | WS_TABSTOP
+                    | WS_VSCROLL
+                    | (CBS_DROPDOWNLIST as u32),
+                COMBO_X,
+                COMBO_Y,
+                COMBO_W,
+                COMBO_H,
+                hwnd,
+                ID_COMBO_LANGUAGE as *mut _,
+                hinst,
+                std::ptr::null(),
+            );
+            if !combo.is_null() {
+                SendMessageW(combo, WM_SETFONT, hfont as usize, 1);
+                SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+                for bundle in localisations() {
+                    SendMessageW(
+                        combo,
+                        CB_ADDSTRING,
+                        0,
+                        wide(&bundle.tag).as_ptr() as isize,
+                    );
+                }
+                // Pre-select whatever `main` already activated.
+                SendMessageW(combo, CB_SETCURSEL, 0, 0);
+            }
 
             // Body buttons. Labels + control IDs come from the
             // module-level `DIALOG_BUTTONS` list so the window height
             // (see `launcher_client_height`) can't drift out of sync
-            // with the row count.
-            let hinst = GetModuleHandleW(std::ptr::null());
+            // with the row count. `hinst` came from above, where the
+            // dropdown needed it.
             let buttons: &[(&str, usize)] = DIALOG_BUTTONS;
             for (i, (label, id)) in buttons.iter().enumerate() {
                 let y = BTN_FIRST_Y + (i as i32) * (BTN_H + BTN_GAP);
@@ -672,14 +883,49 @@ unsafe extern "system" fn wndproc(
                 DT_LEFT | DT_SINGLELINE,
             );
 
+            // 3. Language label — sits directly above the dropdown.
+            SetTextColor(hdc, 0x00606060);
+            let mut rect_combo_label = RECT {
+                left: COMBO_X,
+                top: COMBO_LABEL_Y,
+                right: LAUNCHER_W - COMBO_X,
+                bottom: COMBO_LABEL_Y + 20,
+            };
+            DrawTextW(
+                hdc,
+                wide(COMBO_LABEL_TEXT).as_ptr(),
+                -1,
+                &mut rect_combo_label,
+                DT_LEFT | DT_SINGLELINE,
+            );
+
             SelectObject(hdc, prev_font);
             EndPaint(hwnd, &ps);
             0
         },
-        WM_COMMAND => {
+        WM_COMMAND => unsafe {
             // LOWORD(wparam) is the control / menu id. Mask off
             // the notification code in the high word.
             let id = (wparam & 0xFFFF) as usize;
+            let notification = ((wparam >> 16) & 0xFFFF) as usize;
+
+            // The dropdown only means something on a selection change
+            // — `CBN_SELENDOK` and friends would be redundant work.
+            if id == ID_COMBO_LANGUAGE && notification == CBN_SELCHANGE as usize {
+                let combo = GetDlgItem(hwnd, ID_COMBO_LANGUAGE as i32);
+                if !combo.is_null() {
+                    let index = SendMessageW(combo, CB_GETCURSEL, 0, 0);
+                    if index >= 0 {
+                        // Swaps the launcher's bundle chain and bumps
+                        // `localize::generation`, which invalidates the
+                        // cached `Dialogs`. Dialogs opened from here on
+                        // render in the new language.
+                        select_language(index as usize);
+                    }
+                }
+                return DefWindowProcW(hwnd, msg, wparam, lparam);
+            }
+
             match id {
                 ID_BTN_PROGRESS_ANIM => spawn_dialog(|| run_progress(false)),
                 ID_BTN_PROGRESS_STATIC => spawn_dialog(|| run_progress(true)),
@@ -707,7 +953,7 @@ unsafe extern "system" fn wndproc(
                         "java.lang.UnsatisfiedLinkError: C:\\Users\\demo\\.snug\\jdk\\jdk-25\\bin\\jvm.dll: Can't find dependent libraries",
                     );
                 }),
-                ID_BTN_JAVA_ERROR => spawn_dialog(|| unsafe {
+                ID_BTN_JAVA_ERROR => spawn_dialog(|| {
                     error_window::show_launcher_error(
                         std::ptr::null_mut(),
                         "java.lang.NoClassDefFoundError: com/example/Main",
@@ -720,14 +966,12 @@ unsafe extern "system" fn wndproc(
                     // Same as the X button: destroy the launcher
                     // window. Any dialogs spawned before this point
                     // are on their own threads and survive.
-                    unsafe {
-                        DestroyWindow(hwnd);
-                    }
+                    DestroyWindow(hwnd);
                 }
                 _ => {}
             }
-            0
-        }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        },
         WM_CLOSE => {
             // Closing the launcher destroys **only the launcher**.
             // Any dialogs already spawned are independent top-level
@@ -940,9 +1184,19 @@ mod tests {
         parse_args(args.iter().copied())
     }
 
+    fn run(args: &[&str]) -> Vec<String> {
+        match parse(args) {
+            Cli::Run { localisations } => localisations
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect(),
+            other => panic!("expected Run, got {other:?}"),
+        }
+    }
+
     #[test]
     fn no_args_runs_the_launcher_window() {
-        assert_eq!(parse(&[]), Cli::Run);
+        assert_eq!(parse(&[]), Cli::Run { localisations: vec![] });
     }
 
     #[test]
@@ -1015,5 +1269,154 @@ mod tests {
             })
             .count();
         assert_eq!(listed, DIALOG_BUTTONS.len());
+    }
+
+    // ------------------------------------------------------------------
+    // --localisation / --localization
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn both_spellings_are_accepted() {
+        assert_eq!(run(&["--localisation", "de.txt"]), vec!["de.txt"]);
+        assert_eq!(run(&["--localization", "de.txt"]), vec!["de.txt"]);
+    }
+
+    #[test]
+    fn the_flag_repeats_and_accumulates() {
+        assert_eq!(
+            run(&[
+                "--localisation",
+                "a.txt",
+                "--localization",
+                "b.txt",
+                "--localisation",
+                "c.txt"
+            ]),
+            vec!["a.txt", "b.txt", "c.txt"]
+        );
+    }
+
+    #[test]
+    fn a_missing_value_is_an_error() {
+        assert_eq!(
+            parse(&["--localisation"]),
+            Cli::Error("--localisation requires a <FILE|DIR> argument".to_string())
+        );
+        assert_eq!(
+            parse(&["--localization"]),
+            Cli::Error("--localization requires a <FILE|DIR> argument".to_string())
+        );
+    }
+
+    #[test]
+    fn a_bare_value_is_still_an_error() {
+        // Every option that takes a value names it explicitly, so a
+        // stray positional can't be mistaken for a path.
+        assert_eq!(
+            parse(&["progress"]),
+            Cli::Error("unrecognised argument: progress".to_string())
+        );
+    }
+
+    #[test]
+    fn help_text_documents_both_spellings() {
+        let h = help_text();
+        assert!(h.contains("--localisation <FILE|DIR>"), "{h}");
+        assert!(h.contains("--localization <FILE|DIR>"), "{h}");
+    }
+
+    // ------------------------------------------------------------------
+    // Registry construction
+    // ------------------------------------------------------------------
+
+    fn tmpdir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "snug-preview-i18n-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn no_paths_yields_just_the_builtin_english() {
+        let bundles = build_localisations(&[]).expect("baseline only");
+        assert_eq!(bundles.len(), 1);
+        assert_eq!(bundles[0].tag, "en");
+    }
+
+    #[test]
+    fn a_directory_contributes_every_bundle_then_english() {
+        let dir = tmpdir();
+        std::fs::write(
+            dir.join("snug-localisations.de.txt"),
+            "jdk_install.prompt.button_cancel = Abbrechen\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("snug-localisations.ja.txt"),
+            "jdk_install.prompt.button_cancel = Cancel\n",
+        )
+        .unwrap();
+
+        let bundles = build_localisations(&[dir.clone()]).expect("two bundles");
+        let tags: Vec<&str> = bundles.iter().map(|b| b.tag.as_str()).collect();
+        assert_eq!(tags, ["de", "ja", "en"]);
+        // English last, so the fallback is the baseline the launcher ships.
+        assert_eq!(bundles.last().unwrap().tag, "en");
+    }
+
+    #[test]
+    fn a_user_supplied_english_bundle_replaces_the_baseline() {
+        // Same rule the build applies: your own `en` takes the baseline
+        // slot rather than colliding with it.
+        let dir = tmpdir();
+        std::fs::write(
+            dir.join("snug-localisations.en.txt"),
+            "launcher.error.button_label = Dismiss\n",
+        )
+        .unwrap();
+
+        let bundles = build_localisations(&[dir]).expect("user english");
+        let tags: Vec<&str> = bundles.iter().map(|b| b.tag.as_str()).collect();
+        assert_eq!(tags, ["en"], "baseline must not be appended as a second en");
+        assert_eq!(
+            bundles[0].get("launcher.error.button_label"),
+            Some("Dismiss")
+        );
+    }
+
+    #[test]
+    fn duplicate_tags_are_rejected() {
+        let a = tmpdir();
+        let b = tmpdir();
+        std::fs::write(a.join("snug-localisations.de.txt"), "x = 1\n").unwrap();
+        std::fs::write(b.join("snug-localisations.de.txt"), "y = 2\n").unwrap();
+        let err = build_localisations(&[a, b]).expect_err("two `de` bundles");
+        assert!(err.contains("duplicate localisation tag `de`"), "{err}");
+    }
+
+    #[test]
+    fn a_stray_file_in_the_directory_is_an_error() {
+        // Directory mode is strict on purpose — a README or .bak next
+        // to the bundles is a mistake worth surfacing.
+        let dir = tmpdir();
+        std::fs::write(dir.join("snug-localisations.de.txt"), "x = 1\n").unwrap();
+        std::fs::write(dir.join("README.md"), "notes\n").unwrap();
+        let err = build_localisations(&[dir]).expect_err("stray file");
+        assert!(err.contains("non-matching file"), "{err}");
+    }
+
+    #[test]
+    fn a_missing_path_is_an_error_not_a_silent_empty_dropdown() {
+        let err = build_localisations(&[std::path::PathBuf::from(
+            "C:/definitely/not/here.txt",
+        )])
+        .expect_err("missing path");
+        assert!(err.contains("stat-ing localization entry"), "{err}");
     }
 }
