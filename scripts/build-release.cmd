@@ -29,6 +29,10 @@ REM      Then stamp assets\snug-dropper.png into snug-dropper.exe and emit
 REM      target\...\Build with Snug.exe beside snug.exe. Unlike step 6 this
 REM      is a *shipped* artefact rather than a dev tool, so it gets its own
 REM      flag instead of hiding behind --SkipDevTools.
+REM   8. Stage release\: the two EXEs a user actually runs, plus the demo
+REM      JAR so someone can try the whole drop-a-JAR flow before building
+REM      a JAR of their own. release\ ignores its own contents, so nothing
+REM      here is tracked. Skip with --SkipRelease.
 REM
 REM Run from the repo root:
 REM     .\scripts\build-release.cmd
@@ -45,12 +49,17 @@ REM                             dev artefacts to test machines.
 REM     --SkipDropper           Skip step 7 (the Build with Snug beginner
 REM                             shim). It is user-facing, so this is opt-out
 REM                             rather than implied by --SkipDevTools.
+REM     --SkipRelease           Skip step 8 (copy the shipping artefacts into
+REM                             release\). The folder is regenerated in place,
+REM                             so stale files from a previous run are NOT
 REM     --CrossCompile          Cross-compile to x86_64-pc-windows-gnu via
 REM                             cargo-zigbuild (for non-Windows dev hosts).
 REM                             Requires zig, cargo-zigbuild on PATH and the
 REM                             x86_64-pc-windows-gnu rust target installed.
 REM     --Clean                 cargo clean -p snug-launcher -p snug-cli
-REM                             -p snug-dropper first.
+REM                             -p snug-dropper first. Does NOT empty
+REM                             release\; stage it into a fresh folder if
+REM                             you need a guaranteed-clean release.
 REM ===========================================================================
 
 setlocal EnableExtensions EnableDelayedExpansion
@@ -87,6 +96,7 @@ set "SKIP_PACKAGE=0"
 set "SKIP_VERIFY=0"
 set "SKIP_DEV_TOOLS=0"
 set "SKIP_DROPPER=0"
+set "SKIP_RELEASE=0"
 set "CROSS_COMPILE=0"
 set "CLEAN=0"
 
@@ -97,6 +107,7 @@ if /i "%~1"=="--SkipPackage"         set "SKIP_PACKAGE=1"
 if /i "%~1"=="--SkipVerify"          set "SKIP_VERIFY=1"
 if /i "%~1"=="--SkipDevTools"        set "SKIP_DEV_TOOLS=1"
 if /i "%~1"=="--SkipDropper"         set "SKIP_DROPPER=1"
+if /i "%~1"=="--SkipRelease"         set "SKIP_RELEASE=1"
 if /i "%~1"=="--CrossCompile"        set "CROSS_COMPILE=1"
 if /i "%~1"=="--Clean"               set "CLEAN=1"
 shift
@@ -115,6 +126,7 @@ set "PREVIEW_PNG=assets\snug-preview.png"
 set "SNUG_CLI_PNG=assets\snug-runner.png"
 set "DROPPER_PNG=assets\snug-dropper.png"
 set "DROPPER_SHIPPED=Build with Snug.exe"
+set "RELEASE_DIR=release"
 
 if "!CROSS_COMPILE!"=="1" (
     set "TARGET_TRIPLE=x86_64-pc-windows-gnu"
@@ -412,6 +424,51 @@ echo ==^> Skipping Build with Snug build + package ^(--SkipDropper^)
 :after_dropper
 
 REM ---------------------------------------------------------------------------
+REM 8. Stage the release directory.
+REM
+REM    release\ is the folder a user unpacks: snug.exe, the Build with Snug
+REM    shim, and the demo JAR so the whole drop-a-JAR flow can be tried
+REM    before writing a JAR of their own. The directory ignores its own
+REM    contents, so nothing in it is tracked.
+REM
+REM    The two EXEs are staged together on purpose. Build with Snug.exe
+REM    resolves snug.exe relative to its own path, so a release folder with
+REM    one and not the other is broken by construction -- the same
+REM    invariant step 7 asserts, now enforced at the shipping boundary.
+REM
+REM    A missing artefact warns rather than aborts, so --SkipDropper and
+REM    --SkipDevTools still produce a coherent (if partial) folder. Anything
+REM    already sitting in release\ is left alone, so an artefact dropped from
+REM    the pipeline in one run lingers in the next; use --Clean and stage
+REM    into a fresh folder when you need a guaranteed-clean release.
+REM ---------------------------------------------------------------------------
+
+if "!SKIP_RELEASE!"=="1" goto skip_release
+
+echo.
+echo ==^> staging !RELEASE_DIR!\
+if not exist "!RELEASE_DIR!" mkdir "!RELEASE_DIR!"
+if errorlevel 1 (
+    echo [build-release] Failed to create !RELEASE_DIR!\
+    exit /b 1
+)
+
+call :stage "!BUILT_CLI_EXE!" "snug.exe"
+if errorlevel 1 exit /b 1
+call :stage "!DROPPER_PACKAGED!" "!DROPPER_SHIPPED!"
+if errorlevel 1 exit /b 1
+call :stage "!DEMO_JAR!" "snug-javafx-demo.jar"
+if errorlevel 1 exit /b 1
+
+goto after_release
+
+:skip_release
+echo.
+echo ==^> Skipping release staging ^(--SkipRelease^)
+
+:after_release
+
+REM ---------------------------------------------------------------------------
 REM Summary.
 REM ---------------------------------------------------------------------------
 
@@ -425,5 +482,43 @@ for %%I in ("!DEMO_EXE!")        do echo   Demo EXE:               !DEMO_EXE!   
 for %%I in ("!BUILT_PREVIEW_EXE!") do ( if exist "!BUILT_PREVIEW_EXE!" echo   snug_preview:           !BUILT_PREVIEW_EXE! ^(%%~zI bytes^) )
 for %%I in ("!BUILT_DROPPER_EXE!")     do ( if exist "!BUILT_DROPPER_EXE!" echo   Dropper built:          !BUILT_DROPPER_EXE! ^(%%~zI bytes^) )
 for %%I in ("!DROPPER_PACKAGED!")     do ( if exist "!DROPPER_PACKAGED!" echo   !DROPPER_SHIPPED!:  !DROPPER_PACKAGED! ^(%%~zI bytes^) )
+echo.
+echo Release directory: !RELEASE_DIR!\
+for %%I in ("!RELEASE_DIR!\snug.exe")               do ( if exist "!RELEASE_DIR!\snug.exe" echo     snug.exe                 !RELEASE_DIR!\snug.exe ^(%%~zI bytes^) )
+for %%I in ("!RELEASE_DIR!\!DROPPER_SHIPPED!")     do ( if exist "!RELEASE_DIR!\!DROPPER_SHIPPED!" echo     !DROPPER_SHIPPED!: !RELEASE_DIR!\!DROPPER_SHIPPED! ^(%%~zI bytes^) )
+for %%I in ("!RELEASE_DIR!\snug-javafx-demo.jar")  do ( if exist "!RELEASE_DIR!\snug-javafx-demo.jar" echo     snug-javafx-demo.jar    !RELEASE_DIR!\snug-javafx-demo.jar ^(%%~zI bytes^) )
 
+REM End the main flow here. :stage below is reachable only through CALL,
+REM which is what stops the pipeline running off the end of the summary
+REM and into the subroutine with no arguments.
 endlocal
+exit /b 0
+
+REM Copy one artefact into release\, reporting what happened.
+REM
+REM Placed after the main flow and reached only via CALL, so the pipeline
+REM above still reads top to bottom. `exit /b` returns to the CALLer rather
+REM than ending the script, which is what lets one failing copy abort the
+REM run while one missing file does not.
+REM
+REM Deliberately free of for-loops and escaped parens. A `for %%I in (...)
+REM do echo ... ^(...)` line inside a call-ed subroutine does not survive
+REM cmd: the second expansion pass CALL performs mangles the escaped
+REM parens, the rest of the subroutine gets swallowed along with its
+REM `exit /b`, and the caller then reads a stale errorlevel. Sizes are
+REM reported in the top-level "Sizes:" block instead, where a for-loop is
+REM known to behave.
+:stage
+set "_STAGE_SRC=%~1"
+set "_STAGE_NAME=%~2"
+if not exist "!_STAGE_SRC!" (
+    echo   skip    !_STAGE_NAME! -- not built
+    exit /b 0
+)
+copy /Y "!_STAGE_SRC!" "!RELEASE_DIR!\!_STAGE_NAME!" >nul
+if errorlevel 1 (
+    echo   FAILED to copy !_STAGE_SRC! into !RELEASE_DIR!
+    exit /b 1
+)
+echo   staged  !_STAGE_NAME!
+exit /b 0

@@ -1,0 +1,8 @@
+# Everything in here is a build output produced by scripts\build-release.cmd.
+# This file is the only tracked thing, so a fresh clone has the folder (and
+# these rules) without carrying a single artefact.
+#
+# Force-adding a binary here means it will silently differ from whatever the
+# script last generated, which is the failure this file exists to prevent.
+*
+!.gitignore
