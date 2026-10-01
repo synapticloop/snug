@@ -1050,7 +1050,7 @@ checksum = "ba467056f1b547ed52077911161fc86985becbc60e8e1857c8a144dab0def891"
 
 [[package]]
 name = "snug-cli"
-version = "0.5.6"
+version = "0.5.7"
 dependencies = [
  "anyhow",
  "clap",
@@ -1068,7 +1068,7 @@ dependencies = [
 
 [[package]]
 name = "snug-format"
-version = "0.5.6"
+version = "0.5.7"
 dependencies = [
  "crc32fast",
  "postcard",
@@ -1079,7 +1079,7 @@ dependencies = [
 
 [[package]]
 name = "snug-launcher"
-version = "0.5.6"
+version = "0.5.7"
 dependencies = [
  "editpe",
  "embed-resource",

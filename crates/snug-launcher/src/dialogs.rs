@@ -52,6 +52,9 @@ pub struct LauncherErrorDialogs {
     pub content: String,
     pub info_heading: String,
     pub info_subtext: String,
+    /// Third line in the light-blue info box. Rendered only when
+    /// non-empty, so a dialog can opt in without padding.
+    pub info_subtext_2: String,
     pub button_label: String,
     /// Leading label rendered before the optional "Check for a
     /// newer version" link (e.g. `"Check for a newer version:"`).
@@ -95,6 +98,9 @@ pub struct MetadataFailedDialog {
     pub info_heading: String,
     /// Info-box subtext (second line in the light-blue box).
     pub info_subtext: String,
+    /// Third line in the light-blue info box. Rendered only when
+    /// non-empty, so a dialog can opt in without padding.
+    pub info_subtext_2: String,
     /// Primary button label — opens the Adoptium download page in
     /// the user's browser.
     pub button_open_browser: String,
@@ -124,6 +130,9 @@ pub struct ProgressDialog {
     pub detail_eta_done: String,
     pub info_heading: String,
     pub info_subtext: String,
+    /// Third line in the light-blue info box. Rendered only when
+    /// non-empty, so a dialog can opt in without padding.
+    pub info_subtext_2: String,
     /// Label of the Cancel button while the download phase is
     /// running. Default `"Install"` — the download is part of the
     /// install flow, and labelling the abort button "Install"
@@ -149,6 +158,9 @@ pub struct FailureDialog {
     pub info_heading: String,
     /// Info-box subtext (second line in the light-blue box).
     pub info_subtext: String,
+    /// Third line in the light-blue info box. Rendered only when
+    /// non-empty, so a dialog can opt in without padding.
+    pub info_subtext_2: String,
     /// Single-button label on the dialog. Default `"OK"`.
     pub button_label: String,
 }
@@ -171,6 +183,9 @@ pub struct RetryDialog {
     pub info_heading: String,
     /// Info-box subtext (second line in the light-blue box).
     pub info_subtext: String,
+    /// Third line in the light-blue info box. Rendered only when
+    /// non-empty, so a dialog can opt in without padding.
+    pub info_subtext_2: String,
     /// Primary button label — retries the install.
     pub button_retry: String,
     /// Secondary button label — aborts the install.
@@ -268,6 +283,7 @@ fn assemble() -> Dialogs {
                     content: lookup("jdk_install.metadata_failed.content"),
                     info_heading: lookup("jdk_install.metadata_failed.info_heading"),
                     info_subtext: lookup("jdk_install.metadata_failed.info_subtext"),
+                    info_subtext_2: lookup("jdk_install.metadata_failed.info_subtext_2"),
                     button_open_browser: lookup("jdk_install.metadata_failed.button_open_browser"),
                     button_cancel: lookup("jdk_install.metadata_failed.button_cancel"),
                 },
@@ -286,6 +302,7 @@ fn assemble() -> Dialogs {
                     detail_eta_done: lookup("jdk_install.progress.detail_eta_done"),
                     info_heading: lookup("jdk_install.progress.info_heading"),
                     info_subtext: lookup("jdk_install.progress.info_subtext"),
+                    info_subtext_2: lookup("jdk_install.progress.info_subtext_2"),
                     cancel_button_during_download: {
                         lookup("jdk_install.progress.cancel_button_during_download")
                     },
@@ -299,6 +316,7 @@ fn assemble() -> Dialogs {
                     content: lookup("jdk_install.failure.content"),
                     info_heading: lookup("jdk_install.failure.info_heading"),
                     info_subtext: lookup("jdk_install.failure.info_subtext"),
+                    info_subtext_2: lookup("jdk_install.failure.info_subtext_2"),
                     button_label: lookup("jdk_install.failure.button_label"),
                 },
                 retry: RetryDialog {
@@ -308,6 +326,7 @@ fn assemble() -> Dialogs {
                     content: lookup("jdk_install.retry.content"),
                     info_heading: lookup("jdk_install.retry.info_heading"),
                     info_subtext: lookup("jdk_install.retry.info_subtext"),
+                    info_subtext_2: lookup("jdk_install.retry.info_subtext_2"),
                     button_retry: lookup("jdk_install.retry.button_retry"),
                     button_cancel: lookup("jdk_install.retry.button_cancel"),
                 },
@@ -327,6 +346,7 @@ fn assemble() -> Dialogs {
                     content: lookup("launcher.error.content"),
                     info_heading: lookup("launcher.error.info_heading"),
                     info_subtext: lookup("launcher.error.info_subtext"),
+                    info_subtext_2: lookup("launcher.error.info_subtext_2"),
                     button_label: lookup("launcher.error.button_label"),
                     update_check_label: lookup("launcher.error.update_check_label"),
                 },

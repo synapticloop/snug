@@ -41,6 +41,10 @@ pub struct ErrorDialog<'a> {
     /// `[jdk_install.failure].info_subtext` from the localization bundle,
     /// falling back to the module default.
     pub info_subtext: Option<&'a str>,
+    /// Optional third info-box line. None or empty ⇒ no third
+    /// line is painted. Defaults to the localization bundle's
+    /// info_subtext_2 when this dialog is built from a group.
+    pub info_subtext_2: Option<&'a str>,
     /// Optional override for the button label. `None` ⇒
     /// `[jdk_install.failure].button_label` from the localization bundle,
     /// falling back to the module default.
@@ -143,6 +147,7 @@ pub unsafe fn show(parent: HWND, dlg: ErrorDialog<'_>) -> i32 {
                 info_icon: dlg.info_icon,
                 info_heading: info_heading.as_deref(),
                 info_subtext: info_subtext.as_deref(),
+                info_subtext_2: dlg.info_subtext_2,
                 buttons: std::slice::from_ref(&button),
                 mascot_hbitmap: dlg.mascot_hbitmap,
                 link_url: dlg.update_check_url,
@@ -193,6 +198,7 @@ pub unsafe fn show_launcher_error(
                 info_icon: InfoIcon::Error,
                 info_heading: Some(&dialogs.launcher.error.info_heading),
                 info_subtext: Some(&dialogs.launcher.error.info_subtext),
+                info_subtext_2: Some(&dialogs.launcher.error.info_subtext_2),
                 button_label: Some(&dialogs.launcher.error.button_label),
                 mascot_hbitmap: 0,
                 update_check_url,

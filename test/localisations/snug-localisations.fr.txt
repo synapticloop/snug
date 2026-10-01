@@ -185,6 +185,7 @@ jdk_install.metadata_failed.subheading = Java {major} nécessite un lien de tél
 jdk_install.metadata_failed.content = Détail technique :\n{error}
 jdk_install.metadata_failed.info_heading = Pourquoi cela s'est-il produit ?
 jdk_install.metadata_failed.info_subtext = Votre connexion réseau est peut-être interrompue, ou l'API d'Adoptium est temporairement injoignable.
+jdk_install.metadata_failed.info_subtext_2 = Vérifiez votre connexion réseau et réessayez dans un instant.
 jdk_install.metadata_failed.button_open_browser = Ouvrir la page de téléchargement
 jdk_install.metadata_failed.button_cancel = Annuler
 
@@ -202,6 +203,7 @@ jdk_install.progress.detail_eta_second = Encore 1 seconde
 jdk_install.progress.detail_eta_done = Presque terminé
 jdk_install.progress.info_heading = Ce téléchargement n'est nécessaire qu'une seule fois.
 jdk_install.progress.info_subtext = Cet environnement d'exécution sera utilisé pour les prochains démarrages de l'application
+jdk_install.progress.info_subtext_2 = L'environnement d'exécution est installé pour votre compte utilisateur et réutilisé par les autres applications Java.
 jdk_install.progress.cancel_button_during_download = Installer
 
 jdk_install.failure.title = Échec de l'installation de l'environnement d'exécution
@@ -210,6 +212,7 @@ jdk_install.failure.subheading = Toutes les tentatives de téléchargement sont 
 jdk_install.failure.content =
 jdk_install.failure.info_heading = Que puis-je faire ?
 jdk_install.failure.info_subtext = Vérifiez votre connexion réseau, ou téléchargez manuellement l'environnement d'exécution depuis adoptium.net.
+jdk_install.failure.info_subtext_2 = L'application va tenter de démarrer avec le Java déjà présent sur cette machine.
 jdk_install.failure.button_label = OK
 
 jdk_install.retry.title = Téléchargement échoué — Réessayer ?
@@ -218,6 +221,7 @@ jdk_install.retry.subheading = La tentative {attempt} sur {max_attempts} a écho
 jdk_install.retry.content = {error}
 jdk_install.retry.info_heading = Pourquoi cela s'est-il produit ?
 jdk_install.retry.info_subtext = Une cause fréquente est une micro-coupure réseau. Vous pouvez réessayer, ou annuler et réessayer plus tard.
+jdk_install.retry.info_subtext_2 = Vous pouvez aussi télécharger manuellement l'environnement d'exécution depuis adoptium.net.
 jdk_install.retry.button_retry = Réessayer
 jdk_install.retry.button_cancel = Annuler
 
@@ -232,5 +236,6 @@ launcher.error.heading = L'application n'a pas pu démarrer
 launcher.error.subheading = Une erreur est survenue lors du démarrage de l'application intégrée.
 launcher.error.info_heading = Que s'est-il passé ?
 launcher.error.info_subtext = Le lanceur a atteint l'application intégrée, mais elle n'a pas pu démarrer. Consultez le fichier journal de votre dossier AppData local pour tous les détails.
+launcher.error.info_subtext_2 = Relancer l'application réessaiera le démarrage.
 launcher.error.button_label = Fermer
 launcher.error.update_check_label = Rechercher une version plus récente :

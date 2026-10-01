@@ -179,13 +179,14 @@ jdk_install.prompt.button_download = Download Temurin {version} now
 jdk_install.prompt.button_open_browser = Open the download page in my browser
 jdk_install.prompt.button_cancel = Cancel
 
-jdk_install.metadata_failed.title = Could not reach Adoptium — Snug
-jdk_install.metadata_failed.heading = We couldn't reach Adoptium
-jdk_install.metadata_failed.subheading = Java {major} requires a download link from Adoptium, but our request didn't reach the server.
+jdk_install.metadata_failed.title = Could not contact runtime site — Snug
+jdk_install.metadata_failed.heading = We couldn't contact the site.
+jdk_install.metadata_failed.subheading = We tried to contact the runtime site, but our request didn't reach the server.
 jdk_install.metadata_failed.content = Technical detail:\n{error}
 jdk_install.metadata_failed.info_heading = Why did this happen?
-jdk_install.metadata_failed.info_subtext = Your network connection may be down, or Adoptium's API is temporarily unreachable.
-jdk_install.metadata_failed.button_open_browser = Open the download page
+jdk_install.metadata_failed.info_subtext = Your network connection may be down, or the runtime site is temporarily unreachable.
+jdk_install.metadata_failed.info_subtext_2 = Check your network connection and try again in a moment.
+jdk_install.metadata_failed.button_open_browser = Open page
 jdk_install.metadata_failed.button_cancel = Cancel
 
 jdk_install.progress.title = Install Runtime
@@ -202,6 +203,7 @@ jdk_install.progress.detail_eta_second = 1 second remaining
 jdk_install.progress.detail_eta_done = Almost done
 jdk_install.progress.info_heading = This only needs to be downloaded once.
 jdk_install.progress.info_subtext = This runtime will be used for future application launches
+jdk_install.progress.info_subtext_2 = The runtime is installed for your user account and is reused by other Java applications.
 jdk_install.progress.cancel_button_during_download = Install
 
 jdk_install.failure.title = Runtime Installation Failure
@@ -210,6 +212,7 @@ jdk_install.failure.subheading = All download attempts were exhausted, we will a
 jdk_install.failure.content =
 jdk_install.failure.info_heading = What can I do?
 jdk_install.failure.info_subtext = Check your network, or download the runtime manually from adoptium.net.
+jdk_install.failure.info_subtext_2 = The application will try to start with whatever Java is already on this machine.
 jdk_install.failure.button_label = OK
 
 jdk_install.retry.title = Download failed — Try again?
@@ -218,6 +221,7 @@ jdk_install.retry.subheading = Attempt {attempt} of {max_attempts} failed while 
 jdk_install.retry.content = {error}
 jdk_install.retry.info_heading = Why did this happen?
 jdk_install.retry.info_subtext = A common cause is a transient network blip. You can retry, or cancel and try again later.
+jdk_install.retry.info_subtext_2 = You can also download the runtime manually from adoptium.net.
 jdk_install.retry.button_retry = Try again
 jdk_install.retry.button_cancel = Cancel
 
@@ -232,5 +236,6 @@ launcher.error.heading = Application failed to launch
 launcher.error.subheading = Something went wrong while starting the embedded application.
 launcher.error.info_heading = What happened?
 launcher.error.info_subtext = The launcher reached the embedded application but it failed to start. Check the log file in your local AppData folder for full details.
+launcher.error.info_subtext_2 = Starting the application again will retry the launch.
 launcher.error.button_label = Close
 launcher.error.update_check_label = Check for a newer version:

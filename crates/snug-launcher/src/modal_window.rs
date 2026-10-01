@@ -67,7 +67,8 @@ use windows_sys::Win32::Graphics::Gdi::{
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, DrawIconEx, DI_NORMAL,
+    AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
+    DrawIconEx, DI_NORMAL,
     GetMessageW, GetSystemMetrics, GetWindowLongPtrW, HICON, IDCANCEL, IDI_ERROR,
     IDI_INFORMATION, IDI_WARNING, LoadCursorW, LoadIconW, MSG, PostQuitMessage,
     RegisterClassExW, SendMessageW, SetCursor, SetWindowLongPtrW, SM_CXSCREEN, SM_CYSCREEN,
@@ -127,7 +128,13 @@ pub const IDCANCEL_I32: i32 = 2;
 
 const CLASS_NAME: &str = "snug_modal_dialog_v1\0";
 const WINDOW_W: i32 = 640;
-const WINDOW_H: i32 = 320;
+/// Height of the client area, derived from the lowest element in the
+/// window (the optional link row) plus a bottom margin. The point of
+/// deriving it rather than hardcoding 320 is that the layout below is
+/// a stack — mascot, text, info box, link row — so growing
+/// `INFO_BOX_H` to fit a third line must not require a second edit
+/// here or the link row ends up overlapping the box.
+const WINDOW_H: i32 = LINK_Y + LINK_H + 12;
 
 const MARGIN: i32 = 16;
 const MASCOT_X: i32 = MARGIN;
@@ -150,13 +157,22 @@ const CONTENT_H: i32 = 88;
 const INFO_BOX_X: i32 = MARGIN;
 const INFO_BOX_W: i32 = WINDOW_W - MARGIN * 3;
 const INFO_BOX_Y: i32 = 220;
-const INFO_BOX_H: i32 = 50;
+/// Height of the light-blue info box. Sized for the heading plus
+/// **two** subtext lines: `INFO_HEADING_Y_OFFSET` .. plus two rows of
+/// `INFO_SUBTEXT_H`, with `INFO_PAD` top and bottom. `WINDOW_H` is
+/// derived from this, so growing the box here grows the dialog.
+const INFO_BOX_H: i32 = 74;
 const INFO_PAD: i32 = 8;
 const INFO_ICON_SIZE: i32 = 16;
 
 const INFO_ICON_Y_OFFSET: i32 = INFO_PAD + 2;
 const INFO_HEADING_Y_OFFSET: i32 = INFO_PAD - 2;
 const INFO_SUBTEXT_Y_OFFSET: i32 = INFO_PAD + 20;
+/// Height reserved for one subtext row. The second line sits directly
+/// below the first, so both are laid out from these two constants
+/// rather than from a second hand-picked Y.
+const INFO_SUBTEXT_H: i32 = 16;
+const INFO_SUBTEXT2_Y_OFFSET: i32 = INFO_SUBTEXT_Y_OFFSET + INFO_SUBTEXT_H + 2;
 const INFO_TEXT_X: i32 = INFO_BOX_X + INFO_PAD + INFO_ICON_SIZE + 28;
 const INFO_TEXT_W: i32 = INFO_BOX_W - (INFO_TEXT_X - INFO_BOX_X) - INFO_PAD;
 
@@ -179,7 +195,12 @@ const BUTTON_Y: i32 = INFO_BOX_Y + (INFO_BOX_H - BUTTON_H) / 2;
 /// info box. Reserved only when [`ModalDialog::link_url`] is `Some`
 /// and non-empty. The URL is opened via
 /// `ShellExecuteW(..., "open", url, ...)`.
-const LINK_Y: i32 = 288;
+///
+/// `LINK_Y` is derived from the info box rather than hardcoded, so
+/// growing `INFO_BOX_H` for a third line cannot leave the link row
+/// overlapping it. `WINDOW_H` is in turn derived from the link row,
+/// which is what makes the whole stack move together.
+const LINK_Y: i32 = INFO_BOX_Y + INFO_BOX_H + 18;
 const LINK_H: i32 = 20;
 const LINK_TEXT_X: i32 = MARGIN;
 
@@ -292,6 +313,11 @@ pub struct ModalDialog<'a> {
     pub info_heading: Option<&'a str>,
     /// Info-box subtext. `None` ⇒ [`INFO_SUBTEXT_DEFAULT`].
     pub info_subtext: Option<&'a str>,
+    /// Optional **third** line in the info box, printed under
+    /// `info_subtext`. `None` or empty skips creating the control
+    /// entirely, so a dialog that does not want the line pays nothing
+    /// beyond the taller box.
+    pub info_subtext_2: Option<&'a str>,
     /// Button list. One, two, or three entries; the first is always
     /// [`Button::Primary`], the last is always either
     /// [`Button::Secondary`] (2-button) or [`Button::Tertiary`]
@@ -373,6 +399,14 @@ pub unsafe fn show<'a>(parent: HWND, dlg: &'a ModalDialog<'a>) -> i32 {
         .map(str::to_string)
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| INFO_SUBTEXT_DEFAULT.to_string());
+    // Unlike the two above, the third line has no module default: it
+    // is genuinely optional, and an absent key must leave the control
+    // uncreated rather than inventing copy a dialog never asked for.
+    let info_subtext2_text: String = dlg
+        .info_subtext_2
+        .map(str::to_string)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_default();
 
     let state = Box::new(State {
         heading_text: dlg.heading.to_string(),
@@ -380,6 +414,7 @@ pub unsafe fn show<'a>(parent: HWND, dlg: &'a ModalDialog<'a>) -> i32 {
         content_text: dlg.content.to_string(),
         info_heading_text,
         info_subtext_text,
+        info_subtext2_text,
         buttons: dlg
             .buttons
             .iter()
@@ -397,6 +432,7 @@ pub unsafe fn show<'a>(parent: HWND, dlg: &'a ModalDialog<'a>) -> i32 {
         hwnd_info_icon: std::ptr::null_mut(),
         hwnd_info_heading: std::ptr::null_mut(),
         hwnd_info_subtext: std::ptr::null_mut(),
+        hwnd_info_subtext2: std::ptr::null_mut(),
         hwnd_button_primary: std::ptr::null_mut(),
         hwnd_button_secondary: std::ptr::null_mut(),
         hwnd_button_tertiary: std::ptr::null_mut(),
@@ -405,6 +441,7 @@ pub unsafe fn show<'a>(parent: HWND, dlg: &'a ModalDialog<'a>) -> i32 {
         hfont_content: std::ptr::null_mut(),
         hfont_info_heading: std::ptr::null_mut(),
         hfont_info_subtext: std::ptr::null_mut(),
+        hfont_info_subtext2: std::ptr::null_mut(),
         hfont_link_url: std::ptr::null_mut(),
         link_url_rect: RECT {
             left: 0,
@@ -419,11 +456,38 @@ pub unsafe fn show<'a>(parent: HWND, dlg: &'a ModalDialog<'a>) -> i32 {
     });
     let state_ptr = Box::into_raw(state);
 
-    // Centre on the primary monitor.
+    // WINDOW_W / WINDOW_H describe the **client** area, like every
+    // other constant in this file. The styles below carry a caption,
+    // so the size handed to CreateWindowExW has to be the expanded
+    // window rect -- otherwise the title bar (~31 px) silently comes
+    // out of the client height and the bottom of the stack (the info
+    // box, then the update-check link below it) is clipped. That was
+    // invisible while the box was 50 px tall; growing it for a third
+    // line pushed its last row off the client area. Same conversion
+    // snug_preview already does for its launcher window.
+    let mut client = RECT {
+        left: 0,
+        top: 0,
+        right: WINDOW_W,
+        bottom: WINDOW_H,
+    };
+    unsafe {
+        AdjustWindowRectEx(
+            &mut client,
+            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
+            0,
+            WS_EX_TOPMOST,
+        );
+    }
+    let win_w = client.right - client.left;
+    let win_h = client.bottom - client.top;
+
+    // Centre on the primary monitor, using the *window* size -- that
+    // is what the user actually sees on screen.
     let sx = unsafe { GetSystemMetrics(SM_CXSCREEN) };
     let sy = unsafe { GetSystemMetrics(SM_CYSCREEN) };
-    let x = (sx - WINDOW_W) / 2;
-    let y = (sy - WINDOW_H) / 2;
+    let x = (sx - win_w) / 2;
+    let y = (sy - win_h) / 2;
 
     let hwnd = unsafe {
         CreateWindowExW(
@@ -433,8 +497,8 @@ pub unsafe fn show<'a>(parent: HWND, dlg: &'a ModalDialog<'a>) -> i32 {
             WS_CAPTION | WS_SYSMENU | WS_OVERLAPPED | WS_VISIBLE,
             x,
             y,
-            WINDOW_W,
-            WINDOW_H,
+            win_w,
+            win_h,
             parent,
             std::ptr::null_mut(),
             GetModuleHandleW(std::ptr::null()),
@@ -492,6 +556,9 @@ struct State {
     info_heading_text: String,
     /// Resolved info-box subtext (caller → default).
     info_subtext_text: String,
+    /// Third info-box line. Empty when the caller passed none,
+    /// which is what suppresses the control in WM_CREATE.
+    info_subtext2_text: String,
     /// Resolved buttons: `(is_primary, label)`. Always at least one.
     buttons: Vec<(bool, String)>,
     /// Resolved link-row label. Empty when the link row is hidden.
@@ -505,6 +572,8 @@ struct State {
     hwnd_info_icon: HWND,
     hwnd_info_heading: HWND,
     hwnd_info_subtext: HWND,
+    /// Third info-box line; null when the caller passed none.
+    hwnd_info_subtext2: HWND,
     hwnd_button_primary: HWND,
     /// `std::ptr::null_mut()` when there's only one button.
     hwnd_button_secondary: HWND,
@@ -516,6 +585,7 @@ struct State {
     hfont_content: HFONT,
     hfont_info_heading: HFONT,
     hfont_info_subtext: HFONT,
+    hfont_info_subtext2: HFONT,
     /// Underlined HFONT used to paint the URL portion of the link row.
     /// `std::ptr::null_mut()` when the link row is hidden.
     hfont_link_url: HFONT,
@@ -583,6 +653,9 @@ const IDC_CONTENT: i32 = 5003;
 const IDC_INFO_ICON: i32 = 5004;
 const IDC_INFO_HEADING: i32 = 5005;
 const IDC_INFO_SUBTEXT: i32 = 5006;
+/// Third info-box line. A distinct id so `GetDlgItem` in the cleanup
+/// path can't ever alias the first subtext.
+const IDC_INFO_SUBTEXT2: i32 = 5010;
 const IDC_BUTTON_PRIMARY: i32 = 5007;
 const IDC_BUTTON_SECONDARY: i32 = 5008;
 const IDC_BUTTON_TERTIARY: i32 = 5009;
@@ -613,6 +686,14 @@ unsafe extern "system" fn wndproc(
                 create_font_pt(INFO_HEADING_PT, INFO_HEADING_WEIGHT, false);
             let hfont_info_subtext =
                 create_font_pt(INFO_SUBTEXT_PT, INFO_SUBTEXT_WEIGHT, false);
+            // Third line reuses the first subtext's font, and is only
+            // allocated when the text exists — otherwise the cleanup
+            // path would be deleting a null it never created.
+            let hfont_info_subtext2 = if (&(*state).info_subtext2_text).is_empty() {
+                std::ptr::null_mut()
+            } else {
+                create_font_pt(INFO_SUBTEXT_PT, INFO_SUBTEXT_WEIGHT, false)
+            };
             let hfont_link_url = if !(&(*state).link_url_text).is_empty() {
                 create_font_pt(LINK_URL_PT, LINK_URL_WEIGHT, true)
             } else {
@@ -806,6 +887,33 @@ unsafe extern "system" fn wndproc(
             );
             apply_font(hwnd_info_subtext, hfont_info_subtext);
 
+            // ----- Third info-box line (optional) -----
+            // Created only when the caller supplied non-empty copy, so
+            // a dialog that omits `info_subtext_2` has no control and
+            // no font to leak. Positioned from `INFO_SUBTEXT2_Y_OFFSET`
+            // rather than a hand-picked Y so it cannot drift from the
+            // first subtext line when `INFO_BOX_H` changes.
+            let hwnd_info_subtext2 = if (&(*state).info_subtext2_text).is_empty() {
+                std::ptr::null_mut()
+            } else {
+                let h = CreateWindowExW(
+                    0,
+                    wide(STATIC_CLASS).as_ptr(),
+                    wide((*state).info_subtext2_text.as_str()).as_ptr(),
+                    WS_CHILD | WS_VISIBLE | SS_LEFT,
+                    INFO_TEXT_X,
+                    INFO_BOX_Y + INFO_SUBTEXT2_Y_OFFSET,
+                    INFO_TEXT_W,
+                    INFO_SUBTEXT_H,
+                    hwnd,
+                    IDC_INFO_SUBTEXT2 as *mut _,
+                    hinst,
+                    std::ptr::null(),
+                );
+                apply_font(h, hfont_info_subtext2);
+                h
+            };
+
             // ----- Buttons -----
             let buttons_len = (&(*state).buttons).len();
             let (hwnd_primary, hwnd_secondary, hwnd_tertiary) = match buttons_len {
@@ -926,6 +1034,7 @@ unsafe extern "system" fn wndproc(
             (*state).hwnd_info_icon = hwnd_info_icon;
             (*state).hwnd_info_heading = hwnd_info_heading;
             (*state).hwnd_info_subtext = hwnd_info_subtext;
+            (*state).hwnd_info_subtext2 = hwnd_info_subtext2;
             (*state).hwnd_button_primary = hwnd_primary;
             (*state).hwnd_button_secondary = hwnd_secondary;
             (*state).hwnd_button_tertiary = hwnd_tertiary;
@@ -934,6 +1043,7 @@ unsafe extern "system" fn wndproc(
             (*state).hfont_content = hfont_content;
             (*state).hfont_info_heading = hfont_info_heading;
             (*state).hfont_info_subtext = hfont_info_subtext;
+            (*state).hfont_info_subtext2 = hfont_info_subtext2;
             (*state).hfont_link_url = hfont_link_url;
 
             // Initial focus on the primary button so Enter
@@ -1235,6 +1345,9 @@ unsafe extern "system" fn wndproc(
                 }
                 if !(*raw).hfont_info_subtext.is_null() {
                     DeleteObject((*raw).hfont_info_subtext as _);
+                }
+                if !(*raw).hfont_info_subtext2.is_null() {
+                    DeleteObject((*raw).hfont_info_subtext2 as _);
                 }
                 if !(*raw).hfont_link_url.is_null() {
                     DeleteObject((*raw).hfont_link_url as _);

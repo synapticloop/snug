@@ -185,6 +185,7 @@ jdk_install.metadata_failed.subheading = Java {major} benötigt einen Download-L
 jdk_install.metadata_failed.content = Technische Details:\n{error}
 jdk_install.metadata_failed.info_heading = Warum ist das passiert?
 jdk_install.metadata_failed.info_subtext = Ihre Netzwerkverbindung ist möglicherweise ausgefallen, oder die API von Adoptium ist vorübergehend nicht erreichbar.
+jdk_install.metadata_failed.info_subtext_2 = Prüfen Sie Ihre Netzwerkverbindung und versuchen Sie es in einem Moment erneut.
 jdk_install.metadata_failed.button_open_browser = Download-Seite öffnen
 jdk_install.metadata_failed.button_cancel = Abbrechen
 
@@ -202,6 +203,7 @@ jdk_install.progress.detail_eta_second = Noch 1 Sekunde
 jdk_install.progress.detail_eta_done = Fast fertig
 jdk_install.progress.info_heading = Dies muss nur einmal heruntergeladen werden.
 jdk_install.progress.info_subtext = Diese Laufzeit wird für künftige Starts der Anwendung verwendet
+jdk_install.progress.info_subtext_2 = Die Laufzeit wird für Ihr Benutzerkonto installiert und von anderen Java-Anwendungen mitgenutzt.
 jdk_install.progress.cancel_button_during_download = Installieren
 
 jdk_install.failure.title = Fehler bei der Installation der Laufzeit
@@ -210,6 +212,7 @@ jdk_install.failure.subheading = Alle Download-Versuche sind erschöpft, wir ver
 jdk_install.failure.content =
 jdk_install.failure.info_heading = Was kann ich tun?
 jdk_install.failure.info_subtext = Prüfen Sie Ihre Netzwerkverbindung, oder laden Sie die Laufzeit manuell von adoptium.net herunter.
+jdk_install.failure.info_subtext_2 = Die Anwendung versucht zu starten, egal welches Java auf diesem Rechner bereits vorhanden ist.
 jdk_install.failure.button_label = OK
 
 jdk_install.retry.title = Download fehlgeschlagen — Erneut versuchen?
@@ -218,6 +221,7 @@ jdk_install.retry.subheading = Versuch {attempt} von {max_attempts} ist beim Dow
 jdk_install.retry.content = {error}
 jdk_install.retry.info_heading = Warum ist das passiert?
 jdk_install.retry.info_subtext = Eine häufige Ursache ist ein kurzzeitiger Netzausfall. Sie können es erneut versuchen oder abbrechen und es später noch einmal versuchen.
+jdk_install.retry.info_subtext_2 = Sie können die Laufzeit auch manuell von adoptium.net herunterladen.
 jdk_install.retry.button_retry = Erneut versuchen
 jdk_install.retry.button_cancel = Abbrechen
 
@@ -232,5 +236,6 @@ launcher.error.heading = Anwendung konnte nicht gestartet werden
 launcher.error.subheading = Beim Starten der eingebetteten Anwendung ist etwas schiefgelaufen.
 launcher.error.info_heading = Was ist passiert?
 launcher.error.info_subtext = Der Launcher hat die eingebettete Anwendung erreicht, sie konnte jedoch nicht gestartet werden. Ausführliche Details finden Sie in der Protokolldatei in Ihrem lokalen AppData-Ordner.
+launcher.error.info_subtext_2 = Ein erneuter Start der Anwendung wiederholt den Startversuch.
 launcher.error.button_label = Schließen
 launcher.error.update_check_label = Auf eine neuere Version prüfen:

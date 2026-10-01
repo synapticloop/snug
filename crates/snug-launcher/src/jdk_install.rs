@@ -1,4 +1,4 @@
-﻿//! "No JDK found" → download-and-install flow.
+//! "No JDK found" → download-and-install flow.
 //!
 //! 1. **`find_cached_jdk`** scans `%LOCALAPPDATA%\snug\jdk\` for a
 //!    previously-downloaded JDK whose `java -version` reports a major
@@ -1314,6 +1314,7 @@ pub fn show_retry_dialog(
                 error_content: content.as_str(),
                 info_heading: None,
                 info_subtext: None,
+                info_subtext_2: None,
                 primary_label: d.jdk_install.retry.button_retry.as_str(),
                 secondary_label: d.jdk_install.retry.button_cancel.as_str(),
                 mascot_hbitmap: 0,
@@ -1366,6 +1367,7 @@ pub fn show_metadata_failed_dialog(parent: HWND, min_java: u16, error_detail: &s
                 error_content: error_content.as_str(),
                 info_heading: None,
                 info_subtext: None,
+                info_subtext_2: None,
                 primary_label: d.jdk_install.metadata_failed.button_open_browser.as_str(),
                 secondary_label: d.jdk_install.metadata_failed.button_cancel.as_str(),
                 mascot_hbitmap: 0,
@@ -1402,6 +1404,7 @@ pub fn show_error_dialog(parent: HWND, title: &str, _main: &str, content: &str) 
                 info_icon: crate::error_window::InfoIcon::Error,
                 info_heading: None,
                 info_subtext: None,
+                info_subtext_2: None,
                 button_label: None,
                 mascot_hbitmap: 0,
                 update_check_url: None,
