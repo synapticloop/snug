@@ -61,7 +61,7 @@ use windows_sys::Win32::Foundation::SIZE;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, CreateCompatibleDC, CreateFontW, CreateRoundRectRgn, CreateSolidBrush, DeleteDC,
-    DeleteObject, DrawTextW, EndPaint, FillRect, FillRgn, GetTextExtentPoint32W,
+    DeleteObject, DrawTextW, DT_EDITCONTROL, DT_WORDBREAK, EndPaint, FillRect, FillRgn, GetTextExtentPoint32W,
     FW_BOLD, FW_NORMAL,
     FW_SEMIBOLD,
     GetStockObject, GetTextMetricsW, HBRUSH, HDC, HFONT, NULL_BRUSH, PAINTSTRUCT, SelectObject,
@@ -223,13 +223,38 @@ const BUTTON_Y: i32 = INFO_BOX_Y + INFO_BOX_H + BOTTOM_PAD;
 /// `ShellExecuteW(..., "open", url, ...)`.
 ///
 /// It shares the `BOTTOM_PAD` gap between the box and the buttons, so
-/// `LINK_H` is exactly that gap: this is the one dialog in the family
+/// under the mascot: this is the one dialog in the family
 /// with a link, the row is single-line, and the buttons are pinned to
 /// the window bottom, so the link has to fit the gap rather than
 /// claim a row of its own.
-const LINK_Y: i32 = INFO_BOX_Y + INFO_BOX_H;
-const LINK_H: i32 = BOTTOM_PAD;
+/// Optional "Check for a newer version" block, painted as **two
+/// stacked rows under the mascot**: the label, then the URL beneath it.
+/// The URL is opened via `ShellExecuteW(..., "open", url, ...)`.
+///
+/// Only the URL row is clickable; the label is plain text.
+///
+/// `LINK_URL_W` is the mascot's width, and it is a real constraint
+/// rather than a preference: the error-content control occupies
+/// `CONTENT_Y .. CONTENT_Y + CONTENT_H` (108..196) in the column to
+/// the right, and this block starts at y=170. Letting the URL run wider
+/// than the mascot would push it into that control, so it wraps inside
+/// the mascot column instead -- which also keeps it visually grouped
+/// under the artwork. The label sits on its own row at the content
+/// font; it measures ~165 px, which just fits the inter-column gap
+/// before `TEXT_X` (186), so it needs no clipping of its own.
 const LINK_TEXT_X: i32 = MARGIN;
+/// The label gets the full content width rather than the mascot
+/// column: at the content font "Check for a newer version:" measures
+/// ~180 px, so capping it at the mascot width (154 px) clipped it
+/// mid-word and capping it at the inter-column gap (170 px) clipped
+/// it too. The URL below it still wraps inside the mascot column --
+/// see `LINK_URL_W`.
+const LINK_LABEL_W: i32 = WINDOW_W - MARGIN * 2;
+const LINK_LABEL_Y: i32 = MASCOT_Y + MASCOT_H;
+const LINK_LABEL_H: i32 = INFO_SUBTEXT_H;
+const LINK_URL_Y: i32 = LINK_LABEL_Y + LINK_LABEL_H;
+const LINK_URL_H: i32 = INFO_SUBTEXT_H * 2;
+const LINK_URL_W: i32 = MASCOT_W;
 
 /// Width/height we ask for when loading the EXE icon for the mascot
 /// slot. Asking for 256 selects a detailed source for the 154 px
@@ -772,17 +797,22 @@ unsafe extern "system" fn wndproc(
 
                     let mut tm: TEXTMETRICW = std::mem::zeroed();
                     GetTextMetricsW(mem_dc, &mut tm);
-                    let url_h = tm.tmHeight;
+                    let _ = tm.tmHeight;
 
                     SelectObject(mem_dc, prev_label);
                     let _ = DeleteDC(mem_dc);
 
+                    // The clickable target is the URL row, clamped to
+                    // the width it actually paints in: it wraps inside
+                    // `LINK_URL_W`, so a single-line measurement can
+                    // overshoot and must not be trusted as-is.
                     (*state).link_url_rect = RECT {
-                        left: LINK_TEXT_X + label_w,
-                        top: LINK_Y,
-                        right: LINK_TEXT_X + label_w + url_w,
-                        bottom: LINK_Y + url_h,
+                        left: LINK_TEXT_X,
+                        top: LINK_URL_Y,
+                        right: LINK_TEXT_X + url_w.min(LINK_URL_W),
+                        bottom: LINK_URL_Y + LINK_URL_H,
                     };
+                    let _ = label_w;
                 }
             }
 
@@ -1120,41 +1150,48 @@ unsafe extern "system" fn wndproc(
             {
                 SetBkMode(hdc, TRANSPARENT as i32);
 
+                // Row 1: the label, on its own line under the mascot.
                 let label_str = wide(&label_text);
                 let prev_font = SelectObject(hdc, hfont_content as _);
                 SetTextColor(hdc, COLOR_SUBTITLE);
                 let mut label_rc = RECT {
                     left: LINK_TEXT_X,
-                    top: LINK_Y,
-                    right: url_rect.left,
-                    bottom: LINK_Y + LINK_H,
+                    top: LINK_LABEL_Y,
+                    right: LINK_TEXT_X + LINK_LABEL_W,
+                    bottom: LINK_LABEL_Y + LINK_LABEL_H,
                 };
-                let label_flags = DT_SINGLELINE | DT_NOPREFIX;
                 let _ = DrawTextW(
                     hdc,
                     label_str.as_ptr(),
                     -1,
                     &mut label_rc,
-                    label_flags,
+                    DT_SINGLELINE | DT_NOPREFIX,
                 );
 
+                // Row 2: the URL, beneath it. DT_WORDBREAK so a long
+                // URL wraps inside the mascot column instead of running
+                // into the error-content control to the right.
                 SelectObject(hdc, hfont_link_url as _);
                 SetTextColor(hdc, COLOR_LINK);
                 let url_str = wide(&url_text);
                 let mut url_paint_rc = RECT {
-                    left: url_rect.left,
-                    top: LINK_Y,
-                    right: url_rect.right,
-                    bottom: LINK_Y + LINK_H,
+                    left: LINK_TEXT_X,
+                    top: LINK_URL_Y,
+                    right: LINK_TEXT_X + LINK_URL_W,
+                    bottom: LINK_URL_Y + LINK_URL_H,
                 };
                 let _ = DrawTextW(
                     hdc,
                     url_str.as_ptr(),
                     -1,
                     &mut url_paint_rc,
-                    label_flags,
+                    // DT_EDITCONTROL is what makes the wrap happen: DT_WORDBREAK
+                    // on its own only breaks at existing word boundaries, and
+                    // a URL has none, so the text was clipped instead.
+                    DT_EDITCONTROL | DT_WORDBREAK | DT_NOPREFIX,
                 );
 
+                let _ = url_rect;
                 SelectObject(hdc, prev_font as _);
             }
 

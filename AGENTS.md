@@ -395,13 +395,22 @@ by accident.
     margin left and right. It used to be `MARGIN * 3`, leaving twice
     the left margin as whitespace on the right (16 in, 32 out) because
     the buttons once occupied that reserve.
-  - The optional "Check for a newer version" link row sits in the
-    `BOTTOM_PAD` gap between the box and the buttons, so `LINK_H` is
-    exactly that gap. Only `launcher.error` has one, so its
-    box-to-button spacing is visually tighter than the others. Its
-    hit-test rect is measured the same way as the buttons, and was
-    **zero-width** before: the same `DT_CALCRECT` bug meant neither
-    the label nor the URL measured, so the link was unclickable.
+  - The optional "Check for a newer version" link is **two stacked rows
+    under the mascot** — the label, then the URL beneath it — not a row
+    between the box and the buttons. Only `launcher.error` has one.
+    `LINK_URL_W` is the mascot's width, and that is a real constraint
+    rather than a preference: the error-content control occupies
+    `CONTENT_Y .. CONTENT_Y + CONTENT_H` (108..196) in the column to
+    the right, and the link block starts at y=170, so a full-width row
+    would run into it. The label is full-width anyway (it measures
+    ~180 px at the content font, and clipping it at either the mascot
+    width or the 170 px inter-column gap cut it mid-word). The URL
+    therefore **wraps inside the mascot column**, and wrapping needs
+    `DT_EDITCONTROL | DT_WORDBREAK` — `DT_WORDBREAK` on its own only
+    breaks at existing word boundaries, and a URL has none, so the
+    text was silently clipped instead. Its hit-test rect is measured
+    the same way as the buttons and was **zero-width** before the
+    `DT_CALCRECT` fix, which made the link unclickable.
 - Profile `release` is tuned for tiny binaries (`opt-level = "z"`, LTO,
   `panic = "abort"`, stripped). The launcher should be ~hundreds of KB
   not megabytes.
