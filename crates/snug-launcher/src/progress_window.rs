@@ -62,7 +62,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_SYSMENU, WS_VISIBLE, WS_OVERLAPPED, WS_EX_TOPMOST,
 };
 
-use crate::jdk_install::{find_best_icon_hicon, load_exe_main_icon_hicon, ProgressShared};
+use crate::jdk_install::{
+    find_best_icon_hicon, load_exe_main_icon_hicon, mascot_icon_override, ProgressShared,
+};
 use crate::log;
 
 // `SS_*` constants that windows-sys 0.59 doesn't export. Values come
@@ -399,7 +401,12 @@ unsafe extern "system" fn progress_wndproc(
             // (the progress bar repaints at the `WM_TIMER` rate —
             // ~5 Hz by default — and the icon never changes between
             // paints).
-            if let Some(hicon) = find_best_icon_hicon(MASCOT_LOAD_CX, MASCOT_LOAD_CY) {
+            // An explicit override (snug_preview --icon) wins over the
+            // EXE resource. A caller-pushed HBITMAP still wins over
+            // both -- WM_PAINT checks that field first.
+            if let Some(hicon) = mascot_icon_override()
+                .or_else(|| find_best_icon_hicon(MASCOT_LOAD_CX, MASCOT_LOAD_CY))
+            {
                 (*state).mascot_hicon = hicon;
             }
 

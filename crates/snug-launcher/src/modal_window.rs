@@ -76,7 +76,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_OVERLAPPED, WS_SYSMENU, WS_VISIBLE,
 };
 
-use crate::jdk_install::{find_best_icon_hicon, load_exe_main_icon_hicon};
+use crate::jdk_install::{find_best_icon_hicon, load_exe_main_icon_hicon, mascot_icon_override};
 use crate::log;
 
 // `SS_*` / `BS_DEFPUSHBUTTON` constants that windows-sys 0.59 doesn't
@@ -683,7 +683,13 @@ unsafe extern "system" fn wndproc(
             // spammed the log at ~20 Hz during the progress-bar
             // animation.
             if (*state).mascot_hbitmap == 0 {
-                if let Some(hicon) = find_best_icon_hicon(MASCOT_LOAD_CX, MASCOT_LOAD_CY) {
+                // An explicit override (snug_preview --icon) wins over
+                // the EXE resource; otherwise read the EXE icon. A
+                // caller-supplied HBITMAP still wins over both, which
+                // is the precedence the WM_PAINT branch implements.
+                if let Some(hicon) = mascot_icon_override()
+                    .or_else(|| find_best_icon_hicon(MASCOT_LOAD_CX, MASCOT_LOAD_CY))
+                {
                     (*state).mascot_hicon = hicon;
                 }
             }

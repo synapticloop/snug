@@ -332,6 +332,22 @@ by accident.
   (two 17 px item heights, less borders) the list showed only the
   selected tag with every other locale clipped away, which reads as
   "that bundle is missing" even though `CB_GETCOUNT` proved it loaded.
+  `--icon <FILE>` swaps the artwork every dialog shows — the large
+  mascot image *and* the title bar / Alt-Tab / taskbar — so a
+  candidate icon can be judged without relinking the committed
+  `bin/launcher-stub.exe`. Those two paths are genuinely separate (the
+  mascot falls back via `find_best_icon_hicon`, the title bar via
+  `load_exe_main_icon_hicon`), so `--icon` installs two process-wide
+  overrides in `jdk_install.rs` (`set_window_icon_override`,
+  `set_mascot_icon_override`) that both consult. The production
+  launcher never sets them, so they cost one relaxed atomic read and
+  are inert outside the dev tool. Decoding is two-tier and the split
+  is load-bearing: `LoadImageW` takes `.ico` but returns NULL for a
+  PNG from file despite being documented to support it since Vista
+  (verified against a real 1254x1254 PNG), so `.png` falls through to
+  a GDI+ blit into a 32-bpp top-down DIB. Neither route links the
+  `image` crate into the shipped binary, which would fight the size
+  budget to serve a dev-only tool.
 - Profile `release` is tuned for tiny binaries (`opt-level = "z"`, LTO,
   `panic = "abort"`, stripped). The launcher should be ~hundreds of KB
   not megabytes.

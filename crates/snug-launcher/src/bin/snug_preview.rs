@@ -25,6 +25,7 @@
 //!                                     previewable dialog
 //!       --localisation <FILE|DIR>     load localisations to pick from
 //!       --localization <FILE|DIR>     (alias; both spellings accepted)
+//!       --icon <FILE>                 swap the dialog icons for a test
 //! ```
 //!
 //! With no options it opens the launcher window. `--help` is handled
@@ -47,6 +48,19 @@
 //! Switching affects dialogs opened *afterwards*: a window already on
 //! screen captured its copy when it was built and keeps it.
 //!
+//! `--icon <FILE>` replaces the icon every dialog uses. Normally that
+//! artwork comes from the EXE's own `MAINICON` resource, which means
+//! changing it would mean relinking `bin/launcher-stub.exe` — a
+//! cross-compiled, committed binary, and much too slow a loop for
+//! "try this icon across all eight dialogs". `--icon` instead installs
+//! a process-wide override that the dialogs consult, covering both the
+//! large mascot image and the title bar / Alt-Tab / taskbar. It takes
+//! a `.png` or a `.ico`: `.ico` goes through `LoadImageW`, and a PNG
+//! needs a GDI+ fallback because -- verified, not assumed -- Windows'
+//! `LoadImageW` returns NULL for PNG from file despite documenting
+//! support since Vista. Neither route links a Rust image crate into the
+//! shipped launcher, so its size is untouched.
+//!
 //! Each dialog is **detached** from the launcher's lifecycle — they
 //! are top-level windows (no parent HWND) and run on their own
 //! thread, so closing the launcher (X button or "Close") does not
@@ -60,14 +74,20 @@
 #![cfg(windows)]
 
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::thread;
 use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{HMODULE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, CreateFontW, DT_LEFT, DT_SINGLELINE, DT_VCENTER, DrawTextW, EndPaint, HBRUSH, HFONT,
-    PAINTSTRUCT, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
+    BeginPaint, CreateFontW, DT_LEFT, DT_SINGLELINE, DT_VCENTER, DrawTextW, EndPaint, HBRUSH, HBITMAP,
+    HFONT, PAINTSTRUCT, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
+};
+use windows_sys::Win32::Graphics::GdiPlus::{
+    GdiplusShutdown, GdiplusStartup, GdiplusStartupInput, GdipCreateBitmapFromFile,
+    GdipCreateFromHDC, GdipCreateImageAttributes, GdipDeleteGraphics, GdipDisposeImage,
+    GdipDisposeImageAttributes, GdipDrawImageRectRectI, GdipGetImageHeight, GdipGetImageWidth,
+    GdipSetImageAttributesWrapMode, GpBitmap, GpGraphics, GpImage, GpImageAttributes, UnitPixel,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
@@ -77,7 +97,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     DrawIconEx, GetClientRect, GetDlgItem, GetMessageW, GetSystemMetrics, LoadCursorW, LoadImageW,
     MSG, PostThreadMessageW,
     RegisterClassExW, SendMessageW, SM_CXSCREEN, SM_CYSCREEN, TranslateMessage, BS_PUSHBUTTON,
-    DI_NORMAL, HICON, ICON_BIG, ICON_SMALL, IDC_ARROW, IMAGE_ICON, LR_SHARED, WM_CLOSE, WM_COMMAND,
+    DI_NORMAL, HICON, ICON_BIG, ICON_SMALL, IDC_ARROW, IMAGE_ICON, LR_DEFAULTSIZE,
+    LR_LOADFROMFILE, LR_SHARED, WM_CLOSE, WM_COMMAND,
     WM_CREATE, WM_DESTROY, WM_NCDESTROY, WM_PAINT, WM_QUIT, WM_SETICON, WNDCLASSEXW, WS_CAPTION,
     WS_CHILD, WS_EX_TOPMOST, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
@@ -198,6 +219,14 @@ const WM_SETFONT: u32 = 0x0030;
 fn load_exe_main_icons(
     hinst: windows_sys::Win32::Foundation::HMODULE,
 ) -> (HICON, HICON) {
+    // `--icon` wins for the launcher window too, so the window you're
+    // clicking and the dialogs it spawns show the same artwork. The
+    // override is already installed by the time we get here (main runs
+    // it before `CreateWindowExW`).
+    if let Some(hicon) = snug_launcher::jdk_install::window_icon_override() {
+        return (hicon, hicon);
+    }
+
     // RT_GROUP_ICON entries are conventionally named "MAINICON"
     // (Windows icon convention). editpe writes the group under the
     // *name* rather than under numeric ID 1, so the primary lookup
@@ -562,6 +591,335 @@ fn select_language(index: usize) {
 }
 
 // ============================================================================
+//  `--icon` override
+// ============================================================================
+
+/// Pixel size we request for the in-dialog **mascot** image. The
+/// mascot box is ~154 px, and the module's own `MASCOT_LOAD_CX` is 256
+/// for the same reason: asking for the larger source beats enlarging
+/// the 32 px title-bar icon. Matches the EXE-resource path so a
+/// `--icon` run and a normal run look the same size.
+const ICON_MASCOT_PX: i32 = 256;
+
+/// GDI+ returns `Status` 0 for success. windows-sys 0.59 does not
+/// export `GpStatusOk`, so it is spelled out once here.
+const GP_OK: i32 = 0;
+
+/// `GpWrapModeTileFlipXY` = 3, also not exported by windows-sys 0.59.
+/// Without it GDI+ wraps the source edges when scaling down and can
+/// bleed a dark border around the mascot; this mirrors them instead,
+/// which is what every icon scaler does.
+const GP_WRAP_TILE_FLIP_XY: i32 = 3;
+
+/// A GDI+ shutdown token, so the one startup covers both conversions
+/// (we build two HICONs: title-bar size and mascot size).
+///
+/// `GdiplusShutdown` takes the token **by value** while
+/// `GdiplusStartup` hands it back through an out-pointer, so it has to
+/// be an owned `usize` here -- unlike almost every other GDI+ handle.
+struct Gdiplus {
+    token: usize,
+}
+
+impl Drop for Gdiplus {
+    fn drop(&mut self) {
+        unsafe {
+            GdiplusShutdown(self.token);
+        }
+    }
+}
+
+fn gdiplus_start() -> Result<Gdiplus, String> {
+    let mut token: usize = 0;
+    let input = GdiplusStartupInput {
+        GdiplusVersion: 1,
+        DebugEventCallback: 0,
+        SuppressBackgroundThread: 0,
+        SuppressExternalCodecs: 0,
+    };
+    let status = unsafe { GdiplusStartup(&mut token, &input, std::ptr::null_mut()) };
+    if status != GP_OK {
+        return Err(format!(
+            "--icon: GdiplusStartup failed with status {status}; GDI+ is unavailable"
+        ));
+    }
+    Ok(Gdiplus { token })
+}
+
+/// Render `path` into a `px`x`px` 32-bpp `HICON` via GDI+.
+///
+/// This is the PNG path. `LoadImageW` is documented to decode PNG from
+/// file since Vista, but does not actually do so here: a 1254x1254
+/// PNG returns NULL on every flag combination (verified directly),
+/// while the identical call on a `.ico` succeeds. GDI+ has a real PNG
+/// codec, so it is the only way to accept a PNG without linking a Rust
+/// image crate into the shipped launcher -- which would fight the
+/// "hundreds of KB, not megabytes" budget to serve a dev-only tool.
+///
+/// The standard GDI+ -> HICON recipe: decode to a `GpBitmap`, blit it
+/// into a 32-bpp top-down DIB section so the alpha survives, then hand
+/// that DIB plus a 1-bpp mask to `CreateIconIndirect`. A 32-bpp
+/// `hbmColor` means Windows uses per-pixel alpha and ignores the mask,
+/// so the mask only has to be a valid, non-null bitmap.
+///
+/// `CreateIconIndirect` does **not** copy the bitmaps, so both handles
+/// are parked in a static for the process lifetime alongside the icon.
+fn hicon_from_image_via_gdiplus(path: &std::path::Path, px: i32) -> Result<HICON, String> {
+    use windows_sys::Win32::Graphics::Gdi::{
+        CreateBitmap, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC,
+        ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{CreateIconIndirect, ICONINFO};
+
+    let src_w = wide(&path.to_string_lossy());
+    let mut src: *mut GpBitmap = std::ptr::null_mut();
+
+    unsafe {
+        let status = GdipCreateBitmapFromFile(src_w.as_ptr(), &mut src);
+        if status != GP_OK || src.is_null() {
+            return Err(format!(
+                "--icon: GDI+ could not decode `{}` (status {status}); expected a PNG or ICO",
+                path.display()
+            ));
+        }
+        let image: *mut GpImage = src.cast();
+
+        let mut iw: u32 = 0;
+        let mut ih: u32 = 0;
+        GdipGetImageWidth(image, &mut iw);
+        GdipGetImageHeight(image, &mut ih);
+        if iw == 0 || ih == 0 {
+            GdipDisposeImage(image);
+            return Err(format!(
+                "--icon: `{}` decoded to a zero-sized image",
+                path.display()
+            ));
+        }
+
+        // 32-bpp top-down DIB section, so we own the pixels and can
+        // clear them to fully transparent before drawing.
+        let screen = GetDC(std::ptr::null_mut());
+        let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
+        let mut bi = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: px,
+                // Negative height => top-down rows, the orientation the
+                // alpha path expects.
+                biHeight: -px,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB,
+                biSizeImage: 0,
+                biXPelsPerMeter: 0,
+                biYPelsPerMeter: 0,
+                biClrUsed: 0,
+                biClrImportant: 0,
+            },
+            bmiColors: [windows_sys::Win32::Graphics::Gdi::RGBQUAD {
+                rgbBlue: 0,
+                rgbGreen: 0,
+                rgbRed: 0,
+                rgbReserved: 0,
+            }],
+        };
+        let color = CreateDIBSection(
+            screen,
+            &mut bi,
+            DIB_RGB_COLORS,
+            &mut bits,
+            std::ptr::null_mut(),
+            0,
+        );
+        ReleaseDC(std::ptr::null_mut(), screen);
+        if color.is_null() || bits.is_null() {
+            GdipDisposeImage(image);
+            return Err("--icon: CreateDIBSection failed".to_string());
+        }
+        // Transparent everywhere before the image lands.
+        std::ptr::write_bytes(bits, 0, (px as usize) * (px as usize) * 4);
+
+        let mask = CreateBitmap(px, px, 1, 1, std::ptr::null_mut());
+        if mask.is_null() {
+            DeleteObject(color);
+            GdipDisposeImage(image);
+            return Err("--icon: CreateBitmap failed for the icon mask".to_string());
+        }
+
+        let dc = CreateCompatibleDC(std::ptr::null_mut());
+        if dc.is_null() {
+            DeleteObject(color);
+            DeleteObject(mask);
+            GdipDisposeImage(image);
+            return Err("--icon: CreateCompatibleDC failed".to_string());
+        }
+        let prev = SelectObject(dc, color);
+
+        let mut graphics: *mut GpGraphics = std::ptr::null_mut();
+        let mut attrs: *mut GpImageAttributes = std::ptr::null_mut();
+        GdipCreateImageAttributes(&mut attrs);
+        GdipSetImageAttributesWrapMode(attrs, GP_WRAP_TILE_FLIP_XY, 0, 0);
+
+        if GdipCreateFromHDC(dc, &mut graphics) == GP_OK {
+            // Bicubic downscale from the source's own size into the
+            // target rect, so a 1254 px PNG lands crisp in a 256 px
+            // mascot box rather than being cropped.
+            GdipDrawImageRectRectI(
+                graphics,
+                image,
+                0,
+                0,
+                px,
+                px,
+                0,
+                0,
+                iw as i32,
+                ih as i32,
+                UnitPixel,
+                attrs,
+                0,
+                std::ptr::null_mut(),
+            );
+            GdipDeleteGraphics(graphics);
+        }
+        if !attrs.is_null() {
+            GdipDisposeImageAttributes(attrs);
+        }
+        GdipDisposeImage(image);
+
+        SelectObject(dc, prev);
+        DeleteDC(dc);
+
+        let ii = ICONINFO {
+            fIcon: 1,
+            xHotspot: 0,
+            yHotspot: 0,
+            hbmMask: mask,
+            hbmColor: color,
+        };
+        let hicon = CreateIconIndirect(&ii);
+        if hicon.is_null() {
+            DeleteObject(color);
+            DeleteObject(mask);
+            return Err(format!(
+                "--icon: CreateIconIndirect failed for `{}` at {px} px",
+                path.display()
+            ));
+        }
+        keep_icon_bitmaps(color, mask);
+        Ok(hicon)
+    }
+}
+
+/// Park the source bitmaps behind an `HICON` for the process lifetime:
+/// `CreateIconIndirect` does not copy them, and a dialog thread can
+/// still be painting the mascot long after the loading window is gone.
+fn keep_icon_bitmaps(color: HBITMAP, mask: HBITMAP) {
+    BITMAP_OWNERS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push((color as usize, mask as usize));
+}
+
+static BITMAP_OWNERS: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
+
+/// Load `path` and install it as the process-wide icon override for
+/// every dialog this preview opens.
+///
+/// Two decoders, tried in order, so the flag accepts what a user
+/// actually has to hand:
+///
+/// 1. `LoadImageW(..., LR_LOADFROMFILE)` -- cheap, and the only thing
+///    that handles `.ico`.
+/// 2. GDI+ -- the only way to get a PNG, because Windows'
+///    `LoadImageW` does not decode PNG from file on this platform
+///    despite being documented to.
+///
+/// The `image` crate stays a build-only dependency either way, so the
+/// shipped launcher's size is untouched.
+///
+/// Two sizes are built and kept separately, because the two slots want
+/// different ones: the mascot box is ~154 px, the title bar wants the
+/// system small-icon size. Building once per size avoids both a blurry
+/// 32 px stretch in the mascot and a 256 px downscale in the title bar.
+///
+/// All handles are parked in statics and never destroyed -- the dialogs
+/// are top-level windows on detached threads that can outlive `main`,
+/// so the process is the only viable owner.
+fn install_icon_override(path: &std::path::Path) -> Result<(), String> {
+    if !path.is_file() {
+        return Err(format!("--icon: `{}` is not a file", path.display()));
+    }
+    let display = path.display().to_string();
+    let src = wide(&path.to_string_lossy());
+
+    unsafe {
+        // LR_DEFAULTSIZE takes the system small-icon metrics, which is
+        // exactly what a title bar / taskbar wants at any DPI.
+        let title = LoadImageW(
+            std::ptr::null_mut(),
+            src.as_ptr(),
+            IMAGE_ICON,
+            0,
+            0,
+            LR_DEFAULTSIZE | LR_LOADFROMFILE,
+        );
+        if !title.is_null() {
+            let mascot = LoadImageW(
+                std::ptr::null_mut(),
+                src.as_ptr(),
+                IMAGE_ICON,
+                ICON_MASCOT_PX,
+                ICON_MASCOT_PX,
+                LR_LOADFROMFILE,
+            );
+            if mascot.is_null() {
+                return Err(format!(
+                    "--icon: `{display}` is a .ico, but it has no {ICON_MASCOT_PX} px \
+                     entry for the mascot box; re-save it with a {ICON_MASCOT_PX} px image"
+                ));
+            }
+            activate_icon_override(title, mascot, &format!("{display} (via LoadImageW)"));
+            return Ok(());
+        }
+    }
+
+    // Anything LoadImageW would not take -- in practice, a PNG.
+    let _gdi = gdiplus_start()?;
+    let title_px = unsafe {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXICON};
+        GetSystemMetrics(SM_CXICON)
+    };
+    let title = hicon_from_image_via_gdiplus(path, title_px)?;
+    let mascot = hicon_from_image_via_gdiplus(path, ICON_MASCOT_PX)?;
+    activate_icon_override(
+        title,
+        mascot,
+        &format!("{display} (via GDI+, title bar {title_px} px)"),
+    );
+    Ok(())
+}
+
+/// Park the two icons and point the launcher and its dialogs at them.
+fn activate_icon_override(title: HICON, mascot: HICON, what: &str) {
+    TITLE_ICON.store(title as usize, Ordering::SeqCst);
+    MASCOT_ICON.store(mascot as usize, Ordering::SeqCst);
+    snug_launcher::jdk_install::set_window_icon_override(title as isize);
+    snug_launcher::jdk_install::set_mascot_icon_override(mascot as isize);
+    log(&format!(
+        "preview icon: override installed from {what} (mascot slot {ICON_MASCOT_PX} px)"
+    ));
+}
+
+/// Process-lifetime homes for the two `HICON`s. `HICON` is a raw
+/// pointer, which is neither `Send` nor storable in a `OnceLock` we
+/// could later read back by value, so the bit pattern is kept as a
+/// `usize` and cast on read — the same trick `header_icon` uses. The
+/// load still happens exactly once, in [`install_icon_override`].
+static TITLE_ICON: AtomicUsize = AtomicUsize::new(0);
+static MASCOT_ICON: AtomicUsize = AtomicUsize::new(0);
+
+// ============================================================================
 //  Command line
 // ============================================================================
 //
@@ -581,7 +939,10 @@ fn select_language(index: usize) {
 #[derive(Debug, PartialEq, Eq)]
 enum Cli {
     /// Pop the launcher window and wait for its message loop.
-    Run { localisations: Vec<std::path::PathBuf> },
+    Run {
+        localisations: Vec<std::path::PathBuf>,
+        icon: Option<std::path::PathBuf>,
+    },
     /// Print [`help_text`] on stdout and exit 0.
     ShowHelp,
     /// Unrecognised input: report it, print usage on stderr, exit 2.
@@ -602,6 +963,7 @@ where
     S: AsRef<str>,
 {
     let mut localisations: Vec<std::path::PathBuf> = Vec::new();
+    let mut icon: Option<std::path::PathBuf> = None;
     let mut it = args.into_iter().peekable();
     while let Some(arg) = it.next() {
         match arg.as_ref() {
@@ -620,6 +982,10 @@ where
                     }
                 }
             }
+            "--icon" => match it.next() {
+                Some(value) => icon = Some(std::path::PathBuf::from(value.as_ref())),
+                None => return Cli::Error("--icon requires a <FILE> argument".to_string()),
+            },
             other => {
                 // A bare value is as unexpected as a bad flag: every
                 // option that takes a value names it explicitly.
@@ -627,7 +993,7 @@ where
             }
         }
     }
-    Cli::Run { localisations }
+    Cli::Run { localisations, icon }
 }
 
 /// The `--help` body.
@@ -656,6 +1022,19 @@ fn help_text() -> String {
     out.push_str("            English baseline is always in the dropdown; supplying\n");
     out.push_str("            your own snug-localisations.en.txt replaces it, the\n");
     out.push_str("            same rule the build applies to a shipped launcher.\n\n");
+    out.push_str("        --icon <FILE>            Swap the dialog icons for a test. Overrides\n");
+    out.push_str("                                the EXE's MAINICON resource, which the\n");
+    out.push_str("                                dialogs read for both the mascot image\n");
+    out.push_str("                                and the title bar / taskbar.\n");
+    out.push_str("\n");
+    out.push_str("                                <FILE>  a .png or .ico. .ico goes through\n");
+    out.push_str("                                LoadImageW; a .png needs GDI+, because\n");
+    out.push_str("                                Windows' LoadImageW does not decode\n");
+    out.push_str("                                PNG from file despite being documented\n");
+    out.push_str("                                to. Either way no Rust image crate is\n");
+    out.push_str("                                linked into the launcher.\n");
+    out.push_str("\n");
+    out.push_str("                                Preview-only: this tool never ships.\n\n");
     out.push_str("DIALOGS:\n");
     for (label, _) in DIALOG_BUTTONS {
         out.push_str(&format!("    {label}\n"));
@@ -684,7 +1063,7 @@ fn main() {
     // Localisation loading is here too, for the same reason — a bad
     // path should fail loudly in the terminal, not behind a window
     // that swallows the message.
-    let requested = match parse_args(std::env::args().skip(1)) {
+    let (requested, icon) = match parse_args(std::env::args().skip(1)) {
         Cli::ShowHelp => {
             print!("{}", help_text());
             return;
@@ -694,8 +1073,22 @@ fn main() {
             eprintln!("Try 'snug_preview --help' for more information.");
             std::process::exit(2);
         }
-        Cli::Run { localisations } => localisations,
+        Cli::Run {
+            localisations,
+            icon,
+        } => (localisations, icon),
     };
+
+    // Icon override first: it must be in place before any window is
+    // created, because `register_class` and `CreateWindowExW` both read
+    // it. Errors exit here, in the terminal, rather than behind a
+    // window that would swallow the message.
+    if let Some(path) = &icon {
+        if let Err(msg) = install_icon_override(path) {
+            eprintln!("snug_preview: {msg}");
+            std::process::exit(2);
+        }
+    }
 
     // Seed the registry before the window exists, so `WM_CREATE` can
     // populate the dropdown from a fully-built list. With no
@@ -1328,7 +1721,7 @@ mod tests {
 
     fn run(args: &[&str]) -> Vec<String> {
         match parse(args) {
-            Cli::Run { localisations } => localisations
+            Cli::Run { localisations, .. } => localisations
                 .iter()
                 .map(|p| p.display().to_string())
                 .collect(),
@@ -1336,9 +1729,22 @@ mod tests {
         }
     }
 
+    fn icon_of(args: &[&str]) -> Option<String> {
+        match parse(args) {
+            Cli::Run { icon, .. } => icon.map(|p| p.display().to_string()),
+            other => panic!("expected Run, got {other:?}"),
+        }
+    }
+
     #[test]
     fn no_args_runs_the_launcher_window() {
-        assert_eq!(parse(&[]), Cli::Run { localisations: vec![] });
+        assert_eq!(
+            parse(&[]),
+            Cli::Run {
+                localisations: vec![],
+                icon: None
+            }
+        );
     }
 
     #[test]
@@ -1465,6 +1871,123 @@ mod tests {
         let h = help_text();
         assert!(h.contains("--localisation <FILE|DIR>"), "{h}");
         assert!(h.contains("--localization <FILE|DIR>"), "{h}");
+    }
+
+    // ------------------------------------------------------------------
+    // --icon
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn no_icon_by_default() {
+        assert_eq!(icon_of(&[]), None);
+    }
+
+    #[test]
+    fn an_icon_path_is_captured() {
+        assert_eq!(
+            icon_of(&["--icon", r"C:\tmp\acme.ico"]),
+            Some(r"C:\tmp\acme.ico".to_string())
+        );
+    }
+
+    #[test]
+    fn an_icon_combines_with_localisation() {
+        // The two flags are independent: a localisation sweep with a
+        // candidate icon is the whole point of the flag.
+        assert_eq!(
+            parse(&[
+                "--localisation",
+                r"C:\l",
+                "--icon",
+                r"C:\i.png",
+                "--localisation",
+                r"C:\l2"
+            ]),
+            Cli::Run {
+                localisations: vec![
+                    std::path::PathBuf::from(r"C:\l"),
+                    std::path::PathBuf::from(r"C:\l2")
+                ],
+                icon: Some(std::path::PathBuf::from(r"C:\i.png")),
+            }
+        );
+    }
+
+    #[test]
+    fn the_last_icon_wins() {
+        // A single `icon` field, not a repeatable list: there is only
+        // one window-class icon and one mascot slot to fill.
+        assert_eq!(
+            icon_of(&["--icon", "a.ico", "--icon", "b.png"]),
+            Some("b.png".to_string())
+        );
+    }
+
+    #[test]
+    fn an_icon_without_a_value_is_an_error() {
+        assert_eq!(
+            parse(&["--icon"]),
+            Cli::Error("--icon requires a <FILE> argument".to_string())
+        );
+    }
+
+    #[test]
+    fn a_missing_icon_file_is_a_terminal_error_not_a_silent_fallback() {
+        // The whole tool is a test harness: quietly showing the Snug
+        // jar because a path was mistyped is exactly the failure this
+        // must not produce.
+        let err = install_icon_override(std::path::Path::new(r"C:\nope\missing.ico"))
+            .expect_err("missing icon");
+        assert!(err.starts_with("--icon:"), "{err}");
+    }
+
+    /// The canonical 68-byte 1x1 transparent PNG. Hand-inlined
+    /// because this bin's tests cannot reach the `image` crate (it is
+    /// a build-dependency, and dev-dependencies do not link into a
+    /// normal `[[bin]]` target), and hardcoding the bytes is cheaper
+    /// than depending on repo layout to find a fixture.
+    const ONE_PIXEL_PNG: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // signature
+        0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, // 1x1
+        0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, // 8bpp RGBA + crc
+        0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, // IDAT
+        0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, // zlib
+        0x0D, 0x0A, 0x2D, 0xB4, // crc
+        0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, // IEND
+        0xAE, 0x42, 0x60, 0x82, // crc
+    ];
+
+    #[test]
+    fn a_png_is_accepted_via_the_gdiplus_fallback() {
+        // The important one: LoadImageW does NOT decode PNG from file
+        // (verified -- it returns NULL on every flag combination), so
+        // without the GDI+ fallback --icon would be useless for the
+        // PNG a user is most likely to have.
+        let dir = tmpdir();
+        let png = dir.join("candidate.png");
+        std::fs::write(&png, ONE_PIXEL_PNG).unwrap();
+
+        install_icon_override(&png).expect("a real PNG must load");
+    }
+
+    #[test]
+    fn a_file_that_is_neither_png_nor_ico_is_rejected() {
+        // Both decoders must be tried before giving up, and the error
+        // has to name `--icon` so it is obvious which flag failed.
+        let dir = tmpdir();
+        let junk = dir.join("not-an-image.png");
+        std::fs::write(&junk, b"this is not an image at all").unwrap();
+
+        let err = install_icon_override(&junk).expect_err("junk must not load");
+        assert!(err.starts_with("--icon:"), "{err}");
+    }
+
+    #[test]
+    fn help_text_documents_the_icon_flag() {
+        let h = help_text();
+        assert!(h.contains("--icon <FILE>"), "{h}");
+        assert!(h.contains(".png") && h.contains(".ico"), "both formats: {h}");
     }
 
     // ------------------------------------------------------------------
