@@ -1,0 +1,35 @@
+[package]
+name = "snug-dropper"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Beginner front-end for snug — drop a JAR (or a folder of JARs) onto it to produce a Windows .exe."
+
+[lib]
+name = "snug_dropper"
+path = "src/lib.rs"
+
+# The shipped artefact is renamed to `Build with Snug.exe` at packaging
+# time (see AGENTS.md, slice 9). The target keeps a legal, cargo-friendly
+# name so `cargo build` / `cargo run` keep working without quoting.
+[[bin]]
+name = "snug-dropper"
+path = "src/main.rs"
+
+# No runtime dependencies at all.
+#
+# This crate never links the builder, the launcher, or `clap`: it shells
+# out to `snug.exe` and talks to Win32 directly. The only dependency is
+# the raw FFI surface for the dialogs. Release binary is ~240 KB, which
+# is the floor for a statically-linked, `opt-level = "z"` GUI-subsystem
+# Win32 binary rather than anything this code contributes.
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }
+# Only for `stamp_dropper_icon`, the post-build helper that stamps
+# `assets/snug-dropper.png` into the built EXE. The main binary never
+# links it — the `dropper` target has no `editpe` code path at runtime.
+editpe = { workspace = true }
