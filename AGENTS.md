@@ -503,6 +503,26 @@ by accident.
     one — a 5% difference that is resampling noise, not dead weight.
     1024 px is the better source regardless, since the 16/24/32 px
     entries downscale from real detail instead of being upscaled.
+  - **`--package` is what emits the shipped name, and it must land
+    beside `snug.exe`.** `stamp_dropper_icon --package [DIR]` stamps the
+    icon and copies the binary to `DIR\Build with Snug.exe`, defaulting
+    to the exe's own folder. That placement is load-bearing rather than
+    tidy: the dropper resolves `snug.exe` relative to its *own* location
+    at runtime, so separating the two turns every build into a "snug.exe
+    could not be found" dialog. `build-release.cmd` step 7 runs it and
+    is a first-class step with its own `--SkipDropper` flag — unlike
+    `snug_preview`, this is a shipped artefact, not a dev tool, so it is
+    not folded behind `--SkipDevTools`.
+  - **Both stamp helpers resolve their default profile from
+    `cfg!(debug_assertions)`, never from `PROFILE`.** `PROFILE` is
+    documented as "set by cargo when building" and is a *build-script*
+    variable; cargo does not forward it into the `cargo run` child
+    environment. Reading it with an `"debug"` fallback made
+    `cargo run --release --bin stamp_*_icon` stamp the **debug** exe,
+    exit 0, and leave the release one untouched. `build-release.cmd`
+    passes explicit paths, so the release pipeline never relied on the
+    default; only the zero-argument path a developer uses while
+    iterating on an icon was broken.
 - **A drag-and-drop needs no drag-drop API.** Windows launches the target
   EXE with the dropped paths appended to its command line, so
   `argv[1..]` *is* the drop and "double-clicked" is the empty case. That

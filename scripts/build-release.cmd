@@ -24,6 +24,11 @@ REM      the production snug-icon.png that compile_for_everything links into
 REM      every dev-time bin). See crates/snug-launcher/src/bin\stamp_preview_icon.rs
 REM      for why this needs to be a separate post-link step rather than a
 REM      build.rs trick.
+REM   7. (cargo | cargo zig)build --release -p snug-dropper --bin stamp_dropper_icon
+REM      Then stamp assets\snug-dropper.png into snug-dropper.exe and emit
+REM      target\...\Build with Snug.exe beside snug.exe. Unlike step 6 this
+REM      is a *shipped* artefact rather than a dev tool, so it gets its own
+REM      flag instead of hiding behind --SkipDevTools.
 REM
 REM Run from the repo root:
 REM     .\scripts\build-release.cmd
@@ -37,11 +42,15 @@ REM     --SkipDevTools          Skip step 6 (dev-only snug_preview /
 REM                             stamp_preview_icon build + icon stamp). Use
 REM                             this for CI release pipelines that don't ship
 REM                             dev artefacts to test machines.
+REM     --SkipDropper           Skip step 7 (the Build with Snug beginner
+REM                             shim). It is user-facing, so this is opt-out
+REM                             rather than implied by --SkipDevTools.
 REM     --CrossCompile          Cross-compile to x86_64-pc-windows-gnu via
 REM                             cargo-zigbuild (for non-Windows dev hosts).
 REM                             Requires zig, cargo-zigbuild on PATH and the
 REM                             x86_64-pc-windows-gnu rust target installed.
-REM     --Clean                 cargo clean -p snug-launcher -p snug-cli first.
+REM     --Clean                 cargo clean -p snug-launcher -p snug-cli
+REM                             -p snug-dropper first.
 REM ===========================================================================
 
 setlocal EnableExtensions EnableDelayedExpansion
@@ -77,6 +86,7 @@ set "SKIP_LAUNCHER_REBUILD=0"
 set "SKIP_PACKAGE=0"
 set "SKIP_VERIFY=0"
 set "SKIP_DEV_TOOLS=0"
+set "SKIP_DROPPER=0"
 set "CROSS_COMPILE=0"
 set "CLEAN=0"
 
@@ -86,6 +96,7 @@ if /i "%~1"=="--SkipLauncherRebuild" set "SKIP_LAUNCHER_REBUILD=1"
 if /i "%~1"=="--SkipPackage"         set "SKIP_PACKAGE=1"
 if /i "%~1"=="--SkipVerify"          set "SKIP_VERIFY=1"
 if /i "%~1"=="--SkipDevTools"        set "SKIP_DEV_TOOLS=1"
+if /i "%~1"=="--SkipDropper"         set "SKIP_DROPPER=1"
 if /i "%~1"=="--CrossCompile"        set "CROSS_COMPILE=1"
 if /i "%~1"=="--Clean"               set "CLEAN=1"
 shift
@@ -102,6 +113,8 @@ set "DEMO_JAR=assets\snug-javafx-demo.jar"
 set "DEMO_EXE=assets\snug-javafx-demo.exe"
 set "PREVIEW_PNG=assets\snug-preview.png"
 set "SNUG_CLI_PNG=assets\snug-runner.png"
+set "DROPPER_PNG=assets\snug-dropper.png"
+set "DROPPER_SHIPPED=Build with Snug.exe"
 
 if "!CROSS_COMPILE!"=="1" (
     set "TARGET_TRIPLE=x86_64-pc-windows-gnu"
@@ -112,6 +125,9 @@ if "!CROSS_COMPILE!"=="1" (
     set "BUILD_LAUNCHER_CMD=cargo zigbuild --target !TARGET_TRIPLE! --release -p snug-launcher"
     set "BUILD_CLI_CMD=cargo zigbuild --target !TARGET_TRIPLE! --release -p snug-cli"
     set "BUILD_DEV_TOOLS_CMD=cargo zigbuild --target !TARGET_TRIPLE! --release -p snug-launcher --bin snug_preview --bin stamp_preview_icon"
+    set "BUILT_DROPPER_EXE=target\!TARGET_TRIPLE!\release\snug-dropper.exe"
+    set "BUILT_DROPPER_STAMP_EXE=target\!TARGET_TRIPLE!\release\stamp_dropper_icon.exe"
+    set "BUILD_DROPPER_CMD=cargo zigbuild --target !TARGET_TRIPLE! --release -p snug-dropper --bin stamp_dropper_icon"
     where cargo-zigbuild >nul 2>nul
     if errorlevel 1 (
         echo [build-release] --CrossCompile requires cargo-zigbuild on PATH. Install with:
@@ -127,6 +143,9 @@ if "!CROSS_COMPILE!"=="1" (
     set "BUILD_LAUNCHER_CMD=cargo build --release -p snug-launcher"
     set "BUILD_CLI_CMD=cargo build --release -p snug-cli"
     set "BUILD_DEV_TOOLS_CMD=cargo build --release -p snug-launcher --bin snug_preview --bin stamp_preview_icon"
+    set "BUILT_DROPPER_EXE=target\release\snug-dropper.exe"
+    set "BUILT_DROPPER_STAMP_EXE=target\release\stamp_dropper_icon.exe"
+    set "BUILD_DROPPER_CMD=cargo build --release -p snug-dropper --bin stamp_dropper_icon"
 )
 
 echo.
@@ -136,8 +155,8 @@ echo   cross-compile:  !CROSS_COMPILE!
 
 if "!CLEAN!"=="1" (
     echo.
-    echo ==^> cargo clean -p snug-launcher -p snug-cli
-    cargo clean -p snug-launcher -p snug-cli
+    echo ==^> cargo clean -p snug-launcher -p snug-cli -p snug-dropper
+    cargo clean -p snug-launcher -p snug-cli -p snug-dropper
     if errorlevel 1 (
         echo [build-release] cargo clean failed with exit code %errorlevel%
         exit /b %errorlevel%
@@ -318,6 +337,81 @@ echo ==^> Skipping dev-tools build + icon stamp ^(--SkipDevTools^)
 :after_dev_tools
 
 REM ---------------------------------------------------------------------------
+REM 7. Build the beginner dropper (Build with Snug.exe).
+REM
+REM    A shipped artefact, not a dev tool, so it is a first-class step with
+REM    its own --SkipDropper flag. The stamp helper has no build.rs of its own:
+REM    the icon is applied post-link, which is what lets the artwork change
+REM    without a Rust rebuild. See crates\snug-dropper\src\bin\stamp_dropper_icon.rs.
+REM
+REM    --package emits the shipped copy under its real display name, beside
+REM    snug.exe. That placement is load-bearing: the dropper resolves snug.exe
+REM    relative to its own location at runtime, so separating the two turns
+REM    every build into a "snug.exe could not be found" dialog.
+REM ---------------------------------------------------------------------------
+
+if "!SKIP_DROPPER!"=="1" goto skip_dropper
+
+echo.
+echo ==^> !BUILD_DROPPER_CMD!
+call !BUILD_DROPPER_CMD!
+if errorlevel 1 (
+    echo [build-release] dropper build failed with exit code %errorlevel%
+    exit /b %errorlevel%
+)
+if not exist "!BUILT_DROPPER_EXE!" (
+    echo [build-release] Expected dropper binary at !BUILT_DROPPER_EXE! but it was not produced.
+    exit /b 1
+)
+if not exist "!BUILT_DROPPER_STAMP_EXE!" (
+    echo [build-release] Expected dropper stamp helper at !BUILT_DROPPER_STAMP_EXE! but it was not produced.
+    exit /b 1
+)
+if not exist "!DROPPER_PNG!" (
+    echo [build-release] Dropper icon PNG not found at !DROPPER_PNG!.
+    exit /b 1
+)
+
+echo.
+echo ==^> !BUILT_DROPPER_STAMP_EXE! --package
+REM Explicit exe path: the helper's own profile default resolves to target\release,
+REM which is wrong under --CrossCompile. The --package dir defaults to the
+REM exe's own folder, which is where snug.exe already lives.
+"!BUILT_DROPPER_STAMP_EXE!" "!BUILT_DROPPER_EXE!" "!DROPPER_PNG!" --package
+if errorlevel 1 (
+    echo [build-release] dropper icon stamp / package failed with exit code %errorlevel%
+    exit /b %errorlevel%
+)
+
+REM --package defaults to the built exe's own folder, so derive the shipped
+REM path from that exe rather than assuming where snug.exe ended up.
+for %%I in ("!BUILT_DROPPER_EXE!") do set "DROPPER_DIR=%%~dpI"
+set "DROPPER_PACKAGED=!DROPPER_DIR!!DROPPER_SHIPPED!"
+if not exist "!DROPPER_PACKAGED!" (
+    echo [build-release] Expected !DROPPER_PACKAGED! but it was not produced.
+    exit /b 1
+)
+
+REM Co-location is a runtime invariant, not tidiness: the dropper resolves
+REM snug.exe relative to its own path, so a dropper shipped without it can
+REM only ever show "snug.exe could not be found".
+if not exist "!DROPPER_DIR!snug.exe" (
+    echo [build-release] ERROR: snug.exe is not in !DROPPER_DIR!
+    echo [build-release] !DROPPER_SHIPPED! resolves snug.exe relative to its own
+    echo [build-release] location and will fail on every machine. Pass the dropper
+    echo [build-release] stamp helper an explicit --package dir beside snug.exe.
+    exit /b 1
+)
+
+goto after_dropper
+
+:skip_dropper
+echo.
+echo ==^> Skipping Build with Snug build + package ^(--SkipDropper^)
+
+:after_dropper
+
+REM ---------------------------------------------------------------------------
 REM Summary.
 REM ---------------------------------------------------------------------------
 
@@ -329,5 +423,7 @@ for %%I in ("!STUB!")            do echo   Launcher stub:          !STUB!       
 for %%I in ("!BUILT_CLI_EXE!")   do echo   snug CLI:               !BUILT_CLI_EXE!   ^(%%~zI bytes^)
 for %%I in ("!DEMO_EXE!")        do echo   Demo EXE:               !DEMO_EXE!        ^(%%~zI bytes^)
 for %%I in ("!BUILT_PREVIEW_EXE!") do ( if exist "!BUILT_PREVIEW_EXE!" echo   snug_preview:           !BUILT_PREVIEW_EXE! ^(%%~zI bytes^) )
+for %%I in ("!BUILT_DROPPER_EXE!")     do ( if exist "!BUILT_DROPPER_EXE!" echo   Dropper built:          !BUILT_DROPPER_EXE! ^(%%~zI bytes^) )
+for %%I in ("!DROPPER_PACKAGED!")     do ( if exist "!DROPPER_PACKAGED!" echo   !DROPPER_SHIPPED!:  !DROPPER_PACKAGED! ^(%%~zI bytes^) )
 
 endlocal

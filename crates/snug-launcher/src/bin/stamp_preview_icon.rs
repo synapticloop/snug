@@ -14,11 +14,9 @@
 //! ```
 //!
 //! The defaults resolve to:
-//! - `<workspace>/target/<profile>/snug_preview.exe`
+//! - `<workspace>/target/<profile>/snug_preview.exe`, where `<profile>` is
+//!   the profile this helper was itself built with
 //! - `<workspace>/assets/snug-preview.png`
-//!
-//! where `<profile>` is read from `PROFILE` (cargo's standard env var
-//! when running `cargo run` / `cargo build`).
 //!
 //! Pass explicit paths as positional args to override:
 //!
@@ -54,8 +52,28 @@ fn main() {
 }
 
 fn default_exe_path() -> PathBuf {
-    let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
-    workspace_root().join("target").join(profile).join("snug_preview.exe")
+    // Derive the profile from this helper's *own* build rather than the
+    // `PROFILE` env var. `cfg!(debug_assertions)` is always the profile
+    // cargo just built this helper with, and it is the same profile as
+    // the binary sitting next to it. `PROFILE` is documented as "set by
+    // cargo when building" and is NOT forwarded into the `cargo run`
+    // child environment -- when it was absent, the old
+    // `unwrap_or("debug")` fallback made `cargo run --release --bin
+    // stamp_preview_icon` stamp the *debug* exe, report success, and
+    // leave the release one untouched.
+    //
+    // `build-release.cmd` step 6 passes explicit paths, so the release
+    // pipeline never relied on this; only the zero-argument convenience
+    // path was affected.
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+    workspace_root()
+        .join("target")
+        .join(profile)
+        .join("snug_preview.exe")
 }
 
 fn default_png_path() -> PathBuf {
