@@ -275,6 +275,19 @@ by accident.
     against it (untranslated but correct) rather than returning keys.
     Only a key in neither the chain nor the baseline returns the key
     string.
+  - **The bundle chain is replaceable, and cached copies are keyed by
+    `localize::generation()`.** `BUNDLES` is an `RwLock<Bundles>`, not
+    a `OnceLock` — `snug_preview`'s language dropdown calls
+    `localize::set_bundles` to swap the active chain at runtime. Every
+    consumer that caches resolved strings must therefore record the
+    generation it built from and rebuild when it moves, or a language
+    switch leaves stale copy on screen. `dialogs::dialogs()` does
+    this (`DIALOGS` holds `(generation, &'static Dialogs)`); it
+    `Box::leak`s a rebuild because the signature is `&'static Dialogs`
+    and keeping it spared ~16 call sites an owned-value refactor. The
+    leak is bounded by "language switches × one `Dialogs`", which only
+    the dev preview ever exercises. **`init` is a thin alias for
+    `set_bundles` and no longer first-call-wins.**
   - **Values are single-line.** A real newline is a literal `\n`; a
     literal `#` must be `\#`. The old TOML triple-quoted bodies
     (`jdk_install.prompt.content`, `.expanded`,
@@ -284,6 +297,25 @@ by accident.
   - `jdk_install.failure.content` is deliberately **empty**;
     `error_window` reads empty as "use the module default", and
     `failure_content_is_intentionally_empty` pins that.
+- **Bundle *file* discovery lives in `snug-format`, not the CLI.**
+  `discover_localization_files` / `tag_from_path` / `expected_filename`
+  moved there (with a `LocalizationLoadError` instead of `anyhow`) so
+  `snug-preview --localisation <dir>` resolves a path exactly the way
+  `snug --localization <dir>` does. `snug-cli` re-exports all three,
+  so its ~20 call sites are unchanged. Directory mode stays strict in
+  both: a `README.md` or `.bak` beside the bundles is an error, not a
+  skipped file. When moving this code, keep the error *wording* byte
+  for byte — `collect_directory_errors_on_empty_directory` asserts on
+  the exact "contains no `snug-localisations" substring.
+- **`snug_preview` is the translation playground.** `-h/--help` and
+  `--localisation` / `--localization` (aliases, both spellings
+  accepted) are parsed by a hand-rolled `parse_args` taking an
+  `IntoIterator`, so all its behaviour is unit-tested without
+  spawning a process. Its Language dropdown lists every bundle it
+  found with the built-in English baseline last, unless the user
+  supplied their own `en` — same replacement rule as a build. Its help
+  text and dialog list are generated from `DIALOG_BUTTONS` so neither
+  can drift.
 - Profile `release` is tuned for tiny binaries (`opt-level = "z"`, LTO,
   `panic = "abort"`, stripped). The launcher should be ~hundreds of KB
   not megabytes.

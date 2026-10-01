@@ -24,7 +24,7 @@
 //! applied to the value in Rust before substitution; placeholders are
 //! matched literally.
 
-use std::sync::OnceLock;
+use std::sync::RwLock;
 
 /// Top-level container. Field names mirror the key prefixes in the
 /// localization catalog one-for-one — `dialogs.jdk_install.prompt`
@@ -183,7 +183,15 @@ pub struct GenericDialogs {
     pub info_dialog_continue: String,
 }
 
-static DIALOGS: OnceLock<Dialogs> = OnceLock::new();
+/// The assembled copy plus the [`crate::localize::generation`] it was
+/// built from.
+///
+/// The generation is the invalidation key: when `localize::set_bundles`
+/// swaps the active language, every field in here is stale, so the
+/// cached entry is rebuilt. Without it the preview's language dropdown
+/// would switch the chain and every dialog would keep rendering the
+/// previous language.
+static DIALOGS: RwLock<Option<(u64, &'static Dialogs)>> = RwLock::new(None);
 
 /// Assemble and cache the dialog copy for the lifetime of the process.
 ///
@@ -207,9 +215,42 @@ static DIALOGS: OnceLock<Dialogs> = OnceLock::new();
 /// a cached `jdk_install.prompt.title` would be a permanently broken
 /// window, and a cached English string is merely untranslated.
 pub fn dialogs() -> &'static Dialogs {
-    DIALOGS.get_or_init(|| {
-        use crate::localize::lookup;
-        Dialogs {
+    let gen_id = crate::localize::generation();
+
+    // Fast path: generation unchanged, so the cached copy is current.
+    {
+        let guard = DIALOGS.read().unwrap_or_else(|e| e.into_inner());
+        if let Some((cached_gen, dialogs)) = *guard {
+            if cached_gen == gen_id {
+                return dialogs;
+            }
+        }
+    }
+
+    // Slow path: reassemble. Re-check under the write lock so two
+    // threads racing the first call don't both build.
+    let mut guard = DIALOGS.write().unwrap_or_else(|e| e.into_inner());
+    if let Some((cached_gen, dialogs)) = *guard {
+        if cached_gen == gen_id {
+            return dialogs;
+        }
+    }
+    // Leaked deliberately: the signature is `&'static Dialogs`, which
+    // keeps all ~16 call sites compiling untouched, and a rebuild only
+    // happens when the language actually changes. That bounds the leak
+    // to "number of language switches × one `Dialogs`" — a handful of
+    // kilobytes across a whole preview session. The alternative was
+    // changing every call site to take an owned `Dialogs` (or a guard
+    // type) to reclaim a few KB that only a dev tool ever leaks.
+    let built: &'static Dialogs = Box::leak(Box::new(assemble()));
+    *guard = Some((gen_id, built));
+    built
+}
+
+/// Build a `Dialogs` from the current bundle chain.
+fn assemble() -> Dialogs {
+    use crate::localize::lookup;
+    Dialogs {
             jdk_install: JdkInstallDialogs {
                 prompt: InstallPromptDialog {
                     title: lookup("jdk_install.prompt.title"),
@@ -291,7 +332,6 @@ pub fn dialogs() -> &'static Dialogs {
                 },
             },
         }
-    })
 }
 
 /// Substitute `{name}` placeholders in `template` with the

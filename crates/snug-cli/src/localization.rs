@@ -35,10 +35,11 @@
 //! the build still succeeds (the launcher falls back to the built-in
 //! English for any key the user's bundle doesn't define).
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 use snug_format::Localization;
+
 /// Canonical BCP 47 tag for the built-in English baseline bundle.
 ///
 /// The launcher includes this string at compile time, parses it at
@@ -61,9 +62,7 @@ pub use snug_format::DEFAULT_EN_TEXT;
 ///
 /// E.g. `"en"` → `"snug-localisations.en.txt"`,
 /// `"en-US"` → `"snug-localisations.en-US.txt"`.
-pub fn expected_filename(tag: &str) -> String {
-    format!("snug-localisations.{tag}.txt")
-}
+pub use snug_format::expected_filename;
 
 /// Extract the BCP 47 tag from a localization filename.
 ///
@@ -72,15 +71,7 @@ pub fn expected_filename(tag: &str) -> String {
 /// is the tag. `pt-BR.txt`, `zh-Hans.txt`, etc. all work. We accept
 /// `snug-localisations.en.txt` (tag = `en`) but reject
 /// `my-translations.txt` (no recognised prefix).
-pub fn tag_from_path(path: &Path) -> Option<String> {
-    let stem = path.file_name()?.to_str()?;
-    let after = stem.strip_prefix("snug-localisations.")?;
-    let tag = after.strip_suffix(".txt")?;
-    if tag.is_empty() {
-        return None;
-    }
-    Some(tag.to_string())
-}
+pub use snug_format::tag_from_path;
 
 /// clap value-parser for the `--localization` flag.
 ///
@@ -199,52 +190,14 @@ pub fn collect(user_paths: &[PathBuf]) -> Result<Vec<Localization>> {
 }
 
 /// Walk `user_paths`, expanding any directory entries into the sorted
-/// list of `snug-localisations.<tag>.txt` files directly inside. A
-/// directory containing zero matching files, or any non-matching file,
-/// is a build error — directory mode is opt-in and we want typos to be
-/// loud, not silently ignored.
+/// list of `snug-localisations.<tag>.txt` files directly inside.
+///
+/// The walking itself lives in `snug_format::discover_localization_files`
+/// so `snug-preview` resolves `--localisation` the same way this CLI
+/// resolves `--localization`; this wrapper only adds the `anyhow`
+/// context the build path wants.
 fn expand_user_paths(user_paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
-    let mut expanded: Vec<PathBuf> = Vec::with_capacity(user_paths.len());
-    for path in user_paths {
-        let meta = std::fs::metadata(path)
-            .with_context(|| format!("stat-ing localization entry {}", path.display()))?;
-        if meta.is_dir() {
-            let mut entries: Vec<PathBuf> = std::fs::read_dir(path)
-                .with_context(|| {
-                    format!("reading localization directory {}", path.display())
-                })?
-                .filter_map(|entry| entry.ok().map(|e| e.path()))
-                // Subdirectories are not descended into — top-level scan only.
-                .filter(|p| p.is_file())
-                .collect();
-            // Sort for determinism across platforms (read_dir order is OS-specific).
-            entries.sort();
-            if entries.is_empty() {
-                bail!(
-                    "localization directory `{}` contains no `snug-localisations.<tag>.txt` files \
-                     (top-level scan; subdirectories are not searched)",
-                    path.display()
-                );
-            }
-            // Every file in the directory must match the canonical pattern.
-            // A non-matching file is almost always a typo or a `.bak` left
-            // behind, so fail loudly rather than silently skipping.
-            for entry in &entries {
-                if tag_from_path(entry).is_none() {
-                    bail!(
-                        "localization directory `{}` contains non-matching file `{}` \
-                         (expected `snug-localisations.<tag>.txt`)",
-                        path.display(),
-                        entry.display()
-                    );
-                }
-            }
-            expanded.extend(entries);
-        } else {
-            expanded.push(path.clone());
-        }
-    }
-    Ok(expanded)
+    snug_format::discover_localization_files(user_paths).map_err(anyhow::Error::from)
 }
 
 /// Emit a stderr warning for every key in the built-in English
@@ -319,6 +272,9 @@ pub fn ensure_unique_tags(bundles: &[Localization]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // `Path` is only referenced by the tests now that `tag_from_path`
+    // itself lives in `snug-format`.
+    use std::path::Path;
 
     fn tmpdir() -> PathBuf {
         let base = std::env::temp_dir();

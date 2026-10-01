@@ -195,6 +195,124 @@ fn is_valid_key(key: &str) -> bool {
         })
 }
 
+// ===========================================================================
+//  Locating bundle files on disk
+// ===========================================================================
+//
+//  These live here rather than in the CLI so `snug-preview` can resolve
+//  the same paths when a user points it at a localisation directory.
+//  Both crates depend on `snug-format`; neither can see the other.
+
+use std::path::{Path, PathBuf};
+
+/// Build a `snug-localisations` filename from a locale tag.
+///
+/// E.g. `"en"` → `"snug-localisations.en.txt"`, `"en-US"` →
+/// `"snug-localisations.en-US.txt"`.
+pub fn expected_filename(tag: &str) -> String {
+    format!("snug-localisations.{tag}.txt")
+}
+
+/// Extract the BCP 47 tag from a localization filename.
+///
+/// The expected pattern is `snug-localisations.<tag>.txt`. We strip
+/// the `snug-localisations.` prefix and `.txt` suffix; whatever's left
+/// is the tag. `pt-BR.txt`, `zh-Hans.txt`, etc. all work. We accept
+/// `snug-localisations.en.txt` (tag = `en`) but reject
+/// `my-translations.txt` (no recognised prefix).
+pub fn tag_from_path(path: &Path) -> Option<String> {
+    let stem = path.file_name()?.to_str()?;
+    let after = stem.strip_prefix("snug-localisations.")?;
+    let tag = after.strip_suffix(".txt")?;
+    if tag.is_empty() {
+        return None;
+    }
+    Some(tag.to_string())
+}
+
+/// Errors from walking the paths a user pointed us at.
+#[derive(Debug, thiserror::Error)]
+pub enum LocalizationLoadError {
+    #[error("stat-ing localization entry `{path}`: {source}")]
+    Stat {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("reading localization directory `{path}`: {source}")]
+    ReadDir {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error(
+        "localization directory `{0}` contains no `snug-localisations.<tag>.txt` files \
+         (top-level scan; subdirectories are not searched)"
+    )]
+    EmptyDir(String),
+
+    #[error(
+        "localization directory `{dir}` contains non-matching file `{path}` \
+         (expected `snug-localisations.<tag>.txt`)"
+    )]
+    NonMatchingFile { dir: String, path: String },
+}
+
+/// Walk `entries`, expanding any directory into the sorted list of
+/// `snug-localisations.<tag>.txt` files directly inside it.
+///
+/// A directory containing zero matching files, or any non-matching
+/// file, is an error — directory mode is opt-in and a stray `.bak`
+/// next to the bundles is almost always a typo, so we fail loudly
+/// rather than silently ignoring it. Subdirectories are not descended
+/// into; this is a top-level scan.
+///
+/// The output is sorted per directory so callers get a deterministic
+/// order across platforms (`read_dir` order is OS-specific).
+pub fn discover_localization_files(
+    entries: &[PathBuf],
+) -> Result<Vec<PathBuf>, LocalizationLoadError> {
+    let mut expanded: Vec<PathBuf> = Vec::with_capacity(entries.len());
+    for path in entries {
+        let meta = std::fs::metadata(path).map_err(|source| {
+            LocalizationLoadError::Stat {
+                path: path.display().to_string(),
+                source,
+            }
+        })?;
+        if !meta.is_dir() {
+            expanded.push(path.clone());
+            continue;
+        }
+
+        let dir_display = path.display().to_string();
+        let mut found: Vec<PathBuf> = std::fs::read_dir(path)
+            .map_err(|source| LocalizationLoadError::ReadDir {
+                path: dir_display.clone(),
+                source,
+            })?
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|p| p.is_file())
+            .collect();
+        found.sort();
+        if found.is_empty() {
+            return Err(LocalizationLoadError::EmptyDir(dir_display));
+        }
+        for entry in &found {
+            if tag_from_path(entry).is_none() {
+                return Err(LocalizationLoadError::NonMatchingFile {
+                    dir: dir_display.clone(),
+                    path: entry.display().to_string(),
+                });
+            }
+        }
+        expanded.extend(found);
+    }
+    Ok(expanded)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
