@@ -17,6 +17,21 @@
 //! cargo build --bin snug_preview --release # target/release/snug_preview.exe
 //! ```
 //!
+//! Command line:
+//!
+//! ```text
+//! snug_preview [OPTIONS]
+//!   -h, --help    print the option list and every previewable dialog
+//! ```
+//!
+//! With no options it opens the launcher window. `--help` is handled
+//! before any Win32 setup, so it works on a headless CI runner and
+//! never opens a window that would then block. Unrecognised arguments
+//! print a one-line error plus the `--help` hint and exit 2 — nothing
+//! here read `argv` before, so there is no prior meaning for a stray
+//! argument to preserve, and silently launching the GUI after a
+//! mistyped flag is its own small time-waster.
+//!
 //! Each dialog is **detached** from the launcher's lifecycle — they
 //! are top-level windows (no parent HWND) and run on their own
 //! thread, so closing the launcher (X button or "Close") does not
@@ -317,10 +332,110 @@ const DIALOG_BUTTONS: &[(&str, usize)] = &[
 ];
 
 // ============================================================================
+//  Command line
+// ============================================================================
+//
+//  Deliberately hand-rolled rather than pulling in `clap`: this binary
+//  exists so the *launcher's* dialogs can be eyeballed without
+//  rebuilding anything, and a dev-only bin is the wrong place to add a
+//  dependency that would land in the launcher release profile's build
+//  graph. The parse surface is two flags, so a match statement is
+//  shorter than the struct `clap` would want.
+//
+//  Parsing is split from `main` and takes an `IntoIterator` so the
+//  behaviour is testable without spawning a process — which also means
+//  `--help` is verifiable in CI on a headless runner, where actually
+//  launching the Win32 message loop is not.
+
+/// What `snug_preview` should do with the arguments it was given.
+#[derive(Debug, PartialEq, Eq)]
+enum Cli {
+    /// Pop the launcher window and wait for its message loop.
+    Run,
+    /// Print [`help_text`] on stdout and exit 0.
+    ShowHelp,
+    /// Unrecognised input: report it, print usage on stderr, exit 2.
+    Error(String),
+}
+
+/// Parse the arguments after the executable name.
+///
+/// Unknown flags are an error rather than being ignored. Nothing here
+/// used to read `argv` at all, so there is no established meaning for a
+/// stray argument to preserve — and silently launching the GUI after
+/// someone mistypes `--helpp` is exactly the kind of thing that wastes
+/// an afternoon.
+fn parse_args<I, S>(args: I) -> Cli
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut it = args.into_iter().peekable();
+    while let Some(arg) = it.next() {
+        match arg.as_ref() {
+            "-h" | "--help" => return Cli::ShowHelp,
+            other => {
+                // A bare value is as unexpected as a bad flag: every
+                // option this binary has is a standalone switch.
+                return Cli::Error(format!("unrecognised argument: {other}"));
+            }
+        }
+    }
+    Cli::Run
+}
+
+/// The `--help` body.
+///
+/// The dialog list is generated from [`DIALOG_BUTTONS`] rather than
+/// written out, so adding a preview button and forgetting to document
+/// it is not a state this file can be in — the same reason
+/// [`launcher_client_height`] reads that list. The module docs note
+/// that `cargo run --example dialogs_preview -- --kind <KIND>` is the
+/// way to open exactly one dialog; these labels are the set that
+/// `KIND` accepts.
+fn help_text() -> String {
+    let mut out = String::new();
+    out.push_str("snug_preview — one-click dialog preview for the snug launcher\n\n");
+    out.push_str("USAGE:\n    snug_preview [OPTIONS]\n\n");
+    out.push_str("OPTIONS:\n");
+    out.push_str("    -h, --help    Print this help and exit.\n");
+    out.push_str("                  With no options, the launcher window opens with one\n");
+    out.push_str("                  button per dialog kind below.\n\n");
+    out.push_str("DIALOGS:\n");
+    for (label, _) in DIALOG_BUTTONS {
+        out.push_str(&format!("    {label}\n"));
+    }
+    out.push_str("\n");
+    out.push_str("NOTES:\n");
+    out.push_str("    Each dialog is detached — they are top-level windows, so\n");
+    out.push_str("    closing the launcher does not destroy them and you can open\n");
+    out.push_str("    several side by side. The process exits only when every\n");
+    out.push_str("    open window has been dismissed.\n\n");
+    out.push_str("    Open one dialog directly with:\n");
+    out.push_str("        cargo run --example dialogs_preview -- --kind <KIND>\n");
+    out
+}
+
+// ============================================================================
 //  Entry point
 // ============================================================================
 
 fn main() {
+    // Handled before any Win32 work: `--help` must work on a headless
+    // CI runner and must not open a window that then blocks forever.
+    match parse_args(std::env::args().skip(1)) {
+        Cli::ShowHelp => {
+            print!("{}", help_text());
+            return;
+        }
+        Cli::Error(msg) => {
+            eprintln!("snug_preview: {msg}");
+            eprintln!("Try 'snug_preview --help' for more information.");
+            std::process::exit(2);
+        }
+        Cli::Run => {}
+    }
+
     unsafe {
         // Capture the launcher main thread id up front so the
         // window-counter accounting can post `WM_QUIT` to *this*
@@ -814,5 +929,91 @@ unsafe fn create_button_font() -> HFONT {
             0, // DEFAULT_PITCH | FF_DONTCARE — both `0`
             face_w.as_ptr(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Cli {
+        parse_args(args.iter().copied())
+    }
+
+    #[test]
+    fn no_args_runs_the_launcher_window() {
+        assert_eq!(parse(&[]), Cli::Run);
+    }
+
+    #[test]
+    fn long_help_is_recognised() {
+        assert_eq!(parse(&["--help"]), Cli::ShowHelp);
+    }
+
+    #[test]
+    fn short_help_is_recognised() {
+        assert_eq!(parse(&["-h"]), Cli::ShowHelp);
+    }
+
+    #[test]
+    fn help_wins_over_a_later_bad_flag() {
+        // `snug_preview --help --typo` should still print help: the
+        // user got what they asked for, and a stray trailing arg
+        // shouldn't turn a help request into a usage error.
+        assert_eq!(parse(&["--help", "--typo"]), Cli::ShowHelp);
+        assert_eq!(parse(&["-h", "--typo"]), Cli::ShowHelp);
+    }
+
+    #[test]
+    fn unknown_flag_is_an_error() {
+        assert_eq!(
+            parse(&["--helpp"]),
+            Cli::Error("unrecognised argument: --helpp".to_string())
+        );
+    }
+
+    #[test]
+    fn bare_value_is_an_error() {
+        // Every option is a standalone switch; `snug_preview progress`
+        // is a mistake, not a request for the progress dialog.
+        assert_eq!(
+            parse(&["progress"]),
+            Cli::Error("unrecognised argument: progress".to_string())
+        );
+    }
+
+    #[test]
+    fn help_text_advertises_both_help_spellings() {
+        let h = help_text();
+        assert!(h.contains("-h, --help"), "missing the option line: {h}");
+        assert!(h.contains("USAGE:"));
+    }
+
+    #[test]
+    fn help_text_lists_every_dialog_button() {
+        // The whole point of generating the list from DIALOG_BUTTONS:
+        // a new preview button cannot ship undocumented.
+        let h = help_text();
+        for (label, _) in DIALOG_BUTTONS {
+            assert!(
+                h.contains(label),
+                "dialog `{label}` is missing from --help output"
+            );
+        }
+    }
+
+    #[test]
+    fn help_text_has_a_line_per_dialog() {
+        // Guards against the list being collapsed onto one line, which
+        // would still satisfy the `contains` check above.
+        let h = help_text();
+        let listed = DIALOG_BUTTONS
+            .iter()
+            .filter(|(label, _)| {
+                h.lines()
+                    .any(|line| line.trim_start().starts_with(label))
+            })
+            .count();
+        assert_eq!(listed, DIALOG_BUTTONS.len());
     }
 }
