@@ -52,7 +52,7 @@ use windows_sys::Win32::Graphics::Gdi::{
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyWindow, DispatchMessageW, DrawIconEx, DI_NORMAL, GetMessageW, HICON,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, DrawIconEx, DI_NORMAL, GetMessageW, HICON,
     GetSystemMetrics, KillTimer, LoadIconW, MSG, PostQuitMessage,
     RegisterClassExW, SendMessageW, SetTimer, SetWindowTextW, SetWindowLongPtrW,
     GetWindowLongPtrW, TranslateMessage, CW_USEDEFAULT, IDCANCEL, ICON_BIG, IDI_INFORMATION,
@@ -956,9 +956,17 @@ unsafe extern "system" fn progress_wndproc(
                 if !(*raw).hfont_info_subtext.is_null() {
                     DeleteObject((*raw).hfont_info_subtext as _);
                 }
-                if !(*raw).mascot_hicon.is_null() {
-                    DestroyIcon((*raw).mascot_hicon);
-                }
+                // `mascot_hicon` is deliberately NOT destroyed here.
+                // Neither of its two sources is owned by the window:
+                // `find_best_icon_hicon` hands back an `LR_SHARED`
+                // handle the system owns (DestroyIcon is documented as
+                // unnecessary and does nothing), and the
+                // `snug_preview --icon` override is a process-lifetime
+                // handle shared by every dialog. Calling DestroyIcon
+                // on the latter is a real use-after-free: the first
+                // dialog to close freed it and every later dialog
+                // failed with `DrawIconEx failed` on each repaint.
+                let _ = &(*raw).mascot_hicon;
                 let _ = Box::from_raw(raw);
             }
             0

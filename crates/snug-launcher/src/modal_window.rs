@@ -67,7 +67,7 @@ use windows_sys::Win32::Graphics::Gdi::{
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyWindow, DispatchMessageW, DrawIconEx, DI_NORMAL,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, DrawIconEx, DI_NORMAL,
     GetMessageW, GetSystemMetrics, GetWindowLongPtrW, HICON, IDCANCEL, IDI_ERROR,
     IDI_INFORMATION, IDI_WARNING, LoadCursorW, LoadIconW, MSG, PostQuitMessage,
     RegisterClassExW, SendMessageW, SetCursor, SetWindowLongPtrW, SM_CXSCREEN, SM_CYSCREEN,
@@ -1239,9 +1239,14 @@ unsafe extern "system" fn wndproc(
                 if !(*raw).hfont_link_url.is_null() {
                     DeleteObject((*raw).hfont_link_url as _);
                 }
-                if !(*raw).mascot_hicon.is_null() {
-                    DestroyIcon((*raw).mascot_hicon);
-                }
+                // `mascot_hicon` is deliberately NOT destroyed here --
+                // see the matching note in `progress_window`. Neither
+                // source is owned by the window: `find_best_icon_hicon`
+                // returns an `LR_SHARED` system handle, and the
+                // `snug_preview --icon` override is shared by every
+                // dialog for the process lifetime. Destroying it freed
+                // the icon for every dialog after the first.
+                let _ = &(*raw).mascot_hicon;
                 drop(Box::from_raw(raw));
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
