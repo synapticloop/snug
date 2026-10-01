@@ -52,10 +52,12 @@ use windows_sys::Win32::Graphics::Gdi::{
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, DrawIconEx, DI_NORMAL,
+    AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
+    DrawIconEx, DI_NORMAL,
     GetMessageW, HICON,
     GetSystemMetrics, KillTimer, LoadIconW, MSG, PostQuitMessage,
-    RegisterClassExW, SendMessageW, SetTimer, SetWindowTextW, SetWindowLongPtrW,
+    RegisterClassExW, SendMessageW, SetTimer, SetWindowPos, SetWindowTextW, SetWindowLongPtrW,
+    SWP_NOACTIVATE, SWP_NOZORDER,
     GetWindowLongPtrW, TranslateMessage, CW_USEDEFAULT, IDCANCEL, ICON_BIG, IDI_INFORMATION,
     ICON_SMALL, SM_CXSCREEN, SM_CYSCREEN, BS_DEFPUSHBUTTON,
     WM_COMMAND, WM_CREATE, WM_CLOSE, WM_NCDESTROY, WM_CTLCOLORSTATIC, WM_PAINT, WM_SETICON,
@@ -63,6 +65,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_SYSMENU, WS_VISIBLE, WS_OVERLAPPED, WS_EX_TOPMOST,
 };
 
+use crate::modal_window::measure_button_width;
 use crate::jdk_install::{
     find_best_icon_hicon, load_exe_main_icon_hicon, mascot_icon_override, ProgressShared,
 };
@@ -98,13 +101,12 @@ const TIMER_ID: usize = 1;
 const TIMER_MS: u32 = 200;
 
 const WINDOW_W: i32 = 640;
-/// Height of the client area, derived from the lowest element — the
-/// info box — plus a bottom margin, matching the rest of the family.
-/// `modal_window` has an extra optional link row below its box, so its
-/// derived height is 20 px larger; both grow together when
-/// `INFO_BOX_H` does. The progress / phase / detail rows above the box
-/// are unaffected, since the box is pinned to the canonical 220 px Y.
-const WINDOW_H: i32 = INFO_BOX_Y + INFO_BOX_H + 26;
+/// Uniform padding below the content stack, used **twice**: between the
+/// info box and the button row, and between the button row and the
+/// bottom of the window. That is what makes the two gaps provably
+/// equal. See `modal_window` for the full derivation -- the whole
+/// family shares one height, and these constants mirror it exactly.
+const BOTTOM_PAD: i32 = 16;
 const MARGIN: i32 = 16;
 const MASCOT_X: i32 = MARGIN;
 const MASCOT_Y: i32 = MARGIN;
@@ -134,9 +136,13 @@ const DETAIL_Y: i32 = 154;
 const DETAIL_H: i32 = 16;
 
 const INFO_BOX_X: i32 = MARGIN;
-const INFO_BOX_W: i32 = WINDOW_W - MARGIN * 3;
-// Aligned with `modal_window::INFO_BOX_Y` so the progress dialog
-// shares the same family silhouette as the other dialogs.
+/// Symmetric: was `WINDOW_W - MARGIN * 3`, leaving twice the left
+/// margin as whitespace on the right. The buttons no longer sit inside
+/// the box's band, so the extra reserve has no owner.
+const INFO_BOX_W: i32 = WINDOW_W - MARGIN * 2;
+/// The family's shared anchor. The button row hangs below the box and
+/// the window is sized from the stack, so this dialog is exactly the
+/// same height as every `modal_window` dialog.
 const INFO_BOX_Y: i32 = 220;
 /// Sized for the heading plus **two** subtext lines. Aligned with
 /// modal_window::INFO_BOX_H; see that file for the derivation.
@@ -165,10 +171,19 @@ const INFO_SUBTEXT2_Y_OFFSET: i32 = INFO_SUBTEXT_Y_OFFSET + INFO_SUBTEXT_H + 2;
 const INFO_TEXT_X: i32 = INFO_BOX_X + INFO_PAD + INFO_ICON_SIZE + 28;
 const INFO_TEXT_W: i32 = INFO_BOX_W - (INFO_TEXT_X - INFO_BOX_X) - INFO_PAD;
 
-const CANCEL_W: i32 = 80;
+/// Cancel button, in its own row below the info box rather than
+/// centred inside it. Mirrors `modal_window`'s button constants so the
+/// family stays consistent; the horizontal padding deliberately lives
+/// only in the shared `measure_button_width`, so the two modules
+/// cannot drift apart on it.
+const CANCEL_PT: i32 = 9;
 const CANCEL_H: i32 = 25;
-const CANCEL_X: i32 = WINDOW_W - MARGIN * 2 - CANCEL_W - INFO_PAD - INFO_PAD;
-const CANCEL_Y: i32 = INFO_BOX_Y + (INFO_BOX_H - CANCEL_H) / 2;
+const CANCEL_MIN_W: i32 = 80;
+const CANCEL_Y: i32 = INFO_BOX_Y + INFO_BOX_H + BOTTOM_PAD;
+const CANCEL_RIGHT: i32 = WINDOW_W - MARGIN;
+/// Client height, mirroring `modal_window::WINDOW_H` so every dialog in
+/// the family is the same size.
+const WINDOW_H: i32 = INFO_BOX_Y + INFO_BOX_H + BOTTOM_PAD + CANCEL_H + BOTTOM_PAD;
 
 // Control IDs
 const IDC_HEADING: i32 = 1001;
@@ -292,6 +307,7 @@ struct ProgressState {
     hfont_phase: HFONT,
     hfont_detail_left: HFONT,
     hfont_detail_right: HFONT,
+    hfont_cancel: HFONT,
     hfont_info_heading: HFONT,
     hfont_info_subtext: HFONT,
     hfont_info_subtext2: HFONT,
@@ -394,6 +410,7 @@ unsafe extern "system" fn progress_wndproc(
                 false,
                 FONT_FACE,
             );
+            let hfont_cancel = create_font_pt(CANCEL_PT, FW_NORMAL as i32, false, FONT_FACE);
             let hfont_info_heading = create_font_pt(
                 INFO_HEADING_PT,
                 INFO_HEADING_WEIGHT,
@@ -615,9 +632,11 @@ unsafe extern "system" fn progress_wndproc(
                 wide(BUTTON_CLASS_NAME).as_ptr(),
                 wide(&d.jdk_install.progress.cancel_button_during_download).as_ptr(),
                 WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON as u32,
-                CANCEL_X,
+                // Provisional: created at the left edge, then measured
+                // and moved flush right below.
+                0,
                 CANCEL_Y,
-                CANCEL_W,
+                CANCEL_MIN_W,
                 CANCEL_H,
                 hwnd,
                 IDCANCEL as *mut _,
@@ -626,6 +645,22 @@ unsafe extern "system" fn progress_wndproc(
             );
             // The button text was set in CreateWindowExW above
             // (localized "Cancel" from the install-prompt section).
+            // Size it to that text and park it against the right
+            // margin, matching how modal_window packs its button group.
+            apply_font(hwnd_cancel, hfont_cancel);
+            let cancel_w = measure_button_width(
+                hfont_cancel,
+                &d.jdk_install.progress.cancel_button_during_download,
+            );
+            SetWindowPos(
+                hwnd_cancel,
+                std::ptr::null_mut(),
+                CANCEL_RIGHT - cancel_w,
+                CANCEL_Y,
+                cancel_w,
+                CANCEL_H,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
 
             (*state).hwnd_heading = hwnd_heading;
             (*state).hwnd_subtitle = hwnd_subtitle;
@@ -644,6 +679,7 @@ unsafe extern "system" fn progress_wndproc(
             (*state).hfont_phase = hfont_phase;
             (*state).hfont_detail_left = hfont_detail_left;
             (*state).hfont_detail_right = hfont_detail_right;
+            (*state).hfont_cancel = hfont_cancel;
             (*state).hfont_info_heading = hfont_info_heading;
             (*state).hfont_info_subtext = hfont_info_subtext;
             (*state).hfont_info_subtext2 = hfont_info_subtext2;
@@ -992,6 +1028,9 @@ unsafe extern "system" fn progress_wndproc(
                 if !(*raw).hfont_detail_right.is_null() {
                     DeleteObject((*raw).hfont_detail_right as _);
                 }
+                if !(*raw).hfont_cancel.is_null() {
+                    DeleteObject((*raw).hfont_cancel as _);
+                }
                 if !(*raw).hfont_info_heading.is_null() {
                     DeleteObject((*raw).hfont_info_heading as _);
                 }
@@ -1296,6 +1335,7 @@ pub unsafe fn show(
         hfont_phase: std::ptr::null_mut(),
         hfont_detail_left: std::ptr::null_mut(),
         hfont_detail_right: std::ptr::null_mut(),
+        hfont_cancel: std::ptr::null_mut(),
         hfont_info_heading: std::ptr::null_mut(),
         hfont_info_subtext: std::ptr::null_mut(),
         hfont_info_subtext2: std::ptr::null_mut(),
