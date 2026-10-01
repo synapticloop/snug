@@ -14,8 +14,20 @@
 //! the user profile. Each JAR gets its own SHA-256-keyed subdirectory
 //! so multi-JAR builds can have collision-free filenames and unchanged
 //! JARs stay cached across rebuilds.
+//!
+//! # Retention
+//!
+//! Entries expire. [`touch`] stamps a cached JAR's mtime on every
+//! launch that uses it, and [`sweep`] periodically deletes the ones no
+//! longer wanted, so the cache cannot grow without bound across
+//! rebuilds. The policy keeps the most recently used [`KEEP_RECENT`]
+//! entries, up to a per-application byte budget, and evicts anything
+//! untouched for [`MAX_UNUSED_AGE`] regardless of rank.
 
+use std::collections::HashSet;
+use std::fs::{File, FileTimes};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use snug_format::AppMetadata;
 
@@ -86,6 +98,212 @@ fn hex_lower_impl(bytes: &[u8]) -> String {
         out.push(HEX[(b & 0x0f) as usize] as char);
     }
     out
+}
+
+// --- Retention policy ---------------------------------------------------
+
+/// How many recently-used entries to retain per application.
+const KEEP_RECENT: usize = 3;
+
+/// Lower bound on one application's byte budget.
+const MIN_CACHE_BUDGET: u64 = 512 * 1024 * 1024;
+
+/// Upper bound on one application's byte budget.
+const MAX_CACHE_BUDGET: u64 = 8 * 1024 * 1024 * 1024;
+
+/// The byte budget for a build of `build_bytes`.
+///
+/// Scales with the build so a large application keeps a few generations
+/// rather than collapsing to just the current one, then clamps at both
+/// ends. The floor stops small applications being rationed — bounding
+/// large applications is the budget's job, not rationing small ones. The
+/// ceiling stops the largest being unbounded: without it a 4 GB fat JAR
+/// would retain 12 GB indefinitely.
+fn budget_for(build_bytes: u64) -> u64 {
+    build_bytes
+        .saturating_mul(KEEP_RECENT as u64)
+        .clamp(MIN_CACHE_BUDGET, MAX_CACHE_BUDGET)
+}
+
+/// Evict an entry this long after it was last used, whatever its rank.
+const MAX_UNUSED_AGE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+
+/// Minimum gap between two sweeps.
+const SWEEP_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+
+/// Rate-limit stamp file, relative to the app's cache root. Deliberately
+/// not 64 hex characters, so [`is_hash_dir`] ignores it for free.
+const SWEEP_STAMP: &str = ".sweep";
+
+/// True when `name` is a cache directory snug created: exactly 64
+/// lowercase hex characters.
+///
+/// A safety property, not just a format check — the sweep only ever
+/// deletes directories it can positively identify as its own, so
+/// anything else sharing the cache root (the `.sweep` stamp, a user's
+/// own file, a future feature's directory) is left alone.
+fn is_hash_dir(name: &str) -> bool {
+    name.len() == 64
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// Mark `path` as just-used by updating its modification time.
+///
+/// The cached JAR's mtime is the launcher's only record of when an
+/// entry was last needed, so this runs for **every** JAR in the
+/// current build rather than just the primary. Touching only the
+/// primary would let a shared library JAR age out despite constant use,
+/// and the next launch would re-copy it in full — the exact cost this
+/// retention policy exists to avoid.
+///
+/// Requires write access; callers treat a failure as non-fatal. A
+/// read-only entry simply ages out and is re-extracted on demand.
+pub fn touch(path: &Path) -> std::io::Result<()> {
+    let f = File::options().write(true).open(path)?;
+    f.set_times(FileTimes::new().set_modified(SystemTime::now()))
+}
+
+/// What a [`sweep`] pass did.
+///
+/// Returned rather than logged directly so the caller controls the
+/// message and the policy stays testable.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct SweepReport {
+    /// Directory names (hex digests) that were removed.
+    pub removed: Vec<String>,
+    /// Bytes reclaimed by `removed`.
+    pub bytes_freed: u64,
+    /// How many entries survived.
+    pub kept: usize,
+    /// Failures encountered. A sweep is best-effort: an entry it could
+    /// not remove (a running app holding the file open on Windows) is
+    /// left for a later pass.
+    pub errors: Vec<String>,
+}
+
+/// Delete cache entries the application no longer needs.
+///
+/// `current` holds the hex digests of the JARs in the running build —
+/// those are never evicted. `build_bytes` is their total size, which
+/// scales the budget so a large application still retains a few
+/// generations instead of collapsing to just the current one.
+///
+/// `now` is a parameter rather than read from the clock so the whole
+/// policy is testable without waiting 30 days.
+pub fn sweep(
+    root: &Path,
+    current: &HashSet<String>,
+    build_bytes: u64,
+    now: SystemTime,
+) -> SweepReport {
+    let mut report = SweepReport::default();
+    let budget = budget_for(build_bytes);
+
+    let mut entries: Vec<(String, SystemTime, u64)> = Vec::new();
+    let mut partial: Vec<String> = Vec::new();
+
+    // A missing root just means nothing has been extracted yet.
+    let Ok(dir) = std::fs::read_dir(root) else {
+        return report;
+    };
+
+    for entry in dir.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !is_hash_dir(&name) {
+            continue;
+        }
+        match std::fs::metadata(entry.path().join(CACHED_JAR_NAME)) {
+            Ok(m) => entries.push((name, m.modified().unwrap_or(now), m.len())),
+            // A directory with no `app.jar` is a half-finished
+            // extraction from an interrupted run. Nothing can load it,
+            // so it goes — unless it belongs to the current build, in
+            // which case the extraction loop has already surfaced the
+            // real failure and we must not mask it.
+            Err(_) => partial.push(name),
+        }
+    }
+
+    for name in partial {
+        if current.contains(&name) {
+            continue;
+        }
+        match std::fs::remove_dir_all(root.join(&name)) {
+            Ok(()) => report.removed.push(name),
+            Err(e) => report.errors.push(format!("{name}: {e}")),
+        }
+    }
+
+    // Newest first, hash breaking ties so a filesystem with coarse
+    // timestamp granularity (2s on FAT/exFAT) evicts the same entry on
+    // every run instead of flipping between equals.
+    entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    let mut used: u64 = 0;
+    for (name, mtime, size) in entries {
+        // The current build is never evicted, and its size counts
+        // against the budget. This is the one invariant that must hold
+        // unconditionally — everything else is recoverable, because a
+        // missing entry is re-extracted from the payload next launch.
+        if current.contains(&name) {
+            used = used.saturating_add(size);
+            report.kept += 1;
+            continue;
+        }
+
+        let stale = now
+            .duration_since(mtime)
+            .is_ok_and(|age| age > MAX_UNUSED_AGE);
+        let fits = report.kept < KEEP_RECENT && used + size <= budget;
+        if !stale && fits {
+            used = used.saturating_add(size);
+            report.kept += 1;
+            continue;
+        }
+
+        match std::fs::remove_dir_all(root.join(&name)) {
+            Ok(()) => {
+                report.bytes_freed += size;
+                report.removed.push(name);
+            }
+            Err(e) => report.errors.push(format!("{name}: {e}")),
+        }
+    }
+
+    report
+}
+
+/// Rate-limit the sweep to one pass per [`SWEEP_INTERVAL`]. Returns
+/// whether a sweep should run now.
+///
+/// The stamp is written *before* the sweep rather than after, so a
+/// crash mid-pass cannot become a tight retry loop on every launch.
+pub fn should_sweep(root: &Path, now: SystemTime) -> bool {
+    let stamp = root.join(SWEEP_STAMP);
+    let last = std::fs::read_to_string(&stamp)
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .map(|secs| SystemTime::UNIX_EPOCH + Duration::from_secs(secs));
+
+    if let Some(last) = last {
+        if now
+            .duration_since(last)
+            .is_ok_and(|gap| gap < SWEEP_INTERVAL)
+        {
+            return false;
+        }
+    }
+
+    let _ = std::fs::create_dir_all(root);
+    let _ = std::fs::write(
+        &stamp,
+        now.duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .to_string(),
+    );
+    true
 }
 
 #[cfg(windows)]
@@ -196,5 +414,307 @@ mod tests {
         // 64 hex chars + "/app.jar"
         let expected = root.join("0".repeat(64)).join(CACHED_JAR_NAME);
         assert_eq!(p, expected);
+    }
+
+    // --- Retention ------------------------------------------------------
+
+    /// A fixed instant so age arithmetic in these tests is exact rather
+    /// than dependent on how long the test takes to run. Anchored at the
+    /// epoch because `SystemTime + Duration` is not a const expression;
+    /// every fixture age below is relative to this, so the absolute base
+    /// is arbitrary.
+    const NOW: SystemTime = SystemTime::UNIX_EPOCH;
+
+    fn tempdir() -> PathBuf {
+        // A counter, not a clock: the test suite runs in parallel, so
+        // every call must get a genuinely distinct path. Deriving the
+        // name from a fixed instant would hand every test the same one.
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("snug-cache-test-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Create a cache entry whose `app.jar` is `size` bytes and was last
+    /// used `age` before [`NOW`]. Returns the directory name.
+    fn entry(root: &Path, name: &str, size: usize, age: Duration) -> String {
+        let dir = root.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let jar = dir.join(CACHED_JAR_NAME);
+        std::fs::write(&jar, vec![b'x'; size]).unwrap();
+        let when = NOW - age;
+        touch_at(&jar, when);
+        name.to_string()
+    }
+
+    /// Set a file's mtime without opening it for write — used to stage
+    /// fixture ages that [`touch`] would otherwise overwrite with "now".
+    fn touch_at(path: &Path, when: SystemTime) {
+        let f = std::fs::File::options().write(true).open(path).unwrap();
+        f.set_times(FileTimes::new().set_modified(when)).unwrap();
+    }
+
+    /// A 64-char lowercase-hex name, varying in the last characters so
+    /// fixtures are distinguishable.
+    fn hash_name(n: u8) -> String {
+        format!("{:0>64}", format!("{n:x}"))
+    }
+
+    const HOUR: Duration = Duration::from_secs(3600);
+
+    /// `SweepReport::removed` is in walk order — the sweep scans
+    /// newest-first, so the most recently evicted entry comes first.
+    /// Tests care about *which* entries went, not when, so compare
+    /// sorted.
+    fn sorted(mut names: Vec<String>) -> Vec<String> {
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn touch_advances_the_mtime() {
+        let dir = tempdir();
+        let jar = dir.join("f.txt");
+        std::fs::write(&jar, b"data").unwrap();
+        let old = NOW - Duration::from_secs(30 * 24 * 3600);
+        touch_at(&jar, old);
+        let before = std::fs::metadata(&jar).unwrap().modified().unwrap();
+        assert!(before < SystemTime::now(), "fixture should start in the past");
+
+        touch(&jar).unwrap();
+
+        let after = std::fs::metadata(&jar).unwrap().modified().unwrap();
+        assert!(
+            after > before,
+            "touch must advance the mtime: {before:?} -> {after:?}"
+        );
+    }
+
+    #[test]
+    fn sweep_never_removes_the_current_build() {
+        // The current build is deliberately the *oldest* entry, and
+        // there are more entries than KEEP_RECENT, so the count filter
+        // would evict it last. It has to survive anyway: everything else
+        // is recoverable by re-extraction from the payload, the running
+        // app's own classpath is not.
+        let root = tempdir();
+        let names: Vec<String> = (1..=5u8)
+            .map(|n| entry(&root, &hash_name(n), 64, Duration::from_secs(5 - n as u64)))
+            .collect();
+        let oldest = names[0].clone();
+        let current: HashSet<String> = [oldest.clone()].into_iter().collect();
+
+        let report = sweep(&root, &current, 64, NOW);
+
+        assert!(
+            root.join(&oldest).exists(),
+            "the current build must survive even when it ranks last"
+        );
+        assert!(!report.removed.contains(&oldest));
+        // Four non-current entries, three slots: hash_name(2) is the
+        // oldest of the four, so it is the one that goes.
+        assert_eq!(sorted(report.removed), sorted(vec![names[1].clone()]));
+    }
+
+    #[test]
+    fn current_build_counts_toward_the_retained_depth() {
+        // `KEEP_RECENT` bounds the *total* retained generations, not the
+        // history on top of the current one. That is what makes the
+        // `build_bytes * KEEP_RECENT` budget line up: a single-JAR app
+        // holds three copies of itself, not four.
+        let root = tempdir();
+        let names: Vec<String> = (1..=4u8)
+            .map(|n| entry(&root, &hash_name(n), 64, Duration::from_secs(4 - n as u64)))
+            .collect();
+        let current: HashSet<String> = [names[3].clone()].into_iter().collect();
+
+        let report = sweep(&root, &current, 64, NOW);
+
+        assert_eq!(report.kept, KEEP_RECENT);
+        assert_eq!(report.removed.len(), 1);
+        assert_eq!(sorted(report.removed), sorted(vec![names[0].clone()]));
+    }
+
+    #[test]
+    fn sweep_evicts_the_oldest_over_budget() {
+        let root = tempdir();
+        // Five fresh entries; the budget is clamped to MIN_CACHE_BUDGET
+        // for a tiny build, so the *count* is what limits retention.
+        let names: Vec<String> = (1..=5u8)
+            .map(|n| entry(&root, &hash_name(n), 1024, Duration::from_secs(5 - n as u64)))
+            .collect();
+        // The current build is the newest, as it would be in practice.
+        let current: HashSet<String> = [names[4].clone()].into_iter().collect();
+
+        let report = sweep(&root, &current, 1024, NOW);
+
+        assert_eq!(report.kept, KEEP_RECENT);
+        assert_eq!(sorted(report.removed), sorted(names[..2].to_vec()));
+        for gone in &names[..2] {
+            assert!(!root.join(gone).exists(), "{gone} should be evicted");
+        }
+        for kept in &names[2..] {
+            assert!(root.join(kept).exists(), "{kept} should survive");
+        }
+    }
+
+    #[test]
+    fn sweep_respects_count_even_with_a_huge_budget() {
+        // 100 tiny entries under an enormous build size: the count must
+        // still bound retention, so the directory count can't run away.
+        let root = tempdir();
+        for n in 1..=100u8 {
+            entry(&root, &hash_name(n), 1, HOUR);
+        }
+        let current: HashSet<String> = HashSet::new();
+
+        let report = sweep(&root, &current, MAX_CACHE_BUDGET, NOW);
+
+        assert_eq!(report.kept, KEEP_RECENT);
+        assert_eq!(report.removed.len(), 100 - KEEP_RECENT);
+    }
+
+    #[test]
+    fn sweep_evicts_by_age_regardless_of_budget() {
+        // Under budget and recently ranked, but untouched for 40 days:
+        // the age filter is what catches the long tail the budget never
+        // would.
+        let root = tempdir();
+        let old = entry(
+            &root,
+            &hash_name(1),
+            10,
+            Duration::from_secs(40 * 24 * 3600),
+        );
+        let current: HashSet<String> = HashSet::new();
+
+        let report = sweep(&root, &current, 0, NOW);
+
+        assert!(!root.join(&old).exists());
+        assert_eq!(report.kept, 0);
+        assert_eq!(report.bytes_freed, 10);
+    }
+
+    #[test]
+    fn sweep_keeps_entries_younger_than_the_age_limit() {
+        let root = tempdir();
+        let recent = entry(&root, &hash_name(1), 10, Duration::from_secs(29 * 24 * 3600));
+        let current: HashSet<String> = HashSet::new();
+
+        let report = sweep(&root, &current, 0, NOW);
+
+        assert!(root.join(&recent).exists());
+        assert_eq!(report.kept, 1);
+    }
+
+    #[test]
+    fn sweep_ignores_anything_that_is_not_a_hash_directory() {
+        let root = tempdir();
+        // The rate-limit stamp, a stray file, and a user-created
+        // directory must all survive untouched.
+        let stamp = root.join(SWEEP_STAMP);
+        std::fs::write(&stamp, "0").unwrap();
+        let stray = root.join("notes.txt");
+        std::fs::write(&stray, b"hello").unwrap();
+        let user_dir = root.join("my-backup");
+        std::fs::create_dir_all(&user_dir).unwrap();
+        std::fs::write(user_dir.join("data.bin"), b"mine").unwrap();
+        // Uppercase hex is not ours either.
+        let upper = root.join("A".repeat(64));
+        std::fs::create_dir_all(&upper).unwrap();
+
+        sweep(&root, &HashSet::new(), 0, NOW);
+
+        assert!(stamp.exists());
+        assert!(stray.exists());
+        assert!(user_dir.join("data.bin").exists());
+        assert!(upper.exists());
+    }
+
+    #[test]
+    fn sweep_removes_an_unfinished_extraction() {
+        // A hash directory with no `app.jar` is a half-finished write
+        // from an interrupted run; nothing can load it.
+        let root = tempdir();
+        let partial = root.join(hash_name(1));
+        std::fs::create_dir_all(&partial).unwrap();
+
+        let report = sweep(&root, &HashSet::new(), 0, NOW);
+
+        assert!(!partial.exists());
+        assert_eq!(report.removed, vec![hash_name(1)]);
+    }
+
+    #[test]
+    fn sweep_keeps_an_unfinished_current_extraction() {
+        // Same shape, but it belongs to the running build: the
+        // extraction loop has already reported the real failure and the
+        // sweep must not mask it by deleting the directory.
+        let root = tempdir();
+        let partial = hash_name(1);
+        std::fs::create_dir_all(root.join(&partial)).unwrap();
+        let current: HashSet<String> = [partial.clone()].into_iter().collect();
+
+        let report = sweep(&root, &current, 0, NOW);
+
+        assert!(root.join(&partial).exists());
+        assert!(report.removed.is_empty());
+    }
+
+    #[test]
+    fn sweep_tolerates_a_missing_root() {
+        let missing = tempdir().join("does-not-exist");
+        let report = sweep(&missing, &HashSet::new(), 0, NOW);
+        assert_eq!(report, SweepReport::default());
+    }
+
+    #[test]
+    fn budget_clamps_at_both_ends() {
+        // Floor: a tiny build still gets the minimum rather than being
+        // rationed to a few bytes.
+        assert_eq!(budget_for(0), MIN_CACHE_BUDGET);
+        assert_eq!(budget_for(1), MIN_CACHE_BUDGET);
+        // Mid-range: scales with the build.
+        let mid = MIN_CACHE_BUDGET * 4;
+        assert_eq!(budget_for(mid), mid * KEEP_RECENT as u64);
+        // Ceiling: an enormous build is capped, and can't overflow.
+        assert_eq!(budget_for(MAX_CACHE_BUDGET), MAX_CACHE_BUDGET);
+        assert_eq!(budget_for(u64::MAX / 2), MAX_CACHE_BUDGET);
+        assert_eq!(budget_for(u64::MAX), MAX_CACHE_BUDGET);
+    }
+
+    #[test]
+    fn should_sweep_rate_limits_repeat_calls() {
+        let root = tempdir();
+        assert!(should_sweep(&root, NOW), "first call should run");
+        assert!(
+            !should_sweep(&root, NOW + HOUR),
+            "a second call within the interval must be skipped"
+        );
+        assert!(
+            should_sweep(&root, NOW + SWEEP_INTERVAL + HOUR),
+            "a call past the interval should run"
+        );
+    }
+
+    #[test]
+    fn should_sweep_runs_when_the_stamp_is_unreadable() {
+        let root = tempdir();
+        std::fs::write(root.join(SWEEP_STAMP), b"not a number").unwrap();
+        assert!(should_sweep(&root, NOW));
+    }
+
+    #[test]
+    fn is_hash_dir_requires_exactly_64_lowercase_hex() {
+        assert!(is_hash_dir(&hash_name(255)));
+        assert!(is_hash_dir(&"a".repeat(64)));
+        assert!(!is_hash_dir(&"a".repeat(63)));
+        assert!(!is_hash_dir(&"a".repeat(65)));
+        assert!(!is_hash_dir(&"A".repeat(64)));
+        assert!(!is_hash_dir(&"g".repeat(64)));
+        assert!(!is_hash_dir(SWEEP_STAMP));
+        assert!(!is_hash_dir("app.jar"));
     }
 }
