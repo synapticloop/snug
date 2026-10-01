@@ -29,10 +29,11 @@ REM      Then stamp assets\snug-dropper.png into snug-dropper.exe and emit
 REM      target\...\Build with Snug.exe beside snug.exe. Unlike step 6 this
 REM      is a *shipped* artefact rather than a dev tool, so it gets its own
 REM      flag instead of hiding behind --SkipDevTools.
-REM   8. Stage release\: the two EXEs a user actually runs, plus the demo
-REM      JAR so someone can try the whole drop-a-JAR flow before building
-REM      a JAR of their own. release\ ignores its own contents, so nothing
-REM      here is tracked. Skip with --SkipRelease.
+REM   8. Stage release\: the EXEs a user runs (snug, Build with Snug, and
+REM      the snug_preview dialog preview) plus the demo JAR, so someone can
+REM      try the whole drop-a-JAR flow before building a JAR of their own.
+REM      release\ ignores its own contents, so nothing here is tracked.
+REM      Skip with --SkipRelease.
 REM
 REM Run from the repo root:
 REM     .\scripts\build-release.cmd
@@ -427,9 +428,14 @@ REM ---------------------------------------------------------------------------
 REM 8. Stage the release directory.
 REM
 REM    release\ is the folder a user unpacks: snug.exe, the Build with Snug
-REM    shim, and the demo JAR so the whole drop-a-JAR flow can be tried
-REM    before writing a JAR of their own. The directory ignores its own
-REM    contents, so nothing in it is tracked.
+REM    shim, the snug_preview dialog preview, and the demo JAR so the whole
+REM    drop-a-JAR flow can be tried before writing a JAR of their own. The
+REM    directory ignores its own contents, so nothing in it is tracked.
+REM
+REM    snug_preview.exe is a dev tool and ships anyway: it is how you look
+REM    at snug's dialogs and error copy without building and launching an
+REM    app. It comes from step 6, so --SkipDevTools leaves it unbuilt and
+REM    :stage warns instead of aborting.
 REM
 REM    The two EXEs are staged together on purpose. Build with Snug.exe
 REM    resolves snug.exe relative to its own path, so a release folder with
@@ -456,6 +462,11 @@ if errorlevel 1 (
 call :stage "!BUILT_CLI_EXE!" "snug.exe"
 if errorlevel 1 exit /b 1
 call :stage "!DROPPER_PACKAGED!" "!DROPPER_SHIPPED!"
+if errorlevel 1 exit /b 1
+REM A dev tool, but the one you open to inspect snug's dialogs and error
+REM copy without building and launching an app. Built in step 6, so
+REM --SkipDevTools leaves it unbuilt and :stage warns rather than aborting.
+call :stage "!BUILT_PREVIEW_EXE!" "snug_preview.exe"
 if errorlevel 1 exit /b 1
 call :stage "!DEMO_JAR!" "snug-javafx-demo.jar"
 if errorlevel 1 exit /b 1
@@ -486,6 +497,7 @@ echo.
 echo Release directory: !RELEASE_DIR!\
 for %%I in ("!RELEASE_DIR!\snug.exe")               do ( if exist "!RELEASE_DIR!\snug.exe" echo     snug.exe                 !RELEASE_DIR!\snug.exe ^(%%~zI bytes^) )
 for %%I in ("!RELEASE_DIR!\!DROPPER_SHIPPED!")     do ( if exist "!RELEASE_DIR!\!DROPPER_SHIPPED!" echo     !DROPPER_SHIPPED!: !RELEASE_DIR!\!DROPPER_SHIPPED! ^(%%~zI bytes^) )
+for %%I in ("!RELEASE_DIR!\snug_preview.exe")          do ( if exist "!RELEASE_DIR!\snug_preview.exe" echo     snug_preview.exe        !RELEASE_DIR!\snug_preview.exe ^(%%~zI bytes^) )
 for %%I in ("!RELEASE_DIR!\snug-javafx-demo.jar")  do ( if exist "!RELEASE_DIR!\snug-javafx-demo.jar" echo     snug-javafx-demo.jar    !RELEASE_DIR!\snug-javafx-demo.jar ^(%%~zI bytes^) )
 
 REM End the main flow here. :stage below is reachable only through CALL,
