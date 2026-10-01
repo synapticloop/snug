@@ -34,7 +34,7 @@
 use std::io::{Read, Write};
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -430,11 +430,68 @@ impl ProgressShared {
     }
 }
 
-/// Try to load the EXE's main application icon as an `HICON` so the
-/// progress dialog can render with the same icon the user sees in the
-/// title bar / taskbar. Returns `None` when no icon resource is present
-/// (e.g. the bare launcher stub or an EXE built without `--icon`); the
-/// caller should fall back to a standard system icon in that case.
+/// Process-wide override for the dialogs' **title-bar / Alt-Tab /
+/// taskbar** icon, as an `HICON` cast to `isize`. `0` — the default —
+/// means "read the EXE's own `MAINICON` resource", which is what every
+/// shipped launcher does.
+///
+/// This exists for `snug_preview --icon <FILE>`. Swapping the fallback
+/// icon any other way means relinking the EXE, because the resource
+/// lives *in* the binary, and `bin/launcher-stub.exe` is committed and
+/// cross-compiled from macOS/Linux — far too slow a loop for "try this
+/// icon across all eight dialogs". The production launcher never calls
+/// the setter, so this is inert there and costs one relaxed atomic read
+/// on the fallback path.
+///
+/// The handle is deliberately never destroyed: dialogs are top-level
+/// windows on detached threads that can outlive whatever installed the
+/// override, so the effective owner is the process. Handles from
+/// `LoadImageW(..., LR_LOADFROMFILE)` are additionally system-managed.
+static WINDOW_ICON_OVERRIDE: AtomicIsize = AtomicIsize::new(0);
+
+/// Process-wide override for the in-dialog **mascot** image (the large
+/// picture at the top-left), same `isize`-cast-`HICON` convention and
+/// same "never the production path" reasoning as
+/// [`WINDOW_ICON_OVERRIDE`].
+///
+/// Kept separate from the title-bar one because they want different
+/// pixel sizes: the mascot box is ~154 px, so the caller loads at
+/// [`MASCOT_LOAD_CX`] while the title bar wants `SM_CXICON`. Loading
+/// once at each size and handing the right handle to the right slot
+/// also avoids upscaling a 32 px icon into a 154 px box.
+static MASCOT_ICON_OVERRIDE: AtomicIsize = AtomicIsize::new(0);
+
+/// Install the dialogs' title-bar / Alt-Tab / taskbar icon override.
+/// Pass `0` to go back to the EXE resource.
+pub fn set_window_icon_override(hicon: isize) {
+    WINDOW_ICON_OVERRIDE.store(hicon, Ordering::SeqCst);
+}
+
+/// The current title-bar icon override, `None` when unset.
+pub fn window_icon_override() -> Option<HICON> {
+    match WINDOW_ICON_OVERRIDE.load(Ordering::SeqCst) {
+        0 => None,
+        other => Some(other as HICON),
+    }
+}
+
+/// Install the in-dialog mascot image override. Pass `0` to go back to
+/// the EXE icon.
+pub fn set_mascot_icon_override(hicon: isize) {
+    MASCOT_ICON_OVERRIDE.store(hicon, Ordering::SeqCst);
+}
+
+/// The current mascot override, `None` when unset.
+pub fn mascot_icon_override() -> Option<HICON> {
+    match MASCOT_ICON_OVERRIDE.load(Ordering::SeqCst) {
+        0 => None,
+        other => Some(other as HICON),
+    }
+}
+
+/// Load the EXE's main icon for the window class / per-window
+/// `WM_SETICON` slots, unless a process-wide override is installed by
+/// `snug_preview --icon` (see [`WINDOW_ICON_OVERRIDE`]).
 ///
 /// Picks the system small-icon size (typically16 / 32 px depending on
 /// DPI) so the title bar / taskbar end up with their natural pixel
@@ -442,6 +499,10 @@ impl ProgressShared {
 /// resource tree rather than guessing at a fixed resource id.
 pub(crate) fn load_exe_main_icon_hicon() -> Option<HICON> {
     use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXICON, SM_CYICON};
+
+    if let Some(hicon) = window_icon_override() {
+        return Some(hicon);
+    }
 
     let cx = unsafe { GetSystemMetrics(SM_CXICON) };
     let cy = unsafe { GetSystemMetrics(SM_CYICON) };
