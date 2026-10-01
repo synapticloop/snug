@@ -239,6 +239,51 @@ by accident.
   error. The scaffold directory must contain nothing but
   `snug-localisations.<tag>.txt` files: `expand_user_paths` fails the
   build on any other entry, so no README, no `.bak`.
+- **All launcher user-facing text lives in ONE file, and it is the
+  localization catalog.** `crates/snug-format/assets/
+  snug-localisations.en.txt` holds the error messages (`err.*`), the
+  splash strings (`splash.*`), the JDK-install errors (`jdk.err.*`)
+  *and* the dialog chrome (`jdk_install.*`, `generic.*`,
+  `launcher.error.*`). There is deliberately no second file: a
+  `dialogs.toml` existed until 0.4.0 and was merged in, because
+  compile-time-only copy meant a localized app got a translated error
+  body inside an English window. The file lives in `snug-format`
+  because the CLI and the launcher both need it and `snug-format` is
+  the one crate they both depend on; it is `include_str!`d exactly
+  once in the workspace and re-exported as
+  `snug_format::DEFAULT_EN_TEXT`, so the payload copy and the
+  launcher's in-binary fallback can never drift. It sits inside that
+  crate (not a top-level `assets/`) because `snug-format` sets
+  `publish.workspace = true` and `cargo package` cannot include files
+  from outside a package root.
+  - **`Dialogs` is hand-assembled, not deserialized.** Sourcing the
+    chrome from flat keys means a mistyped key resolves to the key
+    literal at runtime — late and user-visible. `dialogs::dialogs()`
+    therefore builds the struct out of `localize::lookup` calls, which
+    keeps compile-checked field access at all ~16 call sites
+    (`dialogs().jdk_install.prompt.title`) and confines key literals to
+    one place. `localize::tests::every_localize_key_is_in_the_baseline`
+    guards it in both directions: a looked-up key missing from the
+    baseline fails, and a baseline key nothing reads fails (escape
+    hatch: `KNOWN_UNREFERENCED`). **Add new lookups to its `KEYS`
+    list.**
+  - **`localize::lookup` falls back to the built-in baseline before
+    `init` runs.** `DIALOGS` is a `OnceLock`, so a pre-`init` call
+    would cache unresolved values permanently — a cached
+    `jdk_install.prompt.title` is a permanently broken window. Since
+    the English baseline is compiled in, pre-`init` lookups resolve
+    against it (untranslated but correct) rather than returning keys.
+    Only a key in neither the chain nor the baseline returns the key
+    string.
+  - **Values are single-line.** A real newline is a literal `\n`; a
+    literal `#` must be `\#`. The old TOML triple-quoted bodies
+    (`jdk_install.prompt.content`, `.expanded`,
+    `metadata_failed.content`) became one long line each —
+    `multi_line_bodies_decoded_from_escapes` is the regression guard
+    for that conversion.
+  - `jdk_install.failure.content` is deliberately **empty**;
+    `error_window` reads empty as "use the module default", and
+    `failure_content_is_intentionally_empty` pins that.
 - Profile `release` is tuned for tiny binaries (`opt-level = "z"`, LTO,
   `panic = "abort"`, stripped). The launcher should be ~hundreds of KB
   not megabytes.

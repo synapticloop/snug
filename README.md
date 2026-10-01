@@ -118,7 +118,7 @@ wire it up.
 | Per-user cache layout (`%LOCALAPPDATA%\snug\<company>\<app>\<jar-sha256>\`) | done |
 | Per-launch log file (`...\<jar-sha256>\snug.log`, truncated on each launch) | done |
 | Old-version cache cleanup | planned |
-| Editable dialog text (`crates/snug-launcher/dialogs.toml`) | done |
+| Editable dialog text (`snug-format/assets/snug-localisations.en.txt`) | done |
 | GitHub Actions CI (windows-latest release) | planned |
 
 ## Quick start
@@ -229,10 +229,12 @@ snug/
 │   └── build-release.cmd       # Windows batch pipeline: launcher + CLI + demo EXE
 └── crates/
     ├── snug-format/            # embedded-payload types + postcard codec (the wire contract)
+    │   └── assets/             # snug-localisations.en.txt — canonical English baseline
     ├── snug-launcher/
-    │   ├── dialogs.toml         # every user-facing string (titles, prompts, button labels)
+    │   ├── assets/             # snug-icon.png (build.rs → MAINICON resource)
     │   └── src/dialogs.rs      # include_str!s the TOML at compile time, fills `{name}` placeholders
     └── snug-cli/               # CLI + stub-append builder + snug.options + editpe stamping
+        └── assets/             # snug.options.example, written by `snug --init-options`
 ```
 
 `snug-format` is the **contract** between the builder (CLI side) and the
@@ -413,39 +415,53 @@ and the file is the only visible record.
 
 ## Editable dialog text
 
-Every user-facing string the launcher shows — download prompt title
-and body, button labels, progress bar text, success / failure dialogs
-— lives in `crates/snug-launcher/dialogs.toml`. Edit the file, rerun
+Every user-facing string the launcher shows lives in one place:
+`snug-format/assets/snug-localisations.en.txt`. That covers the error
+messages (`err.*`), the splash strings (`splash.*`), the JDK-install
+errors (`jdk.err.*`) **and** the dialog chrome — titles, headings,
+info-box copy, progress text and button labels (`jdk_install.*`,
+`generic.*`, `launcher.error.*`). Edit the file, rerun
 `scripts\build-release.cmd`, and the rebuilt EXE picks up the change
 with no Rust edits needed.
 
-```toml
-[jdk_install.prompt]
-title = "Java Runtime Required — Snug"
-main  = "Eclipse Temurin JDK was not found on this machine"
-content = """\
-This application needs a Java {version} or higher. Snug can download the \
-official Eclipse Temurin {version} (~{size_mb} MB) and install it to a per-user \
-location, or open the download page in your browser.\n\n\
-Download will be verified against the official SHA-256."""
+The catalog lives in `snug-format` because the CLI and the launcher both
+need it and `snug-format` is the one crate they both depend on. It is
+`include_str!`d exactly once in the whole workspace and re-exported as
+`snug_format::DEFAULT_EN_TEXT`, so the copy baked into a payload and
+the copy compiled into the launcher's in-binary fallback are the same
+bytes by construction.
 
-button_download     = "Download Temurin {version} now"
-button_open_browser = "Open the download page in my browser"
-button_cancel       = "Cancel"
+```text
+jdk_install.prompt.title = Java Runtime Required — Snug
+jdk_install.prompt.main = Eclipse Temurin JDK was not found on this machine
+jdk_install.prompt.content = This application needs a Java {version} or higher. Snug can download the official Eclipse Temurin {version} (~{size_mb} MB) and install it to a per-user location, or open the download page in your browser.\n\nDownload will be verified against the official SHA-256.
+jdk_install.prompt.button_download = Download Temurin {version} now
+jdk_install.prompt.button_cancel = Cancel
 
-[jdk_install.metadata_failed]
-title   = "Could not reach Adoptium — Snug"
-content = """\
-Either this host has no internet access, a firewall or proxy is blocking the \
-request, or the Adoptium API is temporarily unavailable.\n\n\
-…"""
+jdk_install.metadata_failed.title = Could not reach Adoptium — Snug
 ```
 
-Templates use `{name}` placeholders (no `{name:.spec}` formatters —
-apply formatting to values in Rust before substitution). Unknown
-placeholders are left intact so a typo never silently swallows text.
-If the TOML is malformed, the launcher panics at first use with the
-exact line/column from `toml::de::Error`.
+Values are single-line. A real newline is a literal `\n`, a literal
+`#` must be written `\#`, and `#` otherwise starts a comment. Templates
+use `{name}` placeholders (no `{name:.spec}` formatters — apply
+formatting to values in Rust before substitution). Unknown placeholders
+are left intact so a typo never silently swallows text.
+
+Because the chrome is in the same bundle as the errors, `--localization`
+translates the whole window, not just its contents — a localised build
+gets a translated title *and* a translated "Cancel" button, and an app
+can reword the chrome for itself ("Acme requires Java 25") by shipping
+its own `en` bundle. The only copy that can't be overridden this way is
+the fallback `MessageBoxW` title, which is rendered before the payload
+is decoded.
+
+`snug_launcher::dialogs::Dialogs` is assembled from these keys rather
+than deserialized, so all ~16 call sites keep compile-checked field
+access (`dialogs().jdk_install.prompt.title`) and the key literals live
+in exactly one place. A lookup that matches nothing in the chain returns
+the key itself, so the
+`every_localize_key_is_in_the_baseline` test in `localize.rs` keeps that
+from shipping — add new lookups to its `KEYS` list.
 
 ## Licence
 

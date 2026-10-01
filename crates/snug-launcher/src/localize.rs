@@ -34,22 +34,25 @@
 //! entries }` (serialized via postcard). At runtime we deserialize
 //! those and merge with the built-in English baseline. The launcher
 //! always has *some* English baseline available — the built-in copy
-//! is parsed at startup from `include_str!("../snug-launcher/src/
-//! snug-localisations.en.txt")` so it survives even if the payload
-//! itself is missing or corrupted (e.g. on the bare stub path).
+//! is parsed at startup from `snug_format::DEFAULT_EN_TEXT` so it
+//! survives even if the payload itself is missing or corrupted (e.g.
+//! on the bare stub path). That constant is the single
+//! `include_str!` of `assets/snug-localisations.en.txt` in the whole
+//! workspace, so the copy the CLI bakes into the payload and the copy
+//! compiled into this fallback are the same bytes by construction.
 
 use std::sync::OnceLock;
 
 use snug_format::Localization;
 
 /// BCP 47 tag of the built-in English baseline. Always present.
-pub const DEFAULT_TAG: &str = "en";
+pub use snug_format::DEFAULT_EN_TAG as DEFAULT_TAG;
 
-/// Built-in English baseline text. Sourced directly from
-/// `crates/snug-launcher/src/snug-localisations.en.txt` at compile
-/// time — same file the CLI embeds into every payload, so the wire
-/// and runtime copies can never drift.
-const DEFAULT_EN_TEXT: &str = include_str!("./snug-localisations.en.txt");
+/// Built-in English baseline text, re-exported from `snug-format`
+/// where the file actually lives (`snug-format/assets/`). Re-exported
+/// rather than re-`include_str!`d so the runtime fallback and the
+/// CLI-embedded payload copy can never drift.
+pub use snug_format::DEFAULT_EN_TEXT;
 
 /// Global lookup state. Initialised once via [`init`] and read via
 /// [`bundles`].
@@ -168,14 +171,39 @@ fn bundles() -> Option<&'static Bundles> {
     BUNDLES.get()
 }
 
+/// The built-in English baseline, parsed once and independent of
+/// whether [`init`] has run.
+///
+/// `Bundles::load` appends its own copy to the chain, so this is only
+/// reached on the pre-init path. It exists because the baseline is
+/// compiled in and therefore *always* available — resolving to
+/// English is the correct answer before the user's bundles are known,
+/// and returning a bare `jdk_install.prompt.title` is not.
+static BUILTIN: OnceLock<Option<Localization>> = OnceLock::new();
+
+fn builtin() -> Option<&'static Localization> {
+    BUILTIN
+        .get_or_init(|| {
+            Localization::parse(DEFAULT_TAG, DEFAULT_EN_TEXT).ok()
+        })
+        .as_ref()
+}
+
 /// Look up `key` in the priority chain and return the raw value
 /// (with `\n` / `\t` escape sequences already decoded by the
-/// `Localization::parse` step). If [`init`] hasn't been called or
-/// the key isn't present anywhere, returns the key itself.
+/// `Localization::parse` step).
+///
+/// Before [`init`] runs — the bare-stub path in `main.rs`, the
+/// preview binaries, unit tests — there is no chain yet, so this
+/// falls back to the compiled-in English baseline. Only a key that is
+/// in neither returns the key string itself.
 pub fn lookup(key: &str) -> String {
     match bundles() {
         Some(b) => b.raw_lookup(key),
-        None => key.to_string(),
+        None => builtin()
+            .and_then(|b| b.get(key))
+            .unwrap_or(key)
+            .to_string(),
     }
 }
 
@@ -359,5 +387,161 @@ mod tests {
         // Primary is the head of the full tag.
         let expected_primary = full.split('-').next().unwrap_or(&full).to_string();
         assert_eq!(primary, expected_primary);
+    }
+
+    /// Every key the launcher looks up must exist in the built-in
+    /// baseline.
+    ///
+    /// `lookup` returns the key string itself when nothing in the chain
+    /// has it — deliberate, so a missing *translation* degrades to
+    /// English rather than failing. But a key missing from the
+    /// *baseline* is a real bug: the built-in English is supposed to
+    /// be complete, and the user sees a dotted identifier in a dialog
+    /// instead of a sentence. Nothing at the call site can catch that,
+    /// because the call site is just a string literal, so the
+    /// inventory is pinned here.
+    ///
+    /// When you add a lookup, add its key to this list. When you add a
+    /// key to the baseline, the second half of the test flags it as
+    /// unreferenced — dead weight in every shipped payload otherwise.
+    #[test]
+    fn every_localize_key_is_in_the_baseline() {
+        const KEYS: &[&str] = &[
+            // err.* — LauncherError, via error::localize_launcher_error
+            "err.zip",
+            "err.self_path",
+            "err.io",
+            "err.jvm_not_found",
+            "err.jvm_too_old",
+            "err.library_load",
+            "err.symbol_not_found",
+            "err.invalid_state",
+            "err.jni_init",
+            "err.jni_create",
+            "err.jni_attach",
+            "err.jni_invoke",
+            "err.no_main_class",
+            "err.main_class_not_found",
+            "err.no_main_method",
+            "err.java_exception",
+            "err.unsupported_platform",
+            "err.format",
+            // splash.*
+            "splash.err.overflow",
+            "splash.err.buffer_length",
+            "splash.err.empty",
+            "splash.err.thread_spawn",
+            "splash.err.bitmap",
+            "splash.err.window",
+            "splash.err.update_layered",
+            "splash.err.create_compatible_dc",
+            "splash.err.create_dib_section",
+            "splash.err.create_window",
+            "splash.err.update_layered_window",
+            "splash.title",
+            // jdk.err.* — JdkError
+            "jdk.err.metadata_fetch",
+            "jdk.err.no_metadata_for_version",
+            "jdk.err.bad_metadata_shape",
+            "jdk.err.bad_field",
+            "jdk.err.download",
+            "jdk.err.sha256_mismatch",
+            "jdk.err.extract",
+            "jdk.err.no_java_exe",
+            "jdk.err.io",
+            "jdk.err.dialog",
+            // launcher.* — bare stub + fallback message box
+            "launcher.bare_stub.no_payload",
+            "launcher.bare_stub.hint",
+            "launcher.bare_stub.command",
+            "launcher.fallback_messagebox.title",
+            // dialog chrome — assembled in dialogs::dialogs()
+            "jdk_install.prompt.title",
+            "jdk_install.prompt.main",
+            "jdk_install.prompt.content",
+            "jdk_install.prompt.expanded",
+            "jdk_install.prompt.button_download",
+            "jdk_install.prompt.button_open_browser",
+            "jdk_install.prompt.button_cancel",
+            "jdk_install.metadata_failed.title",
+            "jdk_install.metadata_failed.heading",
+            "jdk_install.metadata_failed.subheading",
+            "jdk_install.metadata_failed.content",
+            "jdk_install.metadata_failed.info_heading",
+            "jdk_install.metadata_failed.info_subtext",
+            "jdk_install.metadata_failed.button_open_browser",
+            "jdk_install.metadata_failed.button_cancel",
+            "jdk_install.progress.title",
+            "jdk_install.progress.main",
+            "jdk_install.progress.content_initial",
+            "jdk_install.progress.heading",
+            "jdk_install.progress.subtitle",
+            "jdk_install.progress.pct_label",
+            "jdk_install.progress.phase_label",
+            "jdk_install.progress.detail_with_size",
+            "jdk_install.progress.detail_no_size",
+            "jdk_install.progress.detail_eta_seconds",
+            "jdk_install.progress.detail_eta_second",
+            "jdk_install.progress.detail_eta_done",
+            "jdk_install.progress.info_heading",
+            "jdk_install.progress.info_subtext",
+            "jdk_install.progress.cancel_button_during_download",
+            "jdk_install.failure.title",
+            "jdk_install.failure.heading",
+            "jdk_install.failure.subheading",
+            "jdk_install.failure.content",
+            "jdk_install.failure.info_heading",
+            "jdk_install.failure.info_subtext",
+            "jdk_install.failure.button_label",
+            "jdk_install.retry.title",
+            "jdk_install.retry.heading",
+            "jdk_install.retry.subheading",
+            "jdk_install.retry.content",
+            "jdk_install.retry.info_heading",
+            "jdk_install.retry.info_subtext",
+            "jdk_install.retry.button_retry",
+            "jdk_install.retry.button_cancel",
+            "generic.error_dialog_ok",
+            "generic.info_dialog_continue",
+            "launcher.error.title",
+            "launcher.error.heading",
+            "launcher.error.subheading",
+            "launcher.error.content",
+            "launcher.error.info_heading",
+            "launcher.error.info_subtext",
+            "launcher.error.button_label",
+            "launcher.error.update_check_label",
+        ];
+
+        let baseline = Bundles::load(&[]);
+        let missing: Vec<&&str> = KEYS
+            .iter()
+            .filter(|k| baseline.raw_lookup(k) == **k)
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "these keys are looked up by the launcher but absent from the built-in \
+             baseline (the user would see the raw key in a dialog): {missing:?}"
+        );
+
+        // The other direction: a baseline key that nothing reads is
+        // dead weight shipped in every payload, and usually a leftover
+        // from a rename. Allow it to be opted into explicitly rather
+        // than silently drifting.
+        const KNOWN_UNREFERENCED: &[&str] = &[];
+        let builtin = Localization::parse(DEFAULT_TAG, DEFAULT_EN_TEXT)
+            .expect("built-in baseline parses");
+        let unreferenced: Vec<&str> = builtin
+            .entries
+            .iter()
+            .map(|(k, _)| k.as_str())
+            .filter(|k| !KEYS.contains(k) && !KNOWN_UNREFERENCED.contains(k))
+            .collect();
+        assert!(
+            unreferenced.is_empty(),
+            "these keys are in the baseline but nothing looks them up — add them to \
+             KEYS, or to KNOWN_UNREFERENCED if they're deliberately dormant: \
+             {unreferenced:?}"
+        );
     }
 }

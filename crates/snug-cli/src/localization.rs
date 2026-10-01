@@ -39,23 +39,23 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use snug_format::Localization;
-
 /// Canonical BCP 47 tag for the built-in English baseline bundle.
 ///
 /// The launcher includes this string at compile time, parses it at
 /// startup as the always-present fallback, and the CLI embeds it into
 /// every build so end users always see English even if every other
 /// bundle is missing.
-pub const DEFAULT_EN_TAG: &str = "en";
+pub use snug_format::DEFAULT_EN_TAG;
 
 /// Built-in English baseline text, embedded into every payload.
 ///
-/// Sourced directly from `crates/snug-launcher/src/snug-localisations.en.txt`
-/// via `include_str!`. The launcher also `include_str!`s the same file
-/// at compile time to keep its in-binary fallback in lock-step — single
-/// source of truth, no drift risk.
-pub const DEFAULT_EN_TEXT: &str =
-    include_str!("../../snug-launcher/src/snug-localisations.en.txt");
+/// Re-exported from `snug-format`, which owns
+/// `assets/snug-localisations.en.txt` and holds the single
+/// `include_str!` of it in the workspace. The launcher re-exports the
+/// same constant for its in-binary fallback, so the copy baked into
+/// the payload and the copy compiled into the launcher are the same
+/// bytes by construction rather than by convention.
+pub use snug_format::DEFAULT_EN_TEXT;
 
 /// Build a `snug-localisations` filename from a locale tag.
 ///

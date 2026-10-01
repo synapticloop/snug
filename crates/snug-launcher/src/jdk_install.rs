@@ -1376,7 +1376,8 @@ pub fn show_metadata_failed_dialog(parent: HWND, min_java: u16, error_detail: &s
 pub fn show_error_dialog(parent: HWND, title: &str, _main: &str, content: &str) {
     // `title` is the title-bar text; the dialog body reads
     // `failure.heading` / `failure.subheading` from
-    // dialogs.toml (or the caller-supplied overrides). `content`
+    // the localization bundle (or the caller-supplied overrides).
+    // `content`
     // is the multi-line error description the launcher already
     // formatted with placeholders filled.
     let _ = title;

@@ -27,7 +27,7 @@ pub struct MetadataFailedDialog<'a> {
     pub error_content: &'a str,
     /// Optional override for the info-box heading. `None` ⇒
     /// `[jdk_install.metadata_failed].info_heading` from
-    /// `dialogs.toml`, falling back to the module default.
+    /// the localization bundle, falling back to the module default.
     pub info_heading: Option<&'a str>,
     /// Optional override for the info-box subtext. `None` ⇒ TOML,
     /// falling back to the module default.

@@ -8,7 +8,7 @@
 //! both `main.rs` (when a `LauncherError` bubbles out of the platform
 //! runtime) and the external `snug_preview` binary (one-click dialog
 //! testing). It composes the `[launcher.error]` copy from
-//! `dialogs.toml` with a caller-supplied localized error string, then
+//! the localization bundle with a caller-supplied localized error string, then
 //! delegates to [`show`].
 //!
 //! All layout / paint / WndProc logic now lives in
@@ -34,15 +34,15 @@ pub struct ErrorDialog<'a> {
     pub error_content: &'a str,
     pub info_icon: InfoIcon,
     /// Optional override for the info-box heading. `None` ⇒
-    /// `[jdk_install.failure].info_heading` from `dialogs.toml`,
+    /// `[jdk_install.failure].info_heading` from the localization bundle,
     /// falling back to the module default.
     pub info_heading: Option<&'a str>,
     /// Optional override for the info-box subtext. `None` ⇒
-    /// `[jdk_install.failure].info_subtext` from `dialogs.toml`,
+    /// `[jdk_install.failure].info_subtext` from the localization bundle,
     /// falling back to the module default.
     pub info_subtext: Option<&'a str>,
     /// Optional override for the button label. `None` ⇒
-    /// `[jdk_install.failure].button_label` from `dialogs.toml`,
+    /// `[jdk_install.failure].button_label` from the localization bundle,
     /// falling back to the module default.
     pub button_label: Option<&'a str>,
     /// Optional HBITMAP (cast to `isize`) for the mascot slot. `0` ⇒
@@ -154,7 +154,7 @@ pub unsafe fn show(parent: HWND, dlg: ErrorDialog<'_>) -> i32 {
 
 /// Ergonomic public entry point for the launcher-runtime error dialog.
 ///
-/// Composes the `[launcher.error]` copy from `dialogs.toml` with a
+/// Composes the `[launcher.error]` copy from the localization bundle with a
 /// caller-supplied `localized_error` string (which `main.rs` builds via
 /// `error::localize_launcher_error`, but external callers — e.g. the
 /// `snug_preview` bin — can pass any already-localized string) and
