@@ -1,0 +1,236 @@
+# ============================================================================
+#  snug-localisations.en.txt — built-in English baseline
+# ============================================================================
+#
+#  This file is the canonical English baseline for every runtime string the
+#  Windows launcher emits. The snug CLI embeds it into every build, so a
+#  freshly built EXE works in English without any extra configuration.
+#
+#  Format
+#  ------
+#    key = value                # one entry per line
+#    # comment                  # anything after `#` is ignored
+#                                # blank lines are ignored too
+#
+#    value-side escapes:
+#      \n  newline
+#      \t  tab
+#      \r  carriage return
+#      \\  literal backslash
+#      \#  literal hash (so you can put one in a value)
+#      \=  literal equals
+#
+#    placeholder syntax (filled at lookup time):
+#      {name}  replaced with the named value the caller passes.
+#              Format specifiers like {name:.2} are NOT supported — apply
+#              them to the value in Rust before calling.
+#              Unknown placeholders are left as-is so a typo doesn't
+#              silently swallow text.
+#
+#  File naming
+#  -----------
+#    The locale tag (the part after the last `.` in the filename) is
+#    parsed by the launcher at runtime: `snug-localisations.en.txt` is the
+#    primary English tag, `snug-localisations.en-US.txt` is the US regional
+#    variant (overrides keys on top of `en`). Regional tags fall back to
+#    the primary subtag when the user's Windows UI language is `en-GB`,
+#    `en-AU`, etc.
+#
+#  Adding a new language
+#  ---------------------
+#    1. Copy this file to `snug-localisations.<your-tag>.txt` (e.g.
+#       `snug-localisations.de.txt`, `snug-localisations.fr.txt`).
+#    2. Translate every `value` field. Keep the keys identical — the
+#       launcher matches on key, not on line order.
+#    3. Pass it on the build line:  `snug app.jar --localization de.txt -o App.exe`
+#       (repeat `--localization` for multiple languages).
+#    4. The CLI warns at build time about any keys you missed compared
+#       to this English baseline — keep the list in sync.
+#
+#    Overriding only some keys in a regional variant is fine: keys you
+#    don't override fall through to the primary subtag and then to `en`,
+#    so you can ship `pt-BR.txt` with three changes on top of `pt.txt`
+#    without duplicating the whole bundle.
+# ============================================================================
+
+
+# ----------------------------------------------------------------------------
+# Launcher-runtime errors (`snug_launcher::LauncherError`)
+# ----------------------------------------------------------------------------
+err.zip = ZIP-Fehler: {0}
+err.self_path = Pfad der aktuellen ausführbaren Datei konnte nicht ermittelt werden: {0}
+err.io = E/A-Fehler: {0}
+err.jvm_not_found = In keinem der konfigurierten Suchorte wurde eine Java-{min_java}+-JVM gefunden
+err.jvm_too_old = JVM unter {path} gefunden, aber die Hauptversion {found} liegt unter dem erforderlichen Minimum {min_java}
+err.library_load = Laden von {library} fehlgeschlagen: {message}
+err.symbol_not_found = `{symbol}` nicht in {library} gefunden
+err.invalid_state = Interner Fehler: {0}
+err.jni_init = JNI-Initialisierungsargumente konnten nicht erstellt werden: {0}
+err.jni_create = JNI_CreateJavaVM fehlgeschlagen: {0}
+err.jni_attach = AttachCurrentThread fehlgeschlagen: {0}
+err.jni_invoke = JNI-Aufruf fehlgeschlagen: {0}
+err.no_main_class = Kein Main-Class im JAR-Manifest gefunden und keine --main-class-Überschreibung angegeben
+err.main_class_not_found = Main-Class `{0}` konnte von der JVM nicht gefunden oder geladen werden
+err.no_main_method = Main-Class `{0}` besitzt keine Methode `main(String[])`
+err.java_exception = Java-`main` hat eine Ausnahme ausgelöst: {0}
+err.unsupported_platform = Nicht unterstützte Plattform: snug-launcher läuft derzeit nur unter Windows
+err.format = Eingebetteter Payload: {0}
+
+
+# ----------------------------------------------------------------------------
+# Splash errors (`snug_launcher::splash::SplashError`)
+# ----------------------------------------------------------------------------
+splash.err.overflow = Splash-Abmessungen überlaufen usize
+splash.err.buffer_length = Länge des Splash-Pixel-Puffers stimmt nicht überein: {expected} Bytes erwartet (Breite × Höhe × 4), {actual} erhalten
+splash.err.empty = Splash-Breite oder -Höhe ist null
+splash.err.thread_spawn = Splash-Thread starten: {0}
+splash.err.bitmap = DIB-Sektion für den Splash erstellen
+splash.err.window = Splash-Fenster erstellen
+splash.err.update_layered = UpdateLayeredWindow
+
+# Splash window internal error log lines (eprintln-only, but still user-facing
+# when stderr is captured).
+splash.err.create_compatible_dc = CreateCompatibleDC hat NULL zurückgegeben
+splash.err.create_dib_section = CreateDIBSection hat NULL zurückgegeben
+splash.err.create_window = CreateWindowExW hat NULL zurückgegeben
+splash.err.update_layered_window = UpdateLayeredWindow hat 0 zurückgegeben
+
+# Splash window title (the text Windows shows when the splash is focused).
+splash.title = Snug Splash
+
+
+# ----------------------------------------------------------------------------
+# JDK install errors (`snug_launcher::jdk_install::JdkError`)
+# ----------------------------------------------------------------------------
+jdk.err.metadata_fetch = Adoptium-API: {0}
+jdk.err.no_metadata_for_version = Kein JDK {0} GA bei Adoptium gefunden
+jdk.err.bad_metadata_shape = Unerwartete Antwort von Adoptium: {0}
+jdk.err.bad_field = Fehlerhaftes Metadatenfeld {name}: {value}
+jdk.err.download = Download: {0}
+jdk.err.sha256_mismatch = SHA-256-Abweichung — angegeben {declared}, berechnet {computed}
+jdk.err.extract = Zip entpacken: {0}
+jdk.err.no_java_exe = Das entpackte JDK unter {0} enthält kein bin\java.exe — ungewöhnliche Zip-Struktur?
+jdk.err.io = E/A: {0}
+jdk.err.dialog = Dialog: {0}
+
+
+# ----------------------------------------------------------------------------
+# Launcher entry-point fallback (`snug_launcher::main`)
+# ----------------------------------------------------------------------------
+# Title shown in the MessageBoxW used when even the custom error window
+# can't run (self-path lookup failed, or the embedded payload is corrupt).
+#
+# ENGLISH-ONLY BY CONSTRUCTION. This key resolves via
+# `localize::lookup`, but both call sites (`LauncherError::SelfPath`
+# from `main.rs:40` and `LauncherError::Format` from `find_in_file`
+# at `main.rs:42`) fire *before* `localize::init()` runs at
+# `main.rs:60`. The merged user + built-in bundle is therefore never
+# wired up on this path, so this string always renders from the
+# baseline below and a shipped app cannot override it.
+#
+# Translators: don't bother translating this one. The keys that DO
+# localize on a working build are `err.*` (via
+# `error::localize_launcher_error`) and `launcher.bare_stub.*`.
+#
+# Deliberately not styled like the `[launcher.error]` dialog title:
+# the box is stock Win32 chrome on a broken-build path, so it reads
+# as tool identity rather than a product dialog. It does follow the
+# "— Snug" brand convention.
+launcher.fallback_messagebox.title = Launcher-Fehler — Snug
+
+# Bare-stub diagnostic — emitted to stderr when the EXE was built without
+# a payload. Also used by the messagebox fallback.
+launcher.bare_stub.no_payload = Kein SNUGEMBD-Payload in {path} gefunden
+launcher.bare_stub.hint = Dies ist die blanke Stub-Binärdatei. Mit `snug` bauen, um einen Payload einzubetten:
+launcher.bare_stub.command = snug your-app.jar -o app.exe
+
+# ----------------------------------------------------------------------------
+# Launcher-error dialog (`snug_launcher::dialogs::Dialogs`)
+# ----------------------------------------------------------------------------
+# The `[launcher.error]` frame the Java-launch failure dialog paints. The
+# body is `{error}` — the launcher fills it from the matching `err.*` key
+# above, so a localized error text flows into a localized frame.
+launcher.error.content = {error}
+
+
+# ----------------------------------------------------------------------------
+# Dialog chrome — the download / install / retry windows
+# ----------------------------------------------------------------------------
+# Titles, headings, subheadings, info-box copy and button labels for every
+# custom-painted window the launcher shows. These live here rather than in a
+# separate `dialogs.toml` so a `--localization <tag>` bundle translates the
+# whole window, not just the error text inside it.
+#
+# `snug_launcher::dialogs::Dialogs` is hand-assembled from these keys rather
+# than deserialized from a file, so the typed struct and its compile-checked
+# accessors (`dialogs().jdk_install.prompt.title`) survive the merge — only
+# the source of the strings moved. The practical consequence for you: a
+# localised app can now reword the chrome as well as the errors, e.g. "Acme
+# requires Java 25" instead of "Eclipse Temurin JDK was not found".
+#
+# Escaping reminder: these are single-line values. Real newlines are literal
+# `\n`; a literal `#` in a value must be written `\#`.
+
+jdk_install.prompt.title = Java-Laufzeit erforderlich — Snug
+jdk_install.prompt.main = Eclipse Temurin JDK wurde auf diesem Rechner nicht gefunden
+jdk_install.prompt.content = Diese Anwendung benötigt Java {version} oder höher. Snug kann das offizielle Eclipse Temurin {version} (~{size_mb} MB) herunterladen und an einem benutzerspezifischen Ort installieren oder die Download-Seite in Ihrem Browser öffnen.\n\nDer Download wird anhand des offiziellen SHA-256 überprüft.
+jdk_install.prompt.expanded = Direkte Download-URL (unten ebenfalls anklickbar):\n{url}\n\nSHA-256: {sha256}\n\nWas ist ein JDK? Java-Anwendungen benötigen zum Ausführen ein Java Development Kit. Eclipse Temurin ist die offizielle OpenJDK-Distribution der Eclipse-Adoptium-Arbeitsgruppe — dasselbe Java, das Sie von jedem beliebigen Anbieter erhalten, aber unter der GPL kostenlos neu erstellt und weiterverbreitet.
+jdk_install.prompt.button_download = Temurin {version} jetzt herunterladen
+jdk_install.prompt.button_open_browser = Download-Seite in meinem Browser öffnen
+jdk_install.prompt.button_cancel = Abbrechen
+
+jdk_install.metadata_failed.title = Adoptium nicht erreichbar — Snug
+jdk_install.metadata_failed.heading = Adoptium konnte nicht erreicht werden
+jdk_install.metadata_failed.subheading = Java {major} benötigt einen Download-Link von Adoptium, aber unsere Anfrage hat den Server nicht erreicht.
+jdk_install.metadata_failed.content = Technische Details:\n{error}
+jdk_install.metadata_failed.info_heading = Warum ist das passiert?
+jdk_install.metadata_failed.info_subtext = Ihre Netzwerkverbindung ist möglicherweise ausgefallen, oder die API von Adoptium ist vorübergehend nicht erreichbar.
+jdk_install.metadata_failed.button_open_browser = Download-Seite öffnen
+jdk_install.metadata_failed.button_cancel = Abbrechen
+
+jdk_install.progress.title = Laufzeit installieren
+jdk_install.progress.main = Laufzeit {version} (~{size_mb} MB)
+jdk_install.progress.content_initial = SHA-256 wird geprüft, sobald der Download abgeschlossen ist, gegen die Datei auf dem Datenträger.
+jdk_install.progress.heading = Laufzeit installieren
+jdk_install.progress.subtitle = Wir müssen eine Laufzeit installieren, damit die Anwendung gestartet werden kann
+jdk_install.progress.pct_label = {pct}%
+jdk_install.progress.phase_label = Laufzeit wird heruntergeladen (Windows x64)
+jdk_install.progress.detail_with_size = {done_mb} MB von {total_mb} MB ({speed_mb_s} MB/s)
+jdk_install.progress.detail_no_size = Wird heruntergeladen… ({pct}%)
+jdk_install.progress.detail_eta_seconds = Noch {n} Sekunden
+jdk_install.progress.detail_eta_second = Noch 1 Sekunde
+jdk_install.progress.detail_eta_done = Fast fertig
+jdk_install.progress.info_heading = Dies muss nur einmal heruntergeladen werden.
+jdk_install.progress.info_subtext = Diese Laufzeit wird für künftige Starts der Anwendung verwendet
+jdk_install.progress.cancel_button_during_download = Installieren
+
+jdk_install.failure.title = Fehler bei der Installation der Laufzeit
+jdk_install.failure.heading = Fehler bei der Installation der Laufzeit
+jdk_install.failure.subheading = Alle Download-Versuche sind erschöpft, wir versuchen, die Anwendung zu starten.
+jdk_install.failure.content =
+jdk_install.failure.info_heading = Was kann ich tun?
+jdk_install.failure.info_subtext = Prüfen Sie Ihre Netzwerkverbindung, oder laden Sie die Laufzeit manuell von adoptium.net herunter.
+jdk_install.failure.button_label = OK
+
+jdk_install.retry.title = Download fehlgeschlagen — Erneut versuchen?
+jdk_install.retry.heading = Der Download der Laufzeit wurde nicht abgeschlossen
+jdk_install.retry.subheading = Versuch {attempt} von {max_attempts} ist beim Download von Eclipse Temurin {version} fehlgeschlagen.
+jdk_install.retry.content = {error}
+jdk_install.retry.info_heading = Warum ist das passiert?
+jdk_install.retry.info_subtext = Eine häufige Ursache ist ein kurzzeitiger Netzausfall. Sie können es erneut versuchen oder abbrechen und es später noch einmal versuchen.
+jdk_install.retry.button_retry = Erneut versuchen
+jdk_install.retry.button_cancel = Abbrechen
+
+# Generic shells for the stock TaskDialog fallbacks (`show_error_dialog`,
+# `show_info_dialog`). The title/main come from the caller, so these are
+# effectively just the button labels.
+generic.error_dialog_ok = OK
+generic.info_dialog_continue = Weiter
+
+launcher.error.title = Anwendung konnte nicht gestartet werden — Snug
+launcher.error.heading = Anwendung konnte nicht gestartet werden
+launcher.error.subheading = Beim Starten der eingebetteten Anwendung ist etwas schiefgelaufen.
+launcher.error.info_heading = Was ist passiert?
+launcher.error.info_subtext = Der Launcher hat die eingebettete Anwendung erreicht, sie konnte jedoch nicht gestartet werden. Ausführliche Details finden Sie in der Protokolldatei in Ihrem lokalen AppData-Ordner.
+launcher.error.button_label = Schließen
+launcher.error.update_check_label = Auf eine neuere Version prüfen:

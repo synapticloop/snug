@@ -66,15 +66,16 @@ use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{HMODULE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, CreateFontW, DT_LEFT, DT_SINGLELINE, DrawTextW, EndPaint, HBRUSH, HFONT,
+    BeginPaint, CreateFontW, DT_LEFT, DT_SINGLELINE, DT_VCENTER, DrawTextW, EndPaint, HBRUSH, HFONT,
     PAINTSTRUCT, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AdjustWindowRectEx, CB_ADDSTRING, CB_GETCURSEL, CB_RESETCONTENT, CB_SETCURSEL, CBN_SELCHANGE,
-    CBS_DROPDOWNLIST, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, DrawIconEx,
-    GetDlgItem, GetMessageW, GetSystemMetrics, LoadCursorW, LoadImageW, MSG, PostThreadMessageW,
+    AdjustWindowRectEx, CB_ADDSTRING, CB_GETCOUNT, CB_GETCURSEL, CB_RESETCONTENT, CB_SETCURSEL,
+    CBN_SELCHANGE, CBS_DROPDOWNLIST, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
+    DrawIconEx, GetClientRect, GetDlgItem, GetMessageW, GetSystemMetrics, LoadCursorW, LoadImageW,
+    MSG, PostThreadMessageW,
     RegisterClassExW, SendMessageW, SM_CXSCREEN, SM_CYSCREEN, TranslateMessage, BS_PUSHBUTTON,
     DI_NORMAL, HICON, ICON_BIG, ICON_SMALL, IDC_ARROW, IMAGE_ICON, LR_SHARED, WM_CLOSE, WM_COMMAND,
     WM_CREATE, WM_DESTROY, WM_NCDESTROY, WM_PAINT, WM_QUIT, WM_SETICON, WNDCLASSEXW, WS_CAPTION,
@@ -86,6 +87,7 @@ use snug_launcher::dialogs;
 use snug_launcher::error_window;
 use snug_launcher::jdk_install::{self, ProgressShared};
 use snug_launcher::localize;
+use snug_launcher::log::log;
 use snug_launcher::progress_window;
 
 // ============================================================================
@@ -151,14 +153,37 @@ const SUBTITLE_Y: i32 = 152;
 /// buttons, so a translation can be flipped on before opening a dialog
 /// instead of requiring a rebuild.
 ///
-/// `BTN_FIRST_Y` sits below `COMBO_Y + COMBO_H`, which is why the
-/// button block starts where it does.
+/// The label and the dropdown share **one row**: the label sits to the
+/// left, vertically centred against the dropdown's closed field. The
+/// vertical centre is measured at paint time from the combo's own
+/// client rect rather than hardcoded, because the closed field's
+/// height follows the font — pinning a second row of constants to it
+/// drifts the moment the font or DPI changes.
+///
+/// `COMBO_X` is *derived* from the label's reserved width so the two
+/// can never overlap, and `BTN_FIRST_Y` sits below `COMBO_Y`, which is
+/// why the button block starts where it does.
 const COMBO_LABEL_TEXT: &str = "Language:";
-const COMBO_LABEL_Y: i32 = 180;
-const COMBO_X: i32 = BTN_X;
+const COMBO_LABEL_X: i32 = BTN_X;
+/// Reserved width for the label including a trailing gap. "Language:"
+/// is ~60 px in the 10pt Segoe UI used here, so 76 leaves a comfortable
+/// gutter without crowding the dropdown.
+const COMBO_LABEL_W: i32 = 76;
+const COMBO_X: i32 = COMBO_LABEL_X + COMBO_LABEL_W;
 const COMBO_Y: i32 = 200;
 const COMBO_W: i32 = 240;
-const COMBO_H: i32 = 34;
+/// Height passed to `CreateWindowExW`. For a `CBS_DROPDOWNLIST` combo
+/// this is the height of the **dropped list** — the closed field sizes
+/// itself to the font (measured at ~25 px for 10pt Segoe UI) and is
+/// unaffected by this value.
+///
+/// It has to fit *several* rows, not one. At 34 px the list was tall
+/// enough for exactly one 25 px entry, so opening it showed only the
+/// selected item with every other tag scrolled out of sight — `de`
+/// looked absent from the dropdown even though `CB_GETCOUNT` proved it
+/// was there. 140 px is ~5 rows, which covers a realistic locale set
+/// and leaves room to scroll rather than truncate silently.
+const COMBO_H: i32 = 140;
 /// Grows to fit a few more locales without touching the constants.
 const BTN_FIRST_Y: i32 = 248;
 
@@ -400,7 +425,22 @@ fn localisations() -> Vec<Localization> {
 /// The built-in English baseline is appended last unless the user
 /// supplied their own `en`, in which case theirs takes the slot.
 fn build_localisations(entries: &[std::path::PathBuf]) -> Result<Vec<Localization>, String> {
+    log(&format!(
+        "preview i18n: {} requested entry/entries: {}",
+        entries.len(),
+        entries
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
     let files = snug_format::discover_localization_files(entries).map_err(|e| e.to_string())?;
+    for path in &files {
+        log(&format!(
+            "preview i18n:   discovered {}",
+            path.display()
+        ));
+    }
 
     let mut user: Vec<Localization> = Vec::new();
     for path in &files {
@@ -419,11 +459,26 @@ fn build_localisations(entries: &[std::path::PathBuf]) -> Result<Vec<Localizatio
         }
         let bundle =
             Localization::parse(&tag, &text).map_err(|e| format!("parsing {}: {e}", path.display()))?;
+        log(&format!(
+            "preview i18n:   parsed tag `{tag}` from {} ({} key/value lines)",
+            path.display(),
+            bundle.entries.len()
+        ));
         user.push(bundle);
     }
 
     if user.iter().any(|b| b.tag == snug_format::DEFAULT_EN_TAG) {
         // The user's `en` is already the baseline; nothing to append.
+        log(
+            "preview i18n: user supplied an `en` bundle; built-in baseline NOT appended",
+        );
+        log(&format!(
+            "preview i18n: final dropdown order: [{}]",
+            user.iter()
+                .map(|b| b.tag.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
         return Ok(user);
     }
 
@@ -432,8 +487,41 @@ fn build_localisations(entries: &[std::path::PathBuf]) -> Result<Vec<Localizatio
         snug_format::DEFAULT_EN_TEXT,
     )
     .map_err(|e| format!("parsing the built-in English baseline: {e}"))?;
+    log(&format!(
+        "preview i18n: appended built-in baseline `{}`",
+        snug_format::DEFAULT_EN_TAG
+    ));
     user.push(builtin);
+    log(&format!(
+        "preview i18n: final dropdown order: [{}]",
+        user.iter()
+            .map(|b| b.tag.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
     Ok(user)
+}
+
+/// Which registry entry the preview should open with: the **English
+/// baseline**.
+///
+/// [`build_localisations`] guarantees an `en` entry always exists —
+/// either the user's own bundle (which takes the baseline slot) or the
+/// built-in one appended last. Defaulting to index 0 instead would pick
+/// whichever tag happens to sort first, and `de` sorts before `en`, so
+/// anyone with a German bundle landed on German copy and had to switch
+/// back by hand before previewing the untranslated dialogs. The
+/// baseline is what a shipped launcher falls back to, so it is the
+/// honest starting state: translations are something you opt *into*
+/// from the dropdown, not something you opt out of on launch.
+///
+/// The `unwrap_or(0)` is defensive only — `build_localisations` can't
+/// return a list without an `en`.
+fn default_index(bundles: &[Localization]) -> usize {
+    bundles
+        .iter()
+        .position(|b| b.tag == snug_format::DEFAULT_EN_TAG)
+        .unwrap_or(0)
 }
 
 /// Install a registry and make `index` the active language.
@@ -453,12 +541,23 @@ fn activate_localisations(bundles: Vec<Localization>, index: usize) {
 fn select_language(index: usize) {
     let bundles = localisations();
     if bundles.is_empty() {
+        log(&format!("preview i18n: select_language({index}) ignored — registry empty"));
         return;
     }
     let chosen = bundles
         .get(index.min(bundles.len() - 1))
         .cloned()
         .unwrap_or_else(|| bundles[0].clone());
+    log(&format!(
+        "preview i18n: select_language({index}) -> tag `{}` ({} key/value lines), chain now [{}]",
+        chosen.tag,
+        chosen.entries.len(),
+        bundles
+            .iter()
+            .map(|b| b.tag.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
     localize::set_bundles(std::slice::from_ref(&chosen));
 }
 
@@ -608,7 +707,14 @@ fn main() {
             std::process::exit(2);
         }
     };
-    activate_localisations(bundles, 0);
+    // Open on the English baseline rather than the first tag found —
+    // see `default_index` for why index 0 was the wrong choice.
+    let start = default_index(&bundles);
+    log(&format!(
+        "preview i18n: default_index -> {start} (tag `{}`)",
+        bundles[start].tag
+    ));
+    activate_localisations(bundles, start);
 
     unsafe {
         // Capture the launcher main thread id up front so the
@@ -768,7 +874,8 @@ unsafe extern "system" fn wndproc(
             if !combo.is_null() {
                 SendMessageW(combo, WM_SETFONT, hfont as usize, 1);
                 SendMessageW(combo, CB_RESETCONTENT, 0, 0);
-                for bundle in localisations() {
+                let bundles = localisations();
+                for bundle in &bundles {
                     SendMessageW(
                         combo,
                         CB_ADDSTRING,
@@ -776,8 +883,21 @@ unsafe extern "system" fn wndproc(
                         wide(&bundle.tag).as_ptr() as isize,
                     );
                 }
-                // Pre-select whatever `main` already activated.
-                SendMessageW(combo, CB_SETCURSEL, 0, 0);
+                // Pre-select whatever `main` already activated. Both
+                // sides derive the index the same way, so the combo
+                // and the live bundle chain can't disagree.
+                let start = default_index(&bundles);
+                SendMessageW(combo, CB_SETCURSEL, start as usize, 0);
+                let added = SendMessageW(combo, CB_GETCOUNT, 0, 0);
+                log(&format!(
+                    "preview i18n: combo filled - CB_GETCOUNT={added}, CB_SETCURSEL={start} (tag `{}`); items: [{}]",
+                    bundles.get(start).map(|b| b.tag.as_str()).unwrap_or("<none>"),
+                    bundles
+                        .iter()
+                        .map(|b| b.tag.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
             }
 
             // Body buttons. Labels + control IDs come from the
@@ -883,20 +1003,42 @@ unsafe extern "system" fn wndproc(
                 DT_LEFT | DT_SINGLELINE,
             );
 
-            // 3. Language label — sits directly above the dropdown.
+            // 3. Language label — to the LEFT of the dropdown, on the
+            //    same row and vertically centred against it. The
+            //    band is the combo's own client rect (its closed
+            //    field sizes itself to the font, so asking beats
+            //    hardcoding a second set of Y constants that would
+            //    drift on any font or DPI change). `DT_VCENTER`
+            //    centres the text in that band; the rect is clipped
+            //    to the label's reserved width so a long label can
+            //    never bleed under the dropdown.
             SetTextColor(hdc, 0x00606060);
+            let combo = GetDlgItem(hwnd, ID_COMBO_LANGUAGE as i32);
+            let mut combo_band = RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: COMBO_H,
+            };
+            if !combo.is_null() {
+                let mut cr: RECT = std::mem::zeroed();
+                if GetClientRect(combo, &mut cr) != 0 && cr.bottom > cr.top {
+                    combo_band.top = COMBO_Y + cr.top;
+                    combo_band.bottom = COMBO_Y + cr.bottom;
+                }
+            }
             let mut rect_combo_label = RECT {
-                left: COMBO_X,
-                top: COMBO_LABEL_Y,
-                right: LAUNCHER_W - COMBO_X,
-                bottom: COMBO_LABEL_Y + 20,
+                left: COMBO_LABEL_X,
+                top: combo_band.top,
+                right: COMBO_X,
+                bottom: combo_band.bottom,
             };
             DrawTextW(
                 hdc,
                 wide(COMBO_LABEL_TEXT).as_ptr(),
                 -1,
                 &mut rect_combo_label,
-                DT_LEFT | DT_SINGLELINE,
+                DT_LEFT | DT_SINGLELINE | DT_VCENTER,
             );
 
             SelectObject(hdc, prev_font);
@@ -1388,6 +1530,58 @@ mod tests {
             bundles[0].get("launcher.error.button_label"),
             Some("Dismiss")
         );
+    }
+
+    #[test]
+    fn the_preview_opens_on_english_not_the_first_tag_found() {
+        // Regression guard: `de` sorts before `en`, so an index-0
+        // default made every preview open in German. The dropdown and
+        // the live chain must both land on the baseline.
+        let dir = tmpdir();
+        std::fs::write(dir.join("snug-localisations.de.txt"), "x = 1\n").unwrap();
+        std::fs::write(dir.join("snug-localisations.en.txt"), "x = 2\n").unwrap();
+
+        let bundles = build_localisations(&[dir]).expect("de + en");
+        let tags: Vec<&str> = bundles.iter().map(|b| b.tag.as_str()).collect();
+        assert_eq!(tags, ["de", "en"], "both bundles stay selectable");
+
+        let idx = default_index(&bundles);
+        assert_eq!(bundles[idx].tag, "en", "must open on English");
+        assert_ne!(idx, 0, "index 0 is the German bundle here");
+    }
+
+    #[test]
+    fn the_baseline_wins_over_any_tag_that_sorts_after_it() {
+        // Not just a `de`-beats-`en` accident: the *baseline* is the
+        // default, whatever else is in the list.
+        let dir = tmpdir();
+        for tag in ["fr", "zh-CN", "ja"] {
+            std::fs::write(dir.join(format!("snug-localisations.{tag}.txt")), "x = 1\n").unwrap();
+        }
+        let bundles = build_localisations(&[dir]).expect("three bundles");
+        let idx = default_index(&bundles);
+        assert_eq!(bundles[idx].tag, "en");
+    }
+
+    #[test]
+    fn default_index_falls_back_to_the_first_entry_without_english() {
+        // Defensive only — `build_localisations` always supplies an
+        // `en` — but the function must not panic on one.
+        let bundles = vec![
+            Localization::parse("fr", "x = 1\n").unwrap(),
+            Localization::parse("ja", "x = 2\n").unwrap(),
+        ];
+        assert_eq!(default_index(&bundles), 0);
+    }
+
+    #[test]
+    fn the_language_label_and_dropdown_share_one_row() {
+        // The label must sit to the left of the combo, and the combo's
+        // x must be derived from the label's reserved width so the two
+        // can't overlap when the label text changes.
+        assert!(COMBO_X > COMBO_LABEL_X, "combo starts right of the label");
+        assert_eq!(COMBO_X, COMBO_LABEL_X + COMBO_LABEL_W);
+        assert!(COMBO_LABEL_W > 60, "must fit \"Language:\" at 10pt");
     }
 
     #[test]

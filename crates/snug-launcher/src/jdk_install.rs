@@ -471,7 +471,6 @@ pub(crate) fn find_best_icon_hicon(cx: i32, cy: i32) -> Option<HICON> {
     unsafe {
         let hinst = GetModuleHandleW(std::ptr::null());
         if hinst.is_null() {
-            crate::log::log("find_best_icon_hicon: GetModuleHandleW returned NULL");
             return None;
         }
 
@@ -480,31 +479,21 @@ pub(crate) fn find_best_icon_hicon(cx: i32, cy: i32) -> Option<HICON> {
         // by `rcedit` and similar tools).
         let name_w: Vec<u16> = "MAINICON".encode_utf16().chain(std::iter::once(0)).collect();
         let hres_named = FindResourceW(hinst, name_w.as_ptr(), RT_GROUP_ICON as *const u16);
-        let hres_id = if hres_named.is_null() {
-            let r = FindResourceW(hinst, 1usize as *const u16, RT_GROUP_ICON as *const u16);
-            crate::log::log(&format!(
-                "find_best_icon_hicon: FindResourceW('MAINICON', RT_GROUP_ICON) returned NULL; id=1 fallback returned {}",
-                if r.is_null() { "NULL" } else { "non-NULL" }
-            ));
-            r
+        let hres = if hres_named.is_null() {
+            FindResourceW(hinst, 1usize as *const u16, RT_GROUP_ICON as *const u16)
         } else {
-            crate::log::log("find_best_icon_hicon: FindResourceW('MAINICON', RT_GROUP_ICON) succeeded");
             hres_named
         };
-        let hres = if hres_named.is_null() { hres_id } else { hres_named };
         if hres.is_null() {
-            crate::log::log("find_best_icon_hicon: no RT_GROUP_ICON entry found; EXE has no icon");
             return None;
         }
 
         let hmem = LoadResource(hinst, hres);
         if hmem.is_null() {
-            crate::log::log("find_best_icon_hicon: LoadResource returned NULL");
             return None;
         }
         let pdata = LockResource(hmem);
         if pdata.is_null() {
-            crate::log::log("find_best_icon_hicon: LockResource returned NULL");
             return None;
         }
 
@@ -517,20 +506,12 @@ pub(crate) fn find_best_icon_hicon(cx: i32, cy: i32) -> Option<HICON> {
         // with a 2-byte RT_ICON id; the entry is therefore 14 bytes, not
         // the 16-byte ICONDIRENTRY Windows uses for .ico files on disk.
         let pbytes = pdata as *const u8;
-        let reserved = (pbytes as *const u16).read_unaligned();
-        let icon_type = (pbytes.add(2) as *const u16).read_unaligned();
         let count = (pbytes.add(4) as *const u16).read_unaligned() as usize;
-        crate::log::log(&format!(
-            "find_best_icon_hicon: ICONDIR reserved={} type={} count={}",
-            reserved, icon_type, count
-        ));
         if count == 0 {
             return None;
         }
 
         let mut best_id: u16 = 0;
-        let mut best_w: u32 = 0;
-        let mut best_h: u32 = 0;
         let mut best_diff: u32 = u32::MAX;
         for i in 0..count {
             let entry = pbytes.add(6 + i * 14); // 14-byte stride for `editpe`'s layout
@@ -540,26 +521,14 @@ pub(crate) fn find_best_icon_hicon(cx: i32, cy: i32) -> Option<HICON> {
             let h = if h_raw == 0 { 256 } else { h_raw };
             let id = (entry.add(12) as *const u16).read_unaligned();
             let diff = ((w as i32 - cx).abs() + (h as i32 - cy).abs()) as u32;
-            crate::log::log(&format!(
-                "find_best_icon_hicon: entry[{}] {}x{} id={}",
-                i, w, h, id
-            ));
             if diff < best_diff {
                 best_diff = diff;
                 best_id = id;
-                best_w = w;
-                best_h = h;
             }
         }
         if best_id == 0 {
-            crate::log::log("find_best_icon_hicon: no usable entry in ICONDIR");
             return None;
         }
-
-        crate::log::log(&format!(
-            "find_best_icon_hicon: picking RT_ICON id={} ({}x{}) for target {}x{}",
-            best_id, best_w, best_h, cx, cy
-        ));
 
         // RT_ICON contains either PNG-compressed pixels or a DIB, not
         // a complete ICO file. Let Windows decode either representation.
@@ -569,31 +538,18 @@ pub(crate) fn find_best_icon_hicon(cx: i32, cy: i32) -> Option<HICON> {
             RT_ICON as *const u16,
         );
         if hres_icon.is_null() {
-            crate::log::log(&format!(
-                "find_best_icon_hicon: FindResourceW(RT_ICON id={}) returned NULL",
-                best_id
-            ));
             return None;
         }
         let bytes = SizeofResource(hinst, hres_icon);
         if bytes == 0 {
-            crate::log::log(&format!(
-                "find_best_icon_hicon: SizeofResource(RT_ICON id={}) returned 0",
-                best_id
-            ));
             return None;
         }
         let hmem_icon = LoadResource(hinst, hres_icon);
         if hmem_icon.is_null() {
-            crate::log::log(&format!(
-                "find_best_icon_hicon: LoadResource(RT_ICON id={}) returned NULL",
-                best_id
-            ));
             return None;
         }
         let pbits = LockResource(hmem_icon);
         if pbits.is_null() {
-            crate::log::log("find_best_icon_hicon: LockResource on RT_ICON returned NULL");
             return None;
         }
 
@@ -610,16 +566,8 @@ pub(crate) fn find_best_icon_hicon(cx: i32, cy: i32) -> Option<HICON> {
             LR_SHARED,
         );
         if hicon.is_null() {
-            crate::log::log(&format!(
-                "find_best_icon_hicon: CreateIconFromResourceEx(id={}, {}x{}, {} bytes) returned NULL",
-                best_id, cx, cy, bytes
-            ));
             None
         } else {
-            crate::log::log(&format!(
-                "find_best_icon_hicon: CreateIconFromResourceEx succeeded (id={}, {}x{}, {} bytes)",
-                best_id, cx, cy, bytes
-            ));
             Some(hicon)
         }
     }

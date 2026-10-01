@@ -313,9 +313,25 @@ by accident.
   `IntoIterator`, so all its behaviour is unit-tested without
   spawning a process. Its Language dropdown lists every bundle it
   found with the built-in English baseline last, unless the user
-  supplied their own `en` — same replacement rule as a build. Its help
-  text and dialog list are generated from `DIALOG_BUTTONS` so neither
-  can drift.
+  supplied their own `en` — same replacement rule as a build. It
+  **opens on the baseline**, resolved by `default_index` and never by
+  hardcoding index 0: tags arrive in `discover_localization_files`
+  filename-sorted order, so `de` sorts before `en` and an index-0
+  default silently made every preview open in German while the closed
+  combo — the only thing visible until you click it — showed just
+  `de`. `main` and `WM_CREATE` both call `default_index`, so the
+  combo and the live bundle chain cannot disagree. Its help text and
+  dialog list are generated from `DIALOG_BUTTONS` so neither can
+  drift. The label and the dropdown share one row: `COMBO_X` is
+  derived from `COMBO_LABEL_W` so they can't overlap, and the label
+  is vertically centred against the combo's *measured* client rect
+  (`GetClientRect` + `DT_VCENTER`) because the closed field's height
+  follows the font — a second set of Y constants would drift on any
+  font or DPI change. `COMBO_H` is the height of the **dropped list**,
+  not of the closed field, and it has to fit several rows: at 34 px
+  (two 17 px item heights, less borders) the list showed only the
+  selected tag with every other locale clipped away, which reads as
+  "that bundle is missing" even though `CB_GETCOUNT` proved it loaded.
 - Profile `release` is tuned for tiny binaries (`opt-level = "z"`, LTO,
   `panic = "abort"`, stripped). The launcher should be ~hundreds of KB
   not megabytes.
