@@ -52,7 +52,8 @@ use windows_sys::Win32::Graphics::Gdi::{
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, DrawIconEx, DI_NORMAL, GetMessageW, HICON,
+    AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, DrawIconEx, DI_NORMAL,
+    GetMessageW, HICON,
     GetSystemMetrics, KillTimer, LoadIconW, MSG, PostQuitMessage,
     RegisterClassExW, SendMessageW, SetTimer, SetWindowTextW, SetWindowLongPtrW,
     GetWindowLongPtrW, TranslateMessage, CW_USEDEFAULT, IDCANCEL, ICON_BIG, IDI_INFORMATION,
@@ -97,12 +98,13 @@ const TIMER_ID: usize = 1;
 const TIMER_MS: u32 = 200;
 
 const WINDOW_W: i32 = 640;
-// Aligned with the rest of the family (`modal_window::WINDOW_H = 320`).
-// The progress / phase / detail rows above the info box still fit —
-// the extra 20 px of vertical breathing room pushes the info box to
-// the canonical 220 px Y position used by the other dialogs.
-const WINDOW_H: i32 = 320;
-
+/// Height of the client area, derived from the lowest element — the
+/// info box — plus a bottom margin, matching the rest of the family.
+/// `modal_window` has an extra optional link row below its box, so its
+/// derived height is 20 px larger; both grow together when
+/// `INFO_BOX_H` does. The progress / phase / detail rows above the box
+/// are unaffected, since the box is pinned to the canonical 220 px Y.
+const WINDOW_H: i32 = INFO_BOX_Y + INFO_BOX_H + 26;
 const MARGIN: i32 = 16;
 const MASCOT_X: i32 = MARGIN;
 const MASCOT_Y: i32 = MARGIN;
@@ -136,7 +138,9 @@ const INFO_BOX_W: i32 = WINDOW_W - MARGIN * 3;
 // Aligned with `modal_window::INFO_BOX_Y` so the progress dialog
 // shares the same family silhouette as the other dialogs.
 const INFO_BOX_Y: i32 = 220;
-const INFO_BOX_H: i32 = 50;
+/// Sized for the heading plus **two** subtext lines. Aligned with
+/// modal_window::INFO_BOX_H; see that file for the derivation.
+const INFO_BOX_H: i32 = 74;
 const INFO_PAD: i32 = 8;
 // Aligned with `modal_window::INFO_ICON_SIZE`. The 16 px size was
 // already the family default; this dialog was using the smaller
@@ -154,6 +158,10 @@ const INFO_ICON_SIZE: i32 = 16;
 const INFO_ICON_Y_OFFSET: i32 = INFO_PAD + 2;
 const INFO_HEADING_Y_OFFSET: i32 = INFO_PAD - 2;
 const INFO_SUBTEXT_Y_OFFSET: i32 = INFO_PAD + 20;
+/// One subtext row, with the second line derived from it -- see
+/// modal_window::INFO_SUBTEXT_H.
+const INFO_SUBTEXT_H: i32 = 16;
+const INFO_SUBTEXT2_Y_OFFSET: i32 = INFO_SUBTEXT_Y_OFFSET + INFO_SUBTEXT_H + 2;
 const INFO_TEXT_X: i32 = INFO_BOX_X + INFO_PAD + INFO_ICON_SIZE + 28;
 const INFO_TEXT_W: i32 = INFO_BOX_W - (INFO_TEXT_X - INFO_BOX_X) - INFO_PAD;
 
@@ -172,6 +180,7 @@ const IDC_DETAIL_RIGHT: i32 = 1007;
 const IDC_INFO_ICON: i32 = 1008;
 const IDC_INFO_HEADING: i32 = 1009;
 const IDC_INFO_SUBTEXT: i32 = 1010;
+const IDC_INFO_SUBTEXT2: i32 = 1011;
 
 const IDOK_I32: i32 = 1;
 const IDCANCEL_I32: i32 = 2;
@@ -269,6 +278,7 @@ struct ProgressState {
     hwnd_info_icon: HWND,
     hwnd_info_heading: HWND,
     hwnd_info_subtext: HWND,
+    hwnd_info_subtext2: HWND,
     hwnd_cancel: HWND,
     /// One HFONT per text element, all created from the per-element
     /// `*_PT` / `*_WEIGHT` constants near the top of the file. Today
@@ -284,6 +294,7 @@ struct ProgressState {
     hfont_detail_right: HFONT,
     hfont_info_heading: HFONT,
     hfont_info_subtext: HFONT,
+    hfont_info_subtext2: HFONT,
     started_at: Instant,
     /// Last phase value we wrote the cancel button label for. Lets
     /// `WM_TIMER` rewrite the label only on the 0→1 transition
@@ -390,6 +401,13 @@ unsafe extern "system" fn progress_wndproc(
                 FONT_FACE,
             );
             let hfont_info_subtext = create_font_pt(
+                INFO_SUBTEXT_PT,
+                INFO_SUBTEXT_WEIGHT,
+                false,
+                FONT_FACE,
+            );
+            // Third line shares the first subtext's font.
+            let hfont_info_subtext2 = create_font_pt(
                 INFO_SUBTEXT_PT,
                 INFO_SUBTEXT_WEIGHT,
                 false,
@@ -570,6 +588,28 @@ unsafe extern "system" fn progress_wndproc(
             );
             apply_font(hwnd_info_subtext, hfont_info_subtext);
 
+            // Third info-box line, rendered from the catalog key. This
+            // dialog reads its strings straight off `Dialogs` rather
+            // than through a caller-supplied struct, so there is no
+            // `Option` here — an empty key renders an empty control,
+            // which is the same thing to the user and keeps the two
+            // info-box renderers symmetrical.
+            let hwnd_info_subtext2 = CreateWindowExW(
+                0,
+                wide(STATIC_CLASS_NAME).as_ptr(),
+                wide(&d.jdk_install.progress.info_subtext_2).as_ptr(),
+                WS_CHILD | WS_VISIBLE | SS_LEFT,
+                INFO_TEXT_X,
+                INFO_BOX_Y + INFO_SUBTEXT2_Y_OFFSET,
+                INFO_TEXT_W,
+                INFO_SUBTEXT_H,
+                hwnd,
+                IDC_INFO_SUBTEXT2 as *mut _,
+                hinst,
+                std::ptr::null(),
+            );
+            apply_font(hwnd_info_subtext2, hfont_info_subtext2);
+
             let hwnd_cancel = CreateWindowExW(
                 0,
                 wide(BUTTON_CLASS_NAME).as_ptr(),
@@ -596,6 +636,7 @@ unsafe extern "system" fn progress_wndproc(
             (*state).hwnd_info_icon = hwnd_info_icon;
             (*state).hwnd_info_heading = hwnd_info_heading;
             (*state).hwnd_info_subtext = hwnd_info_subtext;
+            (*state).hwnd_info_subtext2 = hwnd_info_subtext2;
             (*state).hwnd_cancel = hwnd_cancel;
             (*state).hfont_heading = hfont_heading;
             (*state).hfont_subtitle = hfont_subtitle;
@@ -605,6 +646,7 @@ unsafe extern "system" fn progress_wndproc(
             (*state).hfont_detail_right = hfont_detail_right;
             (*state).hfont_info_heading = hfont_info_heading;
             (*state).hfont_info_subtext = hfont_info_subtext;
+            (*state).hfont_info_subtext2 = hfont_info_subtext2;
             (*state).started_at = Instant::now();
 
             SetTimer(hwnd, TIMER_ID, TIMER_MS, None);
@@ -956,6 +998,9 @@ unsafe extern "system" fn progress_wndproc(
                 if !(*raw).hfont_info_subtext.is_null() {
                     DeleteObject((*raw).hfont_info_subtext as _);
                 }
+                if !(*raw).hfont_info_subtext2.is_null() {
+                    DeleteObject((*raw).hfont_info_subtext2 as _);
+                }
                 // `mascot_hicon` is deliberately NOT destroyed here.
                 // Neither of its two sources is owned by the window:
                 // `find_best_icon_hicon` hands back an `LR_SHARED`
@@ -1243,6 +1288,7 @@ pub unsafe fn show(
         hwnd_info_icon: std::ptr::null_mut(),
         hwnd_info_heading: std::ptr::null_mut(),
         hwnd_info_subtext: std::ptr::null_mut(),
+        hwnd_info_subtext2: std::ptr::null_mut(),
         hwnd_cancel: std::ptr::null_mut(),
         hfont_heading: std::ptr::null_mut(),
         hfont_subtitle: std::ptr::null_mut(),
@@ -1252,6 +1298,7 @@ pub unsafe fn show(
         hfont_detail_right: std::ptr::null_mut(),
         hfont_info_heading: std::ptr::null_mut(),
         hfont_info_subtext: std::ptr::null_mut(),
+        hfont_info_subtext2: std::ptr::null_mut(),
         started_at: Instant::now(),
         // Start in phase 0 — `WM_TIMER`'s first tick will rewrite
         // the cancel button to "Install" when the worker hasn't
@@ -1267,11 +1314,38 @@ pub unsafe fn show(
     });
     let state_ptr = Box::into_raw(state_box);
 
-    // Centre on the primary monitor if `parent` is null.
+    // `WINDOW_W` / `WINDOW_H` describe the **client** area, like every
+    // other constant in this file. The styles below carry a caption,
+    // so the size handed to `CreateWindowExW` has to be the expanded
+    // window rect -- otherwise the title bar (~31 px) silently comes
+    // out of the client height and everything laid out near the bottom
+    // is clipped. That was invisible while the info box was 50 px tall
+    // and sat 20 px clear of the fold; growing the box for a third
+    // line pushed its last row off the client area. This is the same
+    // conversion `snug_preview` already does for its launcher window.
+    let mut client = RECT {
+        left: 0,
+        top: 0,
+        right: WINDOW_W,
+        bottom: WINDOW_H,
+    };
+    unsafe {
+        AdjustWindowRectEx(
+            &mut client,
+            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
+            0,
+            WS_EX_TOPMOST,
+        );
+    }
+    let win_w = client.right - client.left;
+    let win_h = client.bottom - client.top;
+
+    // Centre on the primary monitor if `parent` is null -- using the
+    // *window* size, which is what the user actually sees on screen.
     let (x, y) = if parent.is_null() {
         let sw = unsafe { GetSystemMetrics(SM_CXSCREEN) };
         let sh = unsafe { GetSystemMetrics(SM_CYSCREEN) };
-        ((sw - WINDOW_W) / 2, (sh - WINDOW_H) / 2)
+        ((sw - win_w) / 2, (sh - win_h) / 2)
     } else {
         (CW_USEDEFAULT, CW_USEDEFAULT)
     };
@@ -1284,8 +1358,8 @@ pub unsafe fn show(
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
             x,
             y,
-            WINDOW_W,
-            WINDOW_H,
+            win_w,
+            win_h,
             parent,
             std::ptr::null_mut(),
             hinst,

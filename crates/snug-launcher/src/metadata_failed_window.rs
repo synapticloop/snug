@@ -32,6 +32,9 @@ pub struct MetadataFailedDialog<'a> {
     /// Optional override for the info-box subtext. `None` ⇒ TOML,
     /// falling back to the module default.
     pub info_subtext: Option<&'a str>,
+    /// Optional third info-box line, same override-or-catalog
+    /// resolution as info_subtext above.
+    pub info_subtext_2: Option<&'a str>,
     /// Label for the primary button (left of the pair).
     pub primary_label: &'a str,
     /// Label for the secondary button (rightmost).
@@ -70,6 +73,17 @@ pub unsafe fn show(parent: HWND, dlg: MetadataFailedDialog<'_>) -> i32 {
             }
         });
 
+    let info_subtext_2 = dlg
+        .info_subtext_2
+        .map(str::to_string)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            if mfd.info_subtext_2.is_empty() {
+                None
+            } else {
+                Some(mfd.info_subtext_2.clone())
+            }
+        });
     let heading = if dlg.heading.is_empty() {
         mfd.heading.as_str()
     } else {
@@ -97,6 +111,7 @@ pub unsafe fn show(parent: HWND, dlg: MetadataFailedDialog<'_>) -> i32 {
                 info_icon: modal_window::InfoIcon::Warning,
                 info_heading: info_heading.as_deref(),
                 info_subtext: info_subtext.as_deref(),
+                info_subtext_2: info_subtext_2.as_deref(),
                 buttons: &buttons,
                 mascot_hbitmap: dlg.mascot_hbitmap,
                 link_url: None,

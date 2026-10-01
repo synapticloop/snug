@@ -107,6 +107,9 @@ pub fn show(
 				info_icon: modal_window::InfoIcon::Warning,
 				info_heading: None,
 				info_subtext: None,
+				// No info box on this dialog; the catalog key exists so
+				// adopting the third line is a one-word change.
+				info_subtext_2: None,
 				buttons: &buttons,
 				mascot_hbitmap,
 				link_url: None,

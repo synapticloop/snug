@@ -348,6 +348,30 @@ by accident.
   a GDI+ blit into a 32-bpp top-down DIB. Neither route links the
   `image` crate into the shipped binary, which would fight the size
   budget to serve a dev-only tool.
+  - **The info box carries a heading and up to two subtext lines.**
+    `INFO_BOX_H` is 74 px (was 50) and `info_subtext_2` is a real
+    catalog key on all five dialog groups, matching the existing
+    `info_heading` / `info_subtext` pattern. Only `launcher.error` and
+    `jdk_install.progress` render a box today — the other three pass
+    `None` — so adopting the line elsewhere is a one-field flip with
+    no catalog change. In `modal_window` the third line is
+    `Option<&str>` and its control *and font* are only allocated when
+    non-empty, so an empty line costs nothing; `progress_window` reads
+    its strings straight off `Dialogs` and always creates the control.
+  - **`WINDOW_W` / `WINDOW_H` are CLIENT dimensions in both dialog
+    modules, and the window size is derived from them** via
+    `AdjustWindowRectEx` before `CreateWindowExW`, exactly as
+    `snug_preview` does for its launcher window. This is not cosmetic:
+    the raw size used to be passed straight through, so the ~31 px
+    caption came out of the client area and every bottom-of-stack
+    element sat that much lower than its constant claimed. It was
+    invisible while the info box was 50 px and cleared the fold, and
+    only surfaced as a *clipped third line* once the box grew. The
+    heights are derived (`modal_window::WINDOW_H = LINK_Y + LINK_H +
+    12`, `progress_window::WINDOW_H = INFO_BOX_Y + INFO_BOX_H + 26`)
+    so growing `INFO_BOX_H` needs no second edit, and
+    `INFO_SUBTEXT2_Y_OFFSET` is derived from `INFO_SUBTEXT_Y_OFFSET`
+    for the same reason.
 - Profile `release` is tuned for tiny binaries (`opt-level = "z"`, LTO,
   `panic = "abort"`, stripped). The launcher should be ~hundreds of KB
   not megabytes.

@@ -25,6 +25,9 @@ pub struct RetryDialog<'a> {
     pub error_content: &'a str,
     pub info_heading: Option<&'a str>,
     pub info_subtext: Option<&'a str>,
+    /// Optional third info-box line, same override-or-catalog
+    /// resolution as info_subtext above.
+    pub info_subtext_2: Option<&'a str>,
     pub primary_label: &'a str,
     pub secondary_label: &'a str,
     pub mascot_hbitmap: isize,
@@ -60,6 +63,17 @@ pub unsafe fn show(parent: HWND, dlg: RetryDialog<'_>) -> i32 {
             }
         });
 
+    let info_subtext_2 = dlg
+        .info_subtext_2
+        .map(str::to_string)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            if retry.info_subtext_2.is_empty() {
+                None
+            } else {
+                Some(retry.info_subtext_2.clone())
+            }
+        });
     let heading = if dlg.heading.is_empty() {
         retry.heading.as_str()
     } else {
@@ -87,6 +101,7 @@ pub unsafe fn show(parent: HWND, dlg: RetryDialog<'_>) -> i32 {
                 info_icon: modal_window::InfoIcon::Error,
                 info_heading: info_heading.as_deref(),
                 info_subtext: info_subtext.as_deref(),
+                info_subtext_2: info_subtext_2.as_deref(),
                 buttons: &buttons,
                 mascot_hbitmap: dlg.mascot_hbitmap,
                 link_url: None,
