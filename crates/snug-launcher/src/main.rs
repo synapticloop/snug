@@ -71,9 +71,10 @@ fn run() -> Result<u32, LauncherError> {
 /// the info box.
 ///
 /// The dialog body uses [`error::localize_launcher_error`] so the
-/// error text is in the user's locale. Other dialog chrome (title,
-/// heading, info-box copy) still comes from `dialogs.toml` — that
-/// migration is a follow-up.
+/// error text is in the user's locale. The rest of the chrome (title,
+/// heading, info-box copy, button label) comes from the same bundle
+/// via [`crate::dialogs::dialogs`], so a `--localization <tag>` build
+/// localizes the whole window rather than just its contents.
 ///
 /// Two narrow cases fall back to `MessageBoxW`:
 /// 1. The error happened *before* the payload was decoded (e.g.

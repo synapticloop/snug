@@ -1,26 +1,35 @@
 //! User-facing dialog strings.
 //!
-//! Loaded from `dialogs.toml` at compile time via `include_str!` and
-//! parsed once into a `Dialogs` value. Edit the TOML file to change
-//! every user-visible string the launcher shows — no Rust
-//! recompilation logic needs to change.
+//! Sourced from the localization bundle — the same chain the error
+//! strings use — rather than a dedicated file. The strings live in
+//! `snug-format/assets/snug-localisations.en.txt` under
+//! `jdk_install.*`, `generic.*` and `launcher.error.*` keys, which
+//! means a `--localization <tag>` bundle translates the whole window
+//! rather than just the error text inside it.
 //!
-//! Callers substitute `{name}` placeholders with [`fill`], passing
-//! pre-formatted `&str` values. Format specs (like `{x:.1}`) must
-//! be applied to the value in Rust before substitution; the
-//! placeholders are matched literally as `{name}`.
+//! The [`Dialogs`] struct itself is unchanged and still what every
+//! caller reads: [`dialogs`] *assembles* it out of
+//! [`crate::localize::lookup`] calls instead of deserializing it.
+//! That is deliberate. Flat localization keys are bare string
+//! literals, and a typo in one resolves to the key itself at runtime
+//! — loud in the UI, but late. Keeping the struct preserves
+//! compile-checked field access at every call site
+//! (`dialogs().jdk_install.prompt.title`), so key literals appear in
+//! exactly one place — this constructor — and the
+//! `every_localize_key_is_in_the_baseline` test in
+//! [`crate::localize`] checks them against the baseline.
 //!
-//! If the TOML is malformed the launcher panics at first use with a
-//! clear error from `toml::de::Error` — fail loud, never silently
-//! drop a key.
+//! Placeholders use `{name}` syntax, substituted by [`fill`] with
+//! pre-formatted `&str` values. Format specs (like `{x:.1}`) must be
+//! applied to the value in Rust before substitution; placeholders are
+//! matched literally.
 
 use std::sync::OnceLock;
 
-use serde::Deserialize;
-
-/// Top-level container. Mirrors the `[...]` table structure of
-/// `dialogs.toml` exactly.
-#[derive(Debug, Clone, Deserialize)]
+/// Top-level container. Field names mirror the key prefixes in the
+/// localization catalog one-for-one — `dialogs.jdk_install.prompt`
+/// is `jdk_install.prompt.*`, and so on.
+#[derive(Debug, Clone)]
 pub struct Dialogs {
     pub jdk_install: JdkInstallDialogs,
     pub generic: GenericDialogs,
@@ -30,12 +39,12 @@ pub struct Dialogs {
 /// Launcher-runtime error strings (Java launch failures, JNI errors,
 /// Main-Class not found, Java `main` exceptions, etc.). Same physical
 /// window as `[jdk_install.failure]` — different copy.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct LauncherDialogs {
     pub error: LauncherErrorDialogs,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct LauncherErrorDialogs {
     pub title: String,
     pub heading: String,
@@ -51,7 +60,7 @@ pub struct LauncherErrorDialogs {
     pub update_check_label: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct JdkInstallDialogs {
     pub prompt: InstallPromptDialog,
     pub metadata_failed: MetadataFailedDialog,
@@ -60,7 +69,7 @@ pub struct JdkInstallDialogs {
     pub retry: RetryDialog,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct InstallPromptDialog {
     pub title: String,
     pub main: String,
@@ -71,7 +80,7 @@ pub struct InstallPromptDialog {
     pub button_cancel: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct MetadataFailedDialog {
     pub title: String,
     /// Heading — large bold line at the top of the dialog body.
@@ -94,7 +103,7 @@ pub struct MetadataFailedDialog {
     pub button_cancel: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ProgressDialog {
     pub title: String,
     pub main: String,
@@ -124,7 +133,7 @@ pub struct ProgressDialog {
     pub cancel_button_during_download: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct FailureDialog {
     /// Title-bar text.
     pub title: String,
@@ -147,7 +156,7 @@ pub struct FailureDialog {
 /// Popped between failed download attempts so the user can choose to
 /// retry up to `MAX_DOWNLOAD_ATTEMPTS` times before the terminal
 /// `failure` dialog takes over.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct RetryDialog {
     pub title: String,
     /// Heading — large bold line at the top of the dialog body.
@@ -168,7 +177,7 @@ pub struct RetryDialog {
     pub button_cancel: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct GenericDialogs {
     pub error_dialog_ok: String,
     pub info_dialog_continue: String,
@@ -176,18 +185,112 @@ pub struct GenericDialogs {
 
 static DIALOGS: OnceLock<Dialogs> = OnceLock::new();
 
-/// Lazily parsed and cached. The first call embeds the TOML via
-/// `include_str!`, parses it, and stores it for the lifetime of the
-/// process.
+/// Assemble and cache the dialog copy for the lifetime of the process.
+///
+/// Each field is one `localize::lookup` against the bundle chain, so
+/// the first call after `crate::localize::init` picks up the user's
+/// `--localization` bundles and the built-in English baseline backs
+/// every key they don't cover.
+///
+/// A key that resolves nowhere comes back as the key string itself
+/// (that's [`crate::localize`]'s deliberate "loud but non-fatal"
+/// contract), which would paint raw dotted text into a window. The
+/// `every_localize_key_is_in_the_baseline` test in
+/// [`crate::localize`] is what keeps that from shipping.
+///
+/// Every dialog is shown from [`crate::platform::run`] or later, which
+/// runs *after* `localize::init` — so a `--localization` build resolves
+/// translated chrome. Even if something reached this earlier, the
+/// `OnceLock` would cache whatever it saw, which is why the
+/// pre-`init` path in [`crate::localize::lookup`] falls back to the
+/// compiled-in English baseline rather than handing back bare keys:
+/// a cached `jdk_install.prompt.title` would be a permanently broken
+/// window, and a cached English string is merely untranslated.
 pub fn dialogs() -> &'static Dialogs {
     DIALOGS.get_or_init(|| {
-        let text = include_str!("../dialogs.toml");
-        toml::from_str(text).unwrap_or_else(|e| {
-            panic!(
-                "crates/snug-launcher/dialogs.toml is malformed: {e}\n\
-                 Fix the TOML and rebuild."
-            )
-        })
+        use crate::localize::lookup;
+        Dialogs {
+            jdk_install: JdkInstallDialogs {
+                prompt: InstallPromptDialog {
+                    title: lookup("jdk_install.prompt.title"),
+                    main: lookup("jdk_install.prompt.main"),
+                    content: lookup("jdk_install.prompt.content"),
+                    expanded: lookup("jdk_install.prompt.expanded"),
+                    button_download: lookup("jdk_install.prompt.button_download"),
+                    button_open_browser: lookup("jdk_install.prompt.button_open_browser"),
+                    button_cancel: lookup("jdk_install.prompt.button_cancel"),
+                },
+                metadata_failed: MetadataFailedDialog {
+                    title: lookup("jdk_install.metadata_failed.title"),
+                    heading: lookup("jdk_install.metadata_failed.heading"),
+                    subheading: lookup("jdk_install.metadata_failed.subheading"),
+                    content: lookup("jdk_install.metadata_failed.content"),
+                    info_heading: lookup("jdk_install.metadata_failed.info_heading"),
+                    info_subtext: lookup("jdk_install.metadata_failed.info_subtext"),
+                    button_open_browser: lookup("jdk_install.metadata_failed.button_open_browser"),
+                    button_cancel: lookup("jdk_install.metadata_failed.button_cancel"),
+                },
+                progress: ProgressDialog {
+                    title: lookup("jdk_install.progress.title"),
+                    main: lookup("jdk_install.progress.main"),
+                    content_initial: lookup("jdk_install.progress.content_initial"),
+                    heading: lookup("jdk_install.progress.heading"),
+                    subtitle: lookup("jdk_install.progress.subtitle"),
+                    pct_label: lookup("jdk_install.progress.pct_label"),
+                    phase_label: lookup("jdk_install.progress.phase_label"),
+                    detail_with_size: lookup("jdk_install.progress.detail_with_size"),
+                    detail_no_size: lookup("jdk_install.progress.detail_no_size"),
+                    detail_eta_seconds: lookup("jdk_install.progress.detail_eta_seconds"),
+                    detail_eta_second: lookup("jdk_install.progress.detail_eta_second"),
+                    detail_eta_done: lookup("jdk_install.progress.detail_eta_done"),
+                    info_heading: lookup("jdk_install.progress.info_heading"),
+                    info_subtext: lookup("jdk_install.progress.info_subtext"),
+                    cancel_button_during_download: {
+                        lookup("jdk_install.progress.cancel_button_during_download")
+                    },
+                },
+                failure: FailureDialog {
+                    title: lookup("jdk_install.failure.title"),
+                    heading: lookup("jdk_install.failure.heading"),
+                    subheading: lookup("jdk_install.failure.subheading"),
+                    // Intentionally empty in the baseline: `error_window`
+                    // treats an empty body as "use the module default".
+                    content: lookup("jdk_install.failure.content"),
+                    info_heading: lookup("jdk_install.failure.info_heading"),
+                    info_subtext: lookup("jdk_install.failure.info_subtext"),
+                    button_label: lookup("jdk_install.failure.button_label"),
+                },
+                retry: RetryDialog {
+                    title: lookup("jdk_install.retry.title"),
+                    heading: lookup("jdk_install.retry.heading"),
+                    subheading: lookup("jdk_install.retry.subheading"),
+                    content: lookup("jdk_install.retry.content"),
+                    info_heading: lookup("jdk_install.retry.info_heading"),
+                    info_subtext: lookup("jdk_install.retry.info_subtext"),
+                    button_retry: lookup("jdk_install.retry.button_retry"),
+                    button_cancel: lookup("jdk_install.retry.button_cancel"),
+                },
+            },
+            generic: GenericDialogs {
+                error_dialog_ok: lookup("generic.error_dialog_ok"),
+                info_dialog_continue: lookup("generic.info_dialog_continue"),
+            },
+            launcher: LauncherDialogs {
+                error: LauncherErrorDialogs {
+                    title: lookup("launcher.error.title"),
+                    heading: lookup("launcher.error.heading"),
+                    subheading: lookup("launcher.error.subheading"),
+                    // `{error}` — the launcher fills this from the
+                    // matching `err.*` key, which is how a localized
+                    // error body lands in a localized frame.
+                    content: lookup("launcher.error.content"),
+                    info_heading: lookup("launcher.error.info_heading"),
+                    info_subtext: lookup("launcher.error.info_subtext"),
+                    button_label: lookup("launcher.error.button_label"),
+                    update_check_label: lookup("launcher.error.update_check_label"),
+                },
+            },
+        }
     })
 }
 
@@ -210,14 +313,98 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dialogs_parse_cleanly() {
-        // Touching the lazy static forces parsing. If the TOML is
-        // broken (missing key, bad type, etc.) the `unwrap_or_else`
-        // inside `dialogs()` panics with the location of the failure.
+    fn dialogs_resolve_from_the_baseline() {
+        // Touching the lazy static forces assembly. If a key is missing
+        // from the baseline the value comes back as the key literal
+        // itself, so these assertions are really "no dotted key text
+        // leaked into a field".
         let d = dialogs();
         assert!(!d.jdk_install.prompt.title.is_empty());
         assert!(!d.jdk_install.prompt.button_download.is_empty());
         assert!(d.jdk_install.prompt.content.contains("{version}"));
+        assert_eq!(d.generic.error_dialog_ok, "OK");
+        assert!(d.launcher.error.title.ends_with("— Snug"));
+    }
+
+    #[test]
+    fn no_field_fell_back_to_a_bare_key() {
+        // A key that resolves nowhere comes back from `localize::lookup`
+        // as the key literal itself, so "this field is some known
+        // localization key" is an exact test for "this field is
+        // missing" — not a heuristic about dots and spaces.
+        let baseline = snug_format::Localization::parse(
+            snug_format::DEFAULT_EN_TAG,
+            snug_format::DEFAULT_EN_TEXT,
+        )
+        .expect("built-in baseline parses");
+        let is_a_key = |value: &str| baseline.get(value.trim()).is_some();
+
+        let d = dialogs();
+        for (name, value) in [
+            ("prompt.title", &d.jdk_install.prompt.title),
+            ("prompt.main", &d.jdk_install.prompt.main),
+            ("prompt.content", &d.jdk_install.prompt.content),
+            ("prompt.expanded", &d.jdk_install.prompt.expanded),
+            ("prompt.button_download", &d.jdk_install.prompt.button_download),
+            ("prompt.button_cancel", &d.jdk_install.prompt.button_cancel),
+            ("metadata_failed.title", &d.jdk_install.metadata_failed.title),
+            ("metadata_failed.content", &d.jdk_install.metadata_failed.content),
+            ("metadata_failed.button_cancel", &d.jdk_install.metadata_failed.button_cancel),
+            ("progress.title", &d.jdk_install.progress.title),
+            ("progress.pct_label", &d.jdk_install.progress.pct_label),
+            ("progress.detail_with_size", &d.jdk_install.progress.detail_with_size),
+            ("progress.cancel_during_download", &d.jdk_install.progress.cancel_button_during_download),
+            ("failure.title", &d.jdk_install.failure.title),
+            ("failure.button_label", &d.jdk_install.failure.button_label),
+            ("retry.title", &d.jdk_install.retry.title),
+            ("retry.content", &d.jdk_install.retry.content),
+            ("retry.button_retry", &d.jdk_install.retry.button_retry),
+            ("generic.error_dialog_ok", &d.generic.error_dialog_ok),
+            ("generic.info_dialog_continue", &d.generic.info_dialog_continue),
+            ("launcher.error.title", &d.launcher.error.title),
+            ("launcher.error.content", &d.launcher.error.content),
+            ("launcher.error.button_label", &d.launcher.error.button_label),
+            (
+                "launcher.error.update_check_label",
+                &d.launcher.error.update_check_label,
+            ),
+        ] {
+            assert!(
+                !is_a_key(value),
+                "field `{name}` fell back to a raw localization key: {value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn multi_line_bodies_decoded_from_escapes() {
+        // The old `dialogs.toml` used TOML triple-quoted strings; the
+        // catalog is single-line with `\n` escapes. This is the
+        // regression guard for that conversion.
+        let d = dialogs();
+        let prompt = &d.jdk_install.prompt.content;
+        assert!(
+            prompt.contains("\n\n"),
+            "prompt body lost its paragraph break: {prompt:?}"
+        );
+        assert!(prompt.contains("Java {version} or higher"));
+        assert!(!prompt.contains("\\n"), "escapes were not decoded");
+
+        let expanded = &d.jdk_install.prompt.expanded;
+        assert!(expanded.contains("\n{url}\n"), "url line lost: {expanded:?}");
+        assert!(expanded.contains("SHA-256: {sha256}"));
+
+        let failed = &d.jdk_install.metadata_failed.content;
+        assert!(failed.starts_with("Technical detail:\n{error}"), "{failed:?}");
+    }
+
+    #[test]
+    fn failure_content_is_intentionally_empty() {
+        // `error_window` treats an empty body as "fall back to the
+        // module default". If this ever stops being empty, that
+        // fallback path goes quiet — so pin it deliberately rather
+        // than by accident.
+        assert_eq!(dialogs().jdk_install.failure.content, "");
     }
 
     #[test]

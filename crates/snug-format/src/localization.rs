@@ -15,8 +15,10 @@
 //! tag (`en`, `en-US`, `de`, `pt-BR`, ...). Values are single-line;
 //! literal `\n` and `\t` escapes are decoded at lookup time, and
 //! placeholder names use `{name}` syntax. See
-//! `assets/snug-localisations.en.txt` for the canonical English
-//! baseline that every build embeds.
+//! `assets/snug-localisations.en.txt` in this crate for the canonical
+//! English baseline that every build embeds — it's exposed as
+//! [`DEFAULT_EN_TEXT`] and is the single `include_str!` site in the
+//! whole workspace, so the CLI and the launcher cannot drift.
 //!
 //! ## Priority
 //!
@@ -35,6 +37,27 @@
 //! `SnugPayload` sees the same shape.
 
 use serde::{Deserialize, Serialize};
+
+/// BCP 47 tag of the built-in English baseline bundle.
+pub const DEFAULT_EN_TAG: &str = "en";
+
+/// The canonical English baseline, embedded at compile time.
+///
+/// `assets/snug-localisations.en.txt` lives in *this* crate because
+/// both consumers of the wire format need it and there is nowhere
+/// else they can both reach without one of them reaching across a
+/// crate boundary on the filesystem. `snug-cli` embeds the baseline
+/// into every payload it builds; `snug-launcher` `include_str!`s it as
+/// its in-binary last-resort fallback for the bare-stub path. By
+/// embedding once here and re-exporting, drift between those two
+/// copies becomes structurally impossible rather than a convention
+/// the comments have to police.
+///
+/// The file's *name* is not consulted when parsing it — the tag is
+/// supplied explicitly as [`DEFAULT_EN_TAG`]. The name is kept
+/// identical to the bundles `snug --init-localizations` writes so it
+/// reads the same as a user-supplied English bundle.
+pub const DEFAULT_EN_TEXT: &str = include_str!("../assets/snug-localisations.en.txt");
 
 /// A single localization bundle.
 ///
