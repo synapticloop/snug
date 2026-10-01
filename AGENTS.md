@@ -54,7 +54,8 @@ snug/
 │   ├── snug-cli/         # CLI binary (clap)
 │   ├── snug-builder/     # produces the EXE (template-per-build v1, stub v2)
 │   ├── snug-launcher/    # runtime: JVM discovery, JNI load, splash, main invoke
-│   └── snug-format/      # shared embedded-payload types + codec
+│   ├── snug-format/      # shared embedded-payload types + codec
+│   └── snug-dropper/     # "Build with Snug" — beginner drag-and-drop shim
 ├── examples/
 └── tests/
 ```
@@ -63,6 +64,11 @@ A single-crate implementation is fine initially; split only when useful.
 **Slice 1 (this commit)** uses a 2-crate workspace (`snug-format` +
 `snug-cli`); the launcher and builder will be added as `snug-launcher` +
 `snug-builder`.
+
+`snug-dropper` is deliberately **not** folded into `snug-cli`. It is a
+GUI-subsystem Windows binary that shells out to `snug.exe`, so linking it
+would drag `clap` / `editpe` / `image` into a ~240 KB shim that needs
+none of them.
 
 ## Build host
 
@@ -133,6 +139,7 @@ precompiled `launcher-stub.exe` (v2).
 | 6 | Native splash renderer (PNG via GDI+/WIC)      | planned    |
 | 7 | Per-user cache + old-version cleanup           | **done** — cache entries expire. `cache::touch` stamps a cached JAR's mtime on **every** launch that uses it, and `cache::sweep` runs off a detached thread (rate-limited to once per 6h by a `.sweep` stamp file) to delete the ones no longer wanted. Policy: keep the most recently used `KEEP_RECENT` (3) entries — the running build's own entries count toward that depth — up to a per-app byte budget of `clamp(build_bytes * 3, 512 MB, 8 GB)`, and evict anything untouched for `MAX_UNUSED_AGE` (30 days) regardless of rank. The current build is never evicted; everything else is recoverable because a missing entry is re-extracted from the payload on the next launch. Sweeping is *not* triggered by the builder — `snug-cli` never writes to the cache, so the launcher is the sole owner of the policy. |
 | 8 | GitHub Actions CI (windows-latest release)     | planned    |
+| 9 | `Build with Snug` beginner drag-and-drop shim   | **done** — separate `crates/snug-dropper` crate. Drop a `.jar` or a folder of JARs on `Build with Snug.exe` and it runs `snug.exe --name "Example Application Name" --company "Example Company Pty Ltd" -o "<parent>/Example Application Name.exe" <input>` behind an indeterminate marquee on a worker thread, then reports with a `MessageBoxW`. Double-click opens a command window in the EXE's own folder. Two or more items, or one item that is neither a `.jar` nor a directory, get a dialog and *then* the terminal as a hand-off. A build failure or a missing `snug.exe` gets an error dialog and **no** terminal. Built as `snug-dropper.exe`; renamed to `Build with Snug.exe` at packaging time. Must ship in the same folder as `snug.exe`. |
 
 ## Versioning
 
@@ -441,6 +448,84 @@ by accident.
     text was silently clipped instead. Its hit-test rect is measured
     the same way as the buttons and was **zero-width** before the
     `DT_CALCRECT` fix, which made the link unclickable.
+- **`snug-dropper` ("Build with Snug") is a beginner utility, and every
+  decision follows from that.** It is its own crate, has no dependencies
+  except `windows-sys`, and is **not** part of the launcher or the CLI.
+  Four rules that look arbitrary but are not:
+  - **The application identity is hardcoded** to `--name "Example
+    Application Name"` / `--company "Example Company Pty Ltd"`, and the
+    output file is pinned to `Example Application Name.exe`. The point of
+    the literal word "Example" is that the artefact announces where it
+    came from instead of pretending to be a product. Don't "fix" this
+    into a config file or a prompt without asking.
+  - **The output lands in the dropped item's *parent*,** for a JAR *and*
+    for a folder. A dropped `build/libs` writes the EXE *beside* that
+    folder — writing inside it would put the artefact somewhere the next
+    `gradle clean` erases. The same parent is used as the child's working
+    directory, so a project-local `snug.options` is picked up for free.
+    Because of that, **ship no `snug.options` next to `snug.exe`**: the
+    exe-dir copy outranks the CWD copy and would silently beat every
+    project file.
+  - **A build failure gets an error dialog and no terminal.** The dialog
+    and `snug-build.log` are the only recourse on that path, so both have
+    to stand alone. The terminal is reserved for *"you dropped something a
+    starter can't do"* — which is the hand-off to the real tool.
+  - **It never routes a path through a shell.** `cmd.exe /k` is spawned
+    with the folder set as the process working directory, never
+    `cmd /c start /d "<dir>"`, which would parse the path as a command
+    line and break on `&`, `^`, or `(`.
+  - **It does not link `snug-launcher`, and that is a size decision as
+    much as a design one.** The launcher's dialogs are the *wrapped
+    app's runtime* surfaces (mascot, Adoptium progress with a Cancel
+    button, a "check for a newer version" link to the app's own repo) —
+    the wrong chrome to report a build failure with. Reusing them would
+    also take the binary from ~240 KB to >1.1 MB (`launcher-stub.exe`
+    is snug-launcher alone) by dragging in `jni`, `ureq`, `zip` and
+    `sha2`, and `snug-launcher`'s `build.rs` emits an *un-binned*
+    `cargo:rustc-link-arg` for its `MAINICON` — which rustc applies to
+    the final binary of any dependent, so the dropper would arrive with
+    snug's icon already linked in, fighting the dropper's own. If
+    branded chrome is ever wanted, the move is to extract the shared
+    window code into a `snug-ui` crate that both depend on — its own
+    slice, not a side effect of this tool.
+  - **Its icon is stamped, not compile-time embedded.**
+    `src/bin/stamp_dropper_icon.rs` puts `assets/snug-dropper.png` into
+    the built EXE via `editpe`, mirroring `snug-launcher`'s
+    `stamp_preview_icon`. The marquee then reads that same `MAINICON`
+    back out of its own file with `LoadImageW` + `WM_SETICON`, because a
+    custom-painted window gets no EXE icon for free (the `MessageBoxW`
+    dialogs do). So one stamp covers Explorer, the taskbar, Alt-Tab,
+    the marquee, and every message box. **The source may be any size
+    ≥256 px** — `editpe` (with its `images` feature) downscales to
+    `[256, 128, 48, 32, 24, 16]` with Lanczos3 before embedding, so a
+    1024 px PNG is *not* carried whole. Measured on identical artwork:
+    118,272 bytes added from a 1024 px source vs 112,640 from a 256 px
+    one — a 5% difference that is resampling noise, not dead weight.
+    1024 px is the better source regardless, since the 16/24/32 px
+    entries downscale from real detail instead of being upscaled.
+- **A drag-and-drop needs no drag-drop API.** Windows launches the target
+  EXE with the dropped paths appended to its command line, so
+  `argv[1..]` *is* the drop and "double-clicked" is the empty case. That
+  makes the whole mode decision a pure function
+  (`decide::decide_with` takes an injectable classifier, so the table is
+  tested without touching disk) and keeps the bin to `#![cfg(windows)]`
+  while the lib stays cross-platform — `cargo test --workspace` still
+  passes on the macOS / Linux dev boxes AGENTS.md assumes.
+- **A stale `WM_QUIT` silently eats the next modal dialog.** The dropper's
+  marquee loop ends itself, so its `WM_DESTROY` handler must **not** call
+  `PostQuitMessage`: the message stays in the thread queue, and
+  `MessageBoxW` runs its own modal loop over that same queue — it sees
+  the stale quit, tears itself down, and returns immediately. Symptom was
+  the success and error dialogs flashing for one frame while the process
+  exited 0. This is invisible to unit tests (the dialogs are modal
+  Win32 surfaces a harness can't drive) and was caught only by running the
+  real binary and polling `EnumWindows`.
+- **`build::summarise` reports the *last* `anyhow` cause, not the
+  first.** `snug` prints failures as `eprintln!("snug: {err:?}")`, so the
+  chain runs outermost-context-first and originating-error-last. Leading
+  with the head of that chain pointed a beginner at a manifest when the
+  real problem was that the file was not a JAR at all. The full chain
+  still goes to the log.
 - Profile `release` is tuned for tiny binaries (`opt-level = "z"`, LTO,
   `panic = "abort"`, stripped). The launcher should be ~hundreds of KB
   not megabytes.
@@ -458,6 +543,17 @@ manifest parsing and payload assembly in `src/manifest.rs` and
 `tests/init_modes.rs` (these spawn the real binary in a temp CWD —
 the CWD-relative default isn't observable from a unit test without
 mutating process-global state).
+
+`snug-dropper` has unit tests for the decision table, the argument
+vector, and the stderr summariser in-crate, plus
+`crates/snug-dropper/tests/end_to_end.rs`, which drives a **real**
+`snug.exe` against `assets/snug-javafx-demo.jar` and asserts the EXE
+actually lands on disk. That test skips (rather than fails) when
+`snug.exe` hasn't been built, because `cargo test -p snug-dropper` alone
+doesn't build it — `cargo test --workspace` does. **The dialogs and the
+marquee are not covered by any test**: they are modal Win32 surfaces a
+harness cannot drive without blocking forever. Verify them by running the
+real binary (see the `WM_QUIT` note above).
 
 ## Out-of-scope questions to defer
 

@@ -4,6 +4,7 @@ members = [
     "crates/snug-format",
     "crates/snug-cli",
     "crates/snug-launcher",
+    "crates/snug-dropper",
 ]
 
 [workspace.package]
@@ -11,7 +12,7 @@ members = [
 # inherit it via `version.workspace = true`, so this is the only
 # place a bump is needed. See "Versioning" in AGENTS.md for the
 # increment rule (and the pre-1.0 ceiling).
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
@@ -38,6 +39,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Threading",
     "Win32_Storage_FileSystem",
     "Win32_UI_Controls",
+    "Win32_UI_HiDpi",
     "Win32_UI_Input",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
