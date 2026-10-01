@@ -132,6 +132,7 @@ pub fn build_payload(cli: &Cli) -> Result<SnugPayload> {
         splash,
         behavior: LauncherBehavior {
             download_jdk: cli.download_jdk.into(),
+            cache_dir: cli.cache_dir.clone(),
             ..LauncherBehavior::default()
         },
     };
@@ -595,5 +596,59 @@ mod tests {
         let dir = base.join(unique);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    // --- --cache-dir ---------------------------------------------------
+
+    fn cli_for(cache_dir: Option<&str>) -> Cli {
+        use clap::Parser;
+        let jar = tempdir().join("demo.jar");
+        write_fake_jar(&jar, Some("com.example.Main"));
+        let mut argv = vec!["snug", jar.to_str().unwrap()];
+        if let Some(d) = cache_dir {
+            argv.push("--cache-dir");
+            argv.push(d);
+        }
+        Cli::parse_from(argv)
+    }
+
+    #[test]
+    fn cache_dir_defaults_to_none() {
+        let payload = build_payload(&cli_for(None)).unwrap();
+        assert_eq!(payload.config.behavior.cache_dir, None);
+    }
+
+    #[test]
+    fn cache_dir_lands_in_the_payload() {
+        let target = tempdir().join("custom-cache");
+        let payload = build_payload(&cli_for(Some(target.to_str().unwrap()))).unwrap();
+        assert_eq!(
+            payload.config.behavior.cache_dir.as_deref(),
+            Some(target.as_path())
+        );
+    }
+
+    #[test]
+    fn cache_dir_survives_a_payload_roundtrip() {
+        use snug_format::{decode, encode, SnugEmbedded};
+        let target = tempdir().join("roundtrip-cache");
+        let embedded = SnugEmbedded::new(build_payload(&cli_for(Some(target.to_str().unwrap()))).unwrap());
+        let decoded = decode(&encode(&embedded).unwrap()).unwrap();
+        assert_eq!(
+            decoded.payload.config.behavior.cache_dir.as_deref(),
+            Some(target.as_path())
+        );
+    }
+
+    #[test]
+    fn relative_cache_dir_is_rejected_at_the_cli() {
+        use clap::Parser;
+        let err = Cli::try_parse_from(["snug", "app.jar", "--cache-dir", "relative/path"])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("absolute"),
+            "expected an absolute-path complaint, got: {err}"
+        );
     }
 }
