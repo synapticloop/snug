@@ -367,11 +367,41 @@ by accident.
     element sat that much lower than its constant claimed. It was
     invisible while the info box was 50 px and cleared the fold, and
     only surfaced as a *clipped third line* once the box grew. The
-    heights are derived (`modal_window::WINDOW_H = LINK_Y + LINK_H +
-    12`, `progress_window::WINDOW_H = INFO_BOX_Y + INFO_BOX_H + 26`)
-    so growing `INFO_BOX_H` needs no second edit, and
+    whole family shares **one height** (351 px client), built from a
+    single anchor -- `INFO_BOX_Y = 220` -- plus the box, `BOTTOM_PAD`,
+    the button row, and `BOTTOM_PAD` again. `BOTTOM_PAD` appearing
+    twice is what makes the gap above the buttons provably equal to
+    the margin below them, rather than two numbers that drift apart.
     `INFO_SUBTEXT2_Y_OFFSET` is derived from `INFO_SUBTEXT_Y_OFFSET`
     for the same reason.
+  - **Buttons live in their own row below the info box**, right-aligned
+    and flowing left, with the **primary at the far right** (the
+    Windows task-dialog convention). They used to be fixed-width
+    constants vertically centred *inside* the box's band, overlapping
+    it. Widths are now measured per label, so a translated string of
+    any length fits without a width table to maintain. Two traps worth
+    remembering, both hit: `DrawTextW(DT_CALCRECT)` against an
+    all-zero rect clips to the empty rect and reports 0 px, and
+    `GetTextExtentPoint32W` -- the API to use instead, having no rect
+    to clip against -- rejects `c = -1` outright and returns FALSE.
+    Either mistake silently floors every button to the minimum width.
+    Buttons also get an **explicit HFONT** (9 pt Segoe UI) rather than
+    the system default: measuring the stock GUI font while the control
+    *renders* in the themed font under-measures by ~15% and clips the
+    label. `measure_button_width(hfont, label)` is shared between the
+    two modules so they cannot drift; the padding constant lives in
+    one place only.
+  - `INFO_BOX_W` is `WINDOW_W - MARGIN * 2`, giving the box the same
+    margin left and right. It used to be `MARGIN * 3`, leaving twice
+    the left margin as whitespace on the right (16 in, 32 out) because
+    the buttons once occupied that reserve.
+  - The optional "Check for a newer version" link row sits in the
+    `BOTTOM_PAD` gap between the box and the buttons, so `LINK_H` is
+    exactly that gap. Only `launcher.error` has one, so its
+    box-to-button spacing is visually tighter than the others. Its
+    hit-test rect is measured the same way as the buttons, and was
+    **zero-width** before: the same `DT_CALCRECT` bug meant neither
+    the label nor the URL measured, so the link was unclickable.
 - Profile `release` is tuned for tiny binaries (`opt-level = "z"`, LTO,
   `panic = "abort"`, stripped). The launcher should be ~hundreds of KB
   not megabytes.

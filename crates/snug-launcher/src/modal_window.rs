@@ -57,10 +57,13 @@
 
 use std::sync::OnceLock;
 
+use windows_sys::Win32::Foundation::SIZE;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, CreateCompatibleDC, CreateFontW, CreateRoundRectRgn, CreateSolidBrush, DeleteDC,
-    DeleteObject, DrawTextW, EndPaint, FillRect, FillRgn, FW_BOLD, FW_NORMAL, FW_SEMIBOLD,
+    DeleteObject, DrawTextW, EndPaint, FillRect, FillRgn, GetTextExtentPoint32W,
+    FW_BOLD, FW_NORMAL,
+    FW_SEMIBOLD,
     GetStockObject, GetTextMetricsW, HBRUSH, HDC, HFONT, NULL_BRUSH, PAINTSTRUCT, SelectObject,
     SetBkMode, SetTextColor, TEXTMETRICW, TRANSPARENT,
 };
@@ -71,9 +74,11 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     DrawIconEx, DI_NORMAL,
     GetMessageW, GetSystemMetrics, GetWindowLongPtrW, HICON, IDCANCEL, IDI_ERROR,
     IDI_INFORMATION, IDI_WARNING, LoadCursorW, LoadIconW, MSG, PostQuitMessage,
-    RegisterClassExW, SendMessageW, SetCursor, SetWindowLongPtrW, SM_CXSCREEN, SM_CYSCREEN,
+    RegisterClassExW, SendMessageW, SetCursor, SetWindowLongPtrW, SetWindowPos, SM_CXSCREEN,
+    SM_CYSCREEN, SWP_NOACTIVATE, SWP_NOZORDER,
     TranslateMessage, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, WM_CLOSE, WM_COMMAND, WM_CREATE,
-    WM_CTLCOLORSTATIC, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_NCDESTROY, WM_PAINT, WM_SETCURSOR,
+    WM_CTLCOLORSTATIC, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_NCDESTROY, WM_PAINT,
+    WM_SETCURSOR,
     WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_OVERLAPPED, WS_SYSMENU, WS_VISIBLE,
 };
 
@@ -96,7 +101,6 @@ const IDC_ARROW: *const u16 = 32512 as *const u16;
 // `SW_SHOWNORMAL` per winuser.h / shellapi.h.
 const SW_SHOWNORMAL: i32 = 1;
 // `DT_*` constants used by `DrawTextW`. Values from winuser.h.
-const DT_CALCRECT: u32 = 0x0000_0004;
 const DT_SINGLELINE: u32 = 0x0000_0020;
 const DT_NOPREFIX: u32 = 0x0000_0800;
 
@@ -128,13 +132,15 @@ pub const IDCANCEL_I32: i32 = 2;
 
 const CLASS_NAME: &str = "snug_modal_dialog_v1\0";
 const WINDOW_W: i32 = 640;
-/// Height of the client area, derived from the lowest element in the
-/// window (the optional link row) plus a bottom margin. The point of
-/// deriving it rather than hardcoding 320 is that the layout below is
-/// a stack — mascot, text, info box, link row — so growing
-/// `INFO_BOX_H` to fit a third line must not require a second edit
-/// here or the link row ends up overlapping the box.
-const WINDOW_H: i32 = LINK_Y + LINK_H + 12;
+/// Height of the **client** area, and the same value the whole dialog
+/// family uses (`progress_window` mirrors this stack exactly).
+///
+/// Derived upward from the info box rather than hardcoded, because the
+/// whole point of the redesign is that the two gaps below the box are
+/// equal: `INFO_BOX_Y` is the anchor both modules share, then the box,
+/// `BOTTOM_PAD`, the button row, and `BOTTOM_PAD` again. Change any
+/// one of those and the window follows.
+const WINDOW_H: i32 = INFO_BOX_Y + INFO_BOX_H + BOTTOM_PAD + BUTTON_H + BOTTOM_PAD;
 
 const MARGIN: i32 = 16;
 const MASCOT_X: i32 = MARGIN;
@@ -155,7 +161,11 @@ const CONTENT_Y: i32 = 108;
 const CONTENT_H: i32 = 88;
 
 const INFO_BOX_X: i32 = MARGIN;
-const INFO_BOX_W: i32 = WINDOW_W - MARGIN * 3;
+/// Symmetric: the box used to be `WINDOW_W - MARGIN * 3`, which left
+/// twice the left margin as whitespace on the right (16 px in, 32 px
+/// out) because the buttons used to sit inside the box's band. With the
+/// buttons moved to their own row the extra reserve has no owner.
+const INFO_BOX_W: i32 = WINDOW_W - MARGIN * 2;
 const INFO_BOX_Y: i32 = 220;
 /// Height of the light-blue info box. Sized for the heading plus
 /// **two** subtext lines: `INFO_HEADING_Y_OFFSET` .. plus two rows of
@@ -176,32 +186,49 @@ const INFO_SUBTEXT2_Y_OFFSET: i32 = INFO_SUBTEXT_Y_OFFSET + INFO_SUBTEXT_H + 2;
 const INFO_TEXT_X: i32 = INFO_BOX_X + INFO_PAD + INFO_ICON_SIZE + 28;
 const INFO_TEXT_W: i32 = INFO_BOX_W - (INFO_TEXT_X - INFO_BOX_X) - INFO_PAD;
 
-/// Primary button width when paired. Matches `error_window` 80 px.
-const BUTTON_PRIMARY_W_PAIR: i32 = 100;
-const BUTTON_SECONDARY_W_PAIR: i32 = 80;
-const BUTTON_TERTIARY_W_PAIR: i32 = 80;
-const BUTTON_SOLO_W: i32 = 80;
+/// Uniform padding around the bottom of the content stack. Used
+/// **twice** on purpose: once between the info box and the button row,
+/// and once between the button row and the bottom of the window. That
+/// is what makes the two gaps provably equal rather than equal by
+/// hand-tuning two numbers that would drift apart.
+const BOTTOM_PAD: i32 = 16;
+
+/// Buttons sit in their own row *below* the info box, right-aligned.
+/// Widths are measured from each label (see `measure_button_width`)
+/// rather than hardcoded, so a translated label of any length fits
+/// without a width table to maintain.
+/// Button captions get a real font of their own rather than the
+/// system default. That is not cosmetic: sizing a button from the
+/// stock GUI font while it *renders* in the themed UI font
+/// under-measures by ~15%, which clipped the longest labels. Applying
+/// and measuring the same HFONT makes the two agree by construction.
+const BUTTON_PT: i32 = 9;
+const BUTTON_WEIGHT: i32 = FW_NORMAL as i32;
 const BUTTON_H: i32 = 25;
+/// Symmetric horizontal padding inside a button, added to the measured
+/// text width.
+const BUTTON_PAD_X: i32 = 20;
+/// Floor, so a two-letter label like `OK` still looks like a button
+/// rather than a sliver.
+const BUTTON_MIN_W: i32 = 80;
 const BUTTON_GAP: i32 = INFO_PAD;
-const BUTTON_SECONDARY_X: i32 = WINDOW_W - MARGIN * 2 - BUTTON_SECONDARY_W_PAIR;
-const BUTTON_PRIMARY_X_PAIR: i32 =
-    BUTTON_SECONDARY_X - BUTTON_GAP - BUTTON_PRIMARY_W_PAIR;
-const BUTTON_TERTIARY_X: i32 =
-    BUTTON_PRIMARY_X_PAIR - BUTTON_GAP - BUTTON_TERTIARY_W_PAIR;
-const BUTTON_SOLO_X: i32 = WINDOW_W - MARGIN * 2 - BUTTON_SOLO_W;
-const BUTTON_Y: i32 = INFO_BOX_Y + (INFO_BOX_H - BUTTON_H) / 2;
+/// Right edge of the button group, and the leftward step between
+/// buttons.
+const BUTTON_RIGHT: i32 = WINDOW_W - MARGIN;
+const BUTTON_Y: i32 = INFO_BOX_Y + INFO_BOX_H + BOTTOM_PAD;
 
 /// Optional "Check for a newer version" link row, painted below the
 /// info box. Reserved only when [`ModalDialog::link_url`] is `Some`
 /// and non-empty. The URL is opened via
 /// `ShellExecuteW(..., "open", url, ...)`.
 ///
-/// `LINK_Y` is derived from the info box rather than hardcoded, so
-/// growing `INFO_BOX_H` for a third line cannot leave the link row
-/// overlapping it. `WINDOW_H` is in turn derived from the link row,
-/// which is what makes the whole stack move together.
-const LINK_Y: i32 = INFO_BOX_Y + INFO_BOX_H + 18;
-const LINK_H: i32 = 20;
+/// It shares the `BOTTOM_PAD` gap between the box and the buttons, so
+/// `LINK_H` is exactly that gap: this is the one dialog in the family
+/// with a link, the row is single-line, and the buttons are pinned to
+/// the window bottom, so the link has to fit the gap rather than
+/// claim a row of its own.
+const LINK_Y: i32 = INFO_BOX_Y + INFO_BOX_H;
+const LINK_H: i32 = BOTTOM_PAD;
 const LINK_TEXT_X: i32 = MARGIN;
 
 /// Width/height we ask for when loading the EXE icon for the mascot
@@ -439,6 +466,7 @@ pub unsafe fn show<'a>(parent: HWND, dlg: &'a ModalDialog<'a>) -> i32 {
         hfont_heading: std::ptr::null_mut(),
         hfont_subtitle: std::ptr::null_mut(),
         hfont_content: std::ptr::null_mut(),
+        hfont_button: std::ptr::null_mut(),
         hfont_info_heading: std::ptr::null_mut(),
         hfont_info_subtext: std::ptr::null_mut(),
         hfont_info_subtext2: std::ptr::null_mut(),
@@ -583,6 +611,7 @@ struct State {
     hfont_heading: HFONT,
     hfont_subtitle: HFONT,
     hfont_content: HFONT,
+    hfont_button: HFONT,
     hfont_info_heading: HFONT,
     hfont_info_subtext: HFONT,
     hfont_info_subtext2: HFONT,
@@ -682,6 +711,7 @@ unsafe extern "system" fn wndproc(
             let hfont_heading = create_font_pt(HEADING_PT, HEADING_WEIGHT, false);
             let hfont_subtitle = create_font_pt(SUBTITLE_PT, SUBTITLE_WEIGHT, false);
             let hfont_content = create_font_pt(CONTENT_PT, CONTENT_WEIGHT, false);
+            let hfont_button = create_font_pt(BUTTON_PT, BUTTON_WEIGHT, false);
             let hfont_info_heading =
                 create_font_pt(INFO_HEADING_PT, INFO_HEADING_WEIGHT, false);
             let hfont_info_subtext =
@@ -701,43 +731,44 @@ unsafe extern "system" fn wndproc(
             };
 
             // Compute the URL hit-test rect when the link row is
-            // visible. We use a memory DC + `DrawTextW(DT_CALCRECT)`
-            // to measure both halves in pixels: the label paints in
+            // visible. A memory DC plus `GetTextExtentPoint32W`
+            // measures both halves in pixels: the label paints in
             // `hfont_content` (same metrics as subtitle / body), the
             // URL paints in the underlined HFONT. `LINK_TEXT_X` +
             // label_width gives the URL's left edge; URL width is
-            // added to find the right edge. `LINK_Y` is the text
-            // top; bottom is `LINK_Y + tmHeight`.
+            // added to find the right edge. `LINK_Y` is the text top;
+            // bottom is `LINK_Y + tmHeight`.
+            //
+            // This used to use `DrawTextW(DT_CALCRECT)` against an
+            // all-zero rect, which reports 0 px -- so both widths were
+            // zero and the hit-test rect collapsed to a zero-width
+            // sliver, making the link unclickable. `GetTextExtentPoint32W`
+            // has no rect to clip against, and needs an explicit
+            // character count rather than -1.
             if !(&(*state).link_url_text).is_empty() {
                 let mem_dc = CreateCompatibleDC(std::ptr::null_mut());
                 if !mem_dc.is_null() {
                     let prev_label = SelectObject(mem_dc, hfont_content as _);
-                    let mut label_rc = RECT {
-                        left: 0,
-                        top: 0,
-                        right: 0,
-                        bottom: 0,
-                    };
                     let label_str = wide(&(*state).link_label_text);
-                    let _ = DrawTextW(
+                    let mut label_size = SIZE { cx: 0, cy: 0 };
+                    let _ = GetTextExtentPoint32W(
                         mem_dc,
                         label_str.as_ptr(),
-                        -1,
-                        &mut label_rc,
-                        DT_CALCRECT,
+                        (label_str.len() as i32) - 1,
+                        &mut label_size,
                     );
-                    let label_w = label_rc.right - label_rc.left;
+                    let label_w = label_size.cx;
 
                     SelectObject(mem_dc, hfont_link_url as _);
-                    let mut url_rc = RECT {
-                        left: 0,
-                        top: 0,
-                        right: 0,
-                        bottom: 0,
-                    };
                     let url_str = wide(&(*state).link_url_text);
-                    let _ = DrawTextW(mem_dc, url_str.as_ptr(), -1, &mut url_rc, DT_CALCRECT);
-                    let url_w = url_rc.right - url_rc.left;
+                    let mut url_size = SIZE { cx: 0, cy: 0 };
+                    let _ = GetTextExtentPoint32W(
+                        mem_dc,
+                        url_str.as_ptr(),
+                        (url_str.len() as i32) - 1,
+                        &mut url_size,
+                    );
+                    let url_w = url_size.cx;
 
                     let mut tm: TEXTMETRICW = std::mem::zeroed();
                     GetTextMetricsW(mem_dc, &mut tm);
@@ -915,115 +946,69 @@ unsafe extern "system" fn wndproc(
             };
 
             // ----- Buttons -----
-            let buttons_len = (&(*state).buttons).len();
-            let (hwnd_primary, hwnd_secondary, hwnd_tertiary) = match buttons_len {
-                1 => {
-                    let (_is_primary, label) = (&(*state).buttons)[0].clone();
-                    let hwnd_button = CreateWindowExW(
-                        0,
-                        wide(BUTTON_CLASS).as_ptr(),
-                        wide(label.as_str()).as_ptr(),
-                        WS_CHILD | WS_VISIBLE | (BS_DEFPUSHBUTTON as u32),
-                        BUTTON_SOLO_X,
-                        BUTTON_Y,
-                        BUTTON_SOLO_W,
-                        BUTTON_H,
-                        hwnd,
-                        IDC_BUTTON_PRIMARY as *mut _,
-                        hinst,
-                        std::ptr::null(),
-                    );
-                    (hwnd_button, std::ptr::null_mut(), std::ptr::null_mut())
-                }
-                2 => {
-                    let (_is_primary_0, label_0) = (&(*state).buttons)[0].clone();
-                    let (_is_primary_1, label_1) = (&(*state).buttons)[1].clone();
-                    let hwnd_primary = CreateWindowExW(
-                        0,
-                        wide(BUTTON_CLASS).as_ptr(),
-                        wide(label_0.as_str()).as_ptr(),
-                        WS_CHILD | WS_VISIBLE | (BS_DEFPUSHBUTTON as u32),
-                        BUTTON_PRIMARY_X_PAIR,
-                        BUTTON_Y,
-                        BUTTON_PRIMARY_W_PAIR,
-                        BUTTON_H,
-                        hwnd,
-                        IDC_BUTTON_PRIMARY as *mut _,
-                        hinst,
-                        std::ptr::null(),
-                    );
-                    let hwnd_secondary = CreateWindowExW(
-                        0,
-                        wide(BUTTON_CLASS).as_ptr(),
-                        wide(label_1.as_str()).as_ptr(),
-                        WS_CHILD | WS_VISIBLE | (BS_PUSHBUTTON as u32),
-                        BUTTON_SECONDARY_X,
-                        BUTTON_Y,
-                        BUTTON_SECONDARY_W_PAIR,
-                        BUTTON_H,
-                        hwnd,
-                        IDC_BUTTON_SECONDARY as *mut _,
-                        hinst,
-                        std::ptr::null(),
-                    );
-                    (hwnd_primary, hwnd_secondary, std::ptr::null_mut())
-                }
-                3 => {
-                    let (_is_primary_0, label_0) = (&(*state).buttons)[0].clone();
-                    let (_is_primary_1, label_1) = (&(*state).buttons)[1].clone();
-                    let (_is_primary_2, label_2) = (&(*state).buttons)[2].clone();
-                    let hwnd_tertiary = CreateWindowExW(
-                        0,
-                        wide(BUTTON_CLASS).as_ptr(),
-                        wide(label_2.as_str()).as_ptr(),
-                        WS_CHILD | WS_VISIBLE | (BS_PUSHBUTTON as u32),
-                        BUTTON_TERTIARY_X,
-                        BUTTON_Y,
-                        BUTTON_TERTIARY_W_PAIR,
-                        BUTTON_H,
-                        hwnd,
-                        IDC_BUTTON_TERTIARY as *mut _,
-                        hinst,
-                        std::ptr::null(),
-                    );
-                    let hwnd_primary = CreateWindowExW(
-                        0,
-                        wide(BUTTON_CLASS).as_ptr(),
-                        wide(label_0.as_str()).as_ptr(),
-                        WS_CHILD | WS_VISIBLE | (BS_DEFPUSHBUTTON as u32),
-                        BUTTON_PRIMARY_X_PAIR,
-                        BUTTON_Y,
-                        BUTTON_PRIMARY_W_PAIR,
-                        BUTTON_H,
-                        hwnd,
-                        IDC_BUTTON_PRIMARY as *mut _,
-                        hinst,
-                        std::ptr::null(),
-                    );
-                    let hwnd_secondary = CreateWindowExW(
-                        0,
-                        wide(BUTTON_CLASS).as_ptr(),
-                        wide(label_1.as_str()).as_ptr(),
-                        WS_CHILD | WS_VISIBLE | (BS_PUSHBUTTON as u32),
-                        BUTTON_SECONDARY_X,
-                        BUTTON_Y,
-                        BUTTON_SECONDARY_W_PAIR,
-                        BUTTON_H,
-                        hwnd,
-                        IDC_BUTTON_SECONDARY as *mut _,
-                        hinst,
-                        std::ptr::null(),
-                    );
-                    (hwnd_primary, hwnd_secondary, hwnd_tertiary)
-                }
-                _ => {
-                    // Out-of-range button count: render nothing. Caller
-                    // is responsible for validating input. Returned
-                    // handles stay null.
-                    let null = std::ptr::null_mut();
-                    (null, null, null)
-                }
-            };
+            // Content-sized, right-aligned, flowing **left**, with the
+            // primary action at the far right (the Windows task-dialog
+            // convention). Widths are measured from each label rather
+            // than assumed, so a translated string of any length fits
+            // without a width table to maintain -- which is the whole
+            // point of moving them out of fixed X/W constants.
+            //
+            // Buttons used to be vertically centred *inside* the info
+            // box's band, overlapping it. They now have their own row
+            // below it.
+            let mut created: [(HWND, i32); 3] =
+                [(std::ptr::null_mut(), 0); 3];
+            let button_ids = [IDC_BUTTON_PRIMARY, IDC_BUTTON_SECONDARY, IDC_BUTTON_TERTIARY];
+            let button_count = (&(*state).buttons).len().min(3);
+            for i in 0..button_count {
+                let (is_primary, label) = (&(*state).buttons)[i].clone();
+                let style = if is_primary {
+                    BS_DEFPUSHBUTTON as u32
+                } else {
+                    BS_PUSHBUTTON as u32
+                };
+                // Created at x = 0 and repositioned below, once its
+                // width is known.
+                let hwnd_button = CreateWindowExW(
+                    0,
+                    wide(BUTTON_CLASS).as_ptr(),
+                    wide(label.as_str()).as_ptr(),
+                    WS_CHILD | WS_VISIBLE | style,
+                    0,
+                    BUTTON_Y,
+                    BUTTON_MIN_W,
+                    BUTTON_H,
+                    hwnd,
+                    button_ids[i] as *mut _,
+                    hinst,
+                    std::ptr::null(),
+                );
+                apply_font(hwnd_button, hfont_button);
+                let w = measure_button_width(hfont_button, &label);
+                created[i] = (hwnd_button, w);
+            }
+
+            // Pack right to left: entry 0 (primary) hugs the right
+            // margin and each later entry steps left by its own width
+            // plus BUTTON_GAP, so the group is flush right whatever the
+            // label widths turn out to be.
+            let mut right = BUTTON_RIGHT;
+            for i in 0..button_count {
+                let (hwnd_button, w) = created[i];
+                SetWindowPos(
+                    hwnd_button,
+                    std::ptr::null_mut(),
+                    right - w,
+                    BUTTON_Y,
+                    w,
+                    BUTTON_H,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+                right -= w + BUTTON_GAP;
+            }
+
+            let (hwnd_primary, hwnd_secondary, hwnd_tertiary) =
+                (created[0].0, created[1].0, created[2].0);
 
             // Stash handles back into the state struct so the rest
             // of the WndProc can reach them via
@@ -1041,6 +1026,7 @@ unsafe extern "system" fn wndproc(
             (*state).hfont_heading = hfont_heading;
             (*state).hfont_subtitle = hfont_subtitle;
             (*state).hfont_content = hfont_content;
+            (*state).hfont_button = hfont_button;
             (*state).hfont_info_heading = hfont_info_heading;
             (*state).hfont_info_subtext = hfont_info_subtext;
             (*state).hfont_info_subtext2 = hfont_info_subtext2;
@@ -1340,6 +1326,9 @@ unsafe extern "system" fn wndproc(
                 if !(*raw).hfont_content.is_null() {
                     DeleteObject((*raw).hfont_content as _);
                 }
+                if !(*raw).hfont_button.is_null() {
+                    DeleteObject((*raw).hfont_button as _);
+                }
                 if !(*raw).hfont_info_heading.is_null() {
                     DeleteObject((*raw).hfont_info_heading as _);
                 }
@@ -1379,6 +1368,42 @@ fn wide(s: &str) -> Vec<u16> {
 fn apply_font(hwnd: HWND, hfont: HFONT) {
     unsafe {
         SendMessageW(hwnd, WM_SETFONT, hfont as usize, 1);
+    }
+}
+
+/// Width a button needs for `label`: the text as `hfont` renders it,
+/// plus symmetric padding, floored at [`BUTTON_MIN_W`].
+///
+/// Takes the font as an argument rather than asking the control
+/// (`WM_GETFONT`), because during `WM_CREATE` a freshly created
+/// `BUTTON` has no font of its own yet and the stock GUI font it
+/// would fall back to is the legacy GDI face -- visibly narrower than
+/// the themed font a button actually renders in. Measuring the very
+/// font we then apply makes the two agree by construction.
+///
+/// Also switched off `DrawTextW(DT_CALCRECT)`, which measured 0 px for
+/// every label: with an all-zero rect DrawText clips to the empty
+/// rect, and `GetTextExtentPoint32W` -- the API we want, since it has
+/// no rect to clip against -- rejects `c = -1` and returns FALSE.
+/// Either mistake silently floors every button to `BUTTON_MIN_W`.
+pub(crate) fn measure_button_width(hfont: HFONT, label: &str) -> i32 {
+    if hfont.is_null() {
+        return BUTTON_MIN_W;
+    }
+    unsafe {
+        let mem_dc = CreateCompatibleDC(std::ptr::null_mut());
+        if mem_dc.is_null() {
+            return BUTTON_MIN_W;
+        }
+        let prev = SelectObject(mem_dc, hfont as _);
+        let mut size = SIZE { cx: 0, cy: 0 };
+        let s = wide(label);
+        // Explicit character count, minus the NUL `wide` appended.
+        let count = (s.len() as i32) - 1;
+        let _ = GetTextExtentPoint32W(mem_dc, s.as_ptr(), count, &mut size);
+        SelectObject(mem_dc, prev);
+        let _ = DeleteDC(mem_dc);
+        (size.cx + BUTTON_PAD_X * 2).max(BUTTON_MIN_W)
     }
 }
 
