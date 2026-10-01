@@ -75,6 +75,11 @@ Developers are expected to be on macOS / Linux; the build target is
   `x86_64-pc-windows-gnu` Rust target installed via `rustup`.
 - **CI / releases:** GitHub Actions `windows-latest` runner, so
   Authenticode signing is available.
+- **Native Windows host:** no cross-compilation needed at all —
+  `cargo build --release -p snug-launcher` produces the stub directly
+  against the installed `x86_64-pc-windows-msvc` toolchain, and the
+  produced EXE can be launched locally to exercise the runtime
+  (extraction, JVM discovery, cache GC) against a real JDK.
 
 ```bash
 # one-time setup on a fresh Mac/Linux dev box
@@ -85,6 +90,12 @@ cargo install cargo-zigbuild --locked
 # build the precompiled stub (committed to bin/launcher-stub.exe)
 cargo zigbuild --target x86_64-pc-windows-gnu --release -p snug-launcher
 cp target/x86_64-pc-windows-gnu/release/snug-launcher.exe bin/launcher-stub.exe
+```
+
+```powershell
+# same thing on a native Windows host — no zigbuild
+cargo build --release -p snug-launcher
+Copy-Item target\release\snug-launcher.exe bin\launcher-stub.exe
 ```
 
 ## Embedded-payload format (`snug-format`)
@@ -115,12 +126,12 @@ precompiled `launcher-stub.exe` (v2).
 | # | Slice                                          | State      |
 |---|------------------------------------------------|------------|
 | 1 | CLI surface + embedded-payload format          | **done**   |
-| 2 | Windows launcher runtime (JVM discovery + JNI) | partial — payload self-scan, cache path, manifest lookup, JVM discovery (env / PATH / registry / common), jvm.dll discovery, and the bare-stub launcher binary are all wired and compile-tested. **Actual `JNI_CreateJavaVM` launch path is stubbed** and returns a `JniStub` error; the `jni` 0.22 invocation API needs Windows-machine validation before we wire it up. A 454 KB precompiled `bin/launcher-stub.exe` (PE32+ GUI x86-64) is committed. |
+| 2 | Windows launcher runtime (JVM discovery + JNI) | partial — payload self-scan, cache path, manifest lookup, JVM discovery (env / PATH / registry / common), jvm.dll discovery, and the bare-stub launcher binary are all wired and compile-tested. **Actual `JNI_CreateJavaVM` launch path is stubbed** and returns a `JniStub` error; the `jni` 0.22 invocation API needs Windows-machine validation before we wire it up. A ~1.1 MB precompiled `bin/launcher-stub.exe` (PE32+ GUI x86-64) is committed. |
 | 3 | snug-cli builder: load stub via `include_bytes!()`, append payload, stamp icon/version/manifest via `editpe` | **done** — `snug app.jar -o App.exe` produces a real Windows `.exe` end-to-end. `include_bytes!` of the committed stub + encoded payload concatenation is unit + integration tested. Resource stamping is in-process via the [`editpe`](https://github.com/Systemcluster/editpe) crate (pure Rust, BSD-2-Clause, cross-platform — same code path runs on macOS, Linux, and Windows). `--icon` accepts PNG or ICO; `--manifest <XML>` embeds an arbitrary application manifest. |
 | 4 | Stub-append v2 hardening (alignment, overlay vs append, sparse stubs), per-app resource stamping UX, CI on `windows-latest` to actually run the produced EXE against a real JDK | planned |
 | 5 | Windows version-resource stamping              | **done** — `editpe` stamps `VS_VERSIONINFO` (ProductName / CompanyName / FileDescription / LegalCopyright) plus `FixedFileInfo` (signature, file/product version, VFT_APP) into every produced EXE. `--manifest <XML>` covers the application manifest gap. Icon dimension / MUI / translation coverage is follow-up. |
 | 6 | Native splash renderer (PNG via GDI+/WIC)      | planned    |
-| 7 | Per-user cache + old-version cleanup           | planned    |
+| 7 | Per-user cache + old-version cleanup           | **done** — cache entries expire. `cache::touch` stamps a cached JAR's mtime on **every** launch that uses it, and `cache::sweep` runs off a detached thread (rate-limited to once per 6h by a `.sweep` stamp file) to delete the ones no longer wanted. Policy: keep the most recently used `KEEP_RECENT` (3) entries — the running build's own entries count toward that depth — up to a per-app byte budget of `clamp(build_bytes * 3, 512 MB, 8 GB)`, and evict anything untouched for `MAX_UNUSED_AGE` (30 days) regardless of rank. The current build is never evicted; everything else is recoverable because a missing entry is re-extracted from the payload on the next launch. Sweeping is *not* triggered by the builder — `snug-cli` never writes to the cache, so the launcher is the sole owner of the policy. |
 | 8 | GitHub Actions CI (windows-latest release)     | planned    |
 
 ## Versioning
@@ -159,7 +170,26 @@ by accident.
 - No `unsafe` in any crate. (`#![forbid(unsafe_code)]` is set in
   `snug-format` and `snug-cli`.)
 - Binary artefacts embedded in the launcher are referenced by their
-  SHA-256 digest — that digest is also the cache key.
+  SHA-256 digest — that digest is also the cache key. It is a
+  **content key, not an integrity check**: `ensure_cached` returns early
+  on `dest.exists()` and never re-hashes, so a corrupted extracted entry
+  is used as-is. Integrity of the embedded bytes is covered by the
+  payload's CRC32 at the EXE level.
+- **Multi-JAR builds key each JAR independently.** A directory input
+  produces one `EmbeddedFile` per `*.jar` (sorted by filename, non-
+  recursive), each with its own digest and its own cache directory. The
+  first entry sorted by filename is the "primary": it supplies the
+  `Main-Class` fallback and the log path. Because snug reports only
+  `jars[0]`'s digest (build output and `snug.log` alike), a rebuild that
+  changes only a later JAR is invisible in snug's own output even though
+  it is fully picked up on the classpath.
+- **`--cache-dir <DIR>` overrides the per-user cache root.** The field
+  (`LauncherBehavior::cache_dir`) predates the flag and was previously
+  unreachable — nothing set it, so every real build resolved to
+  `%LOCALAPPDATA%`. It is now a `value_parser`-validated absolute path:
+  the value is stamped into the payload and used at runtime on a machine
+  the builder never sees, so a relative path would silently resolve
+  against the end user's CWD.
 - All CLI flags follow the brief: see `crates/snug-cli/src/cli.rs` for
   the canonical surface. Note: clap's auto-generated `--version` flag
   is disabled (via `disable_version_flag = true`) so the brief's

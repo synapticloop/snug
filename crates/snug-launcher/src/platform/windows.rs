@@ -52,14 +52,69 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
     //    own sha256-keyed subdirectory so multi-JAR builds can have
     //    collisions-free filenames and the launcher can reuse cached
     //    entries when only some of the JARs change.
+    //
+    //    Every JAR is then *touched*, not just the primary. The mtime is
+    //    the launcher's only record of when an entry was last needed, and
+    //    the periodic sweep evicts anything stale — so touching only
+    //    `jars[0]` would let a shared library JAR age out despite
+    //    constant use, and every launch would re-copy it in full.
     let cache_root = cache::cache_root(&config.app, config.behavior.cache_dir.as_deref());
     let mut cached_paths: Vec<PathBuf> = Vec::with_capacity(jars.len());
     for jar in jars {
         let dest = cache::cached_jar_path(&cache_root, &jar.sha256);
         ensure_cached(&dest, &jar.bytes)?;
+        if let Err(e) = cache::touch(&dest) {
+            // Non-fatal: the JAR is on disk and usable. It just won't be
+            // protected from the sweep, so it may be re-extracted later.
+            log::log(&format!(
+                "cache: could not touch {}: {e}",
+                dest.display()
+            ));
+        }
         cached_paths.push(dest);
     }
     let primary_jar_dest = cached_paths[0].clone();
+
+    // 1b. Kick off cache housekeeping on a detached thread.
+    //
+    //     Placed here, immediately after every JAR has been touched,
+    //     and deliberately *before* JVM discovery. Two constraints, both
+    //     load-bearing:
+    //
+    //     - After the touches, because the sweep reads those mtimes.
+    //       Running it earlier could evict an entry this very launch is
+    //       about to reuse, which would then be re-extracted at once —
+    //       defeating the point.
+    //     - Before JVM discovery, so a launch that never reaches the
+    //       JVM (no JDK, user cancels the download prompt) still cleans
+    //       up. Garbage collection shouldn't depend on the app
+    //       starting.
+    //
+    //     Nothing else writes to the cache root during launch, so it is
+    //     safe to run concurrently with everything that follows.
+    {
+        let root = cache_root.clone();
+        let current: std::collections::HashSet<String> =
+            jars.iter().map(|j| cache::hex_lower(&j.sha256)).collect();
+        let build_bytes: u64 = jars.iter().map(|j| j.bytes.len() as u64).sum();
+        std::thread::spawn(move || {
+            let now = std::time::SystemTime::now();
+            if !cache::should_sweep(&root, now) {
+                return;
+            }
+            let report = cache::sweep(&root, &current, build_bytes, now);
+            log::log(&format!(
+                "cache sweep: kept {}, removed {} ({} MB), {} error(s)",
+                report.kept,
+                report.removed.len(),
+                report.bytes_freed / (1024 * 1024),
+                report.errors.len()
+            ));
+            for e in &report.errors {
+                log::log(&format!("cache sweep error: {e}"));
+            }
+        });
+    }
 
     // 1a. Open the per-launch log next to the primary cached JAR.
     //     `init` truncates any prior session's file. Failures are
