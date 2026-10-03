@@ -411,6 +411,65 @@ pub fn fallback_cache_base() -> PathBuf {
     std::env::temp_dir()
 }
 
+/// The OS's own answer for "where do per-user **application data** go" —
+/// as distinct from caches, which the system is free to reclaim.
+///
+/// Same shape and same reasoning as [`platform_cache_base`]: asked of the
+/// platform rather than hardcoded, so a sandboxed home or a relocated user
+/// is followed.
+///
+/// This exists because macOS treats those two as different things and the
+/// difference matters. A `.app`'s own extracted JARs and logs are cache —
+/// if the system reclaims them, snug silently re-extracts and nothing is
+/// lost. An adopted JDK is a few hundred megabytes that took a real
+/// download; the system purging it and making the next launch pay for it
+/// again is a bug, not housekeeping. Hence `Library/Caches` for one and
+/// `Library/Application Support` for the other.
+#[cfg(windows)]
+pub fn platform_app_support_base() -> Option<PathBuf> {
+    // Deliberately the same answer as the cache base, so the existing
+    // Windows install path does not move. `%LOCALAPPDATA%` is per-user
+    // *and* per-machine, which is the property we want; the roaming
+    // `%APPDATA%` is not.
+    platform_cache_base()
+}
+
+#[cfg(target_os = "macos")]
+pub fn platform_app_support_base() -> Option<PathBuf> {
+    use objc2_foundation::NSHomeDirectory;
+
+    let home = NSHomeDirectory().to_string();
+    let home = home.trim_end_matches('/');
+    if home.is_empty() {
+        return None;
+    }
+    Some(
+        PathBuf::from(home)
+            .join("Library")
+            .join("Application Support"),
+    )
+}
+
+/// XDG's data home — `~/.local/share` — the Linux counterpart to
+/// `~/.cache`. Unchanged in the common case where XDG_DATA_HOME is unset.
+#[cfg(all(not(windows), not(target_os = "macos")))]
+pub fn platform_app_support_base() -> Option<PathBuf> {
+    std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("share"))
+        })
+}
+
+/// Last-resort root when the platform gives us nothing.
+pub fn fallback_app_support_base() -> PathBuf {
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home).join(".local").join("share");
+    }
+    std::env::temp_dir()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -450,6 +509,36 @@ mod tests {
 
         assert!(root.starts_with(&base), "{} not under {}", root.display(), base.display());
         assert!(root.ends_with("snug/SynapticLoop/Demo"), "got {}", root.display());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn app_support_base_is_application_support_not_caches() {
+        let support = platform_app_support_base().expect("Foundation should answer");
+        assert!(support.is_absolute(), "{} should be absolute", support.display());
+        assert!(
+            support.ends_with("Library/Application Support"),
+            "expected .../Library/Application Support, got {}",
+            support.display()
+        );
+        // The whole point of the split: the two roots must not be the
+        // same directory, or the JDK would land back in a place macOS
+        // may purge.
+        let cache = platform_cache_base().expect("Foundation should answer");
+        assert_ne!(
+            support,
+            cache,
+            "application support and caches must differ; both resolved to {}",
+            support.display()
+        );
+    }
+
+    #[test]
+    fn app_support_fallback_is_not_the_cache_fallback() {
+        let support = fallback_app_support_base();
+        let cache = fallback_cache_base();
+        assert_ne!(support, cache);
+        assert!(support.is_absolute());
     }
 
     #[test]

@@ -482,6 +482,19 @@ by accident.
   request. Windows assets are `.zip`, macOS assets `.tar.gz`, so
   `extract_jdk_archive` is split per platform and each side asserts the
   extension it expected.
+- **Caches and Application Support are different directories, and the
+  difference is load-bearing.** `cache::platform_cache_base()` answers
+  "where does reclaimable data go" (`%LOCALAPPDATA%`, `~/Library/Caches`,
+  `$XDG_CACHE_HOME`); `cache::platform_app_support_base()` answers "where
+  does durable per-user app data go" (`~/Library/Application Support`,
+  `$XDG_DATA_HOME`). macOS is the platform that makes the distinction
+  real, because it is allowed to purge `Caches` under disk pressure.
+  A reclaimed cache costs nothing — snug re-extracts the JARs and starts
+  a fresh log — but an adopted JDK is a few hundred megabytes behind a
+  real download, and re-paying that because the OS tidied up is a bug.
+  `jdk_install_root()` therefore uses app support on macOS while
+  `cache_root()` uses caches, and a test asserts the two resolve to
+  *different* directories so the split cannot silently collapse.
 - **The per-user cache base is asked of the OS, never hardcoded.**
   `cache::platform_cache_base` is `cfg`-split: `%LOCALAPPDATA%` via the
   Win32 API on Windows, `NSHomeDirectory() + Library/Caches` on macOS,

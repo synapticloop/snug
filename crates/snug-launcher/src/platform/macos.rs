@@ -494,16 +494,28 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
     Ok(exit_code as u32)
 }
 
-/// Root directory for cached JDK installations on macOS.
+/// Root directory for installed JDKs on macOS.
 ///
-/// Sits beside the app's own cache rather than inside it: the extracted
-/// JDKs are shared by every app snug has built on this machine, and must
-/// outlive any one app's cache entry — the app cache is swept by age and
-/// by byte budget, and an installed JDK is neither. Mirrors Windows'
-/// `%LOCALAPPDATA%\snug\jdk\`.
+/// `~/Library/Application Support/snug/jdk/`, **not** `Library/Caches`.
+///
+/// Two separate reasons, and they are independent:
+///
+/// 1. macOS is allowed to purge `Caches` under disk pressure. A reclaimed
+///    cache is fine for the extracted JARs and logs — snug silently
+///    re-extracts — but an adopted JDK is a few hundred megabytes behind a
+///    real download, and re-paying that because the OS tidied up is a bug.
+/// 2. The JDKs are shared by every app snug has built on this machine, so
+///    they must outlive any one app's cache entry. The per-app cache at
+///    `snug/<company>/<app>/` is swept by age and by byte budget, and an
+///    installed JDK is neither.
+///
+/// The location is asked of the platform via
+/// [`cache::platform_app_support_base`] rather than written out, so a
+/// sandboxed `.app` gets its container's support directory instead of
+/// the outer user's.
 fn jdk_install_root() -> PathBuf {
-    cache::platform_cache_base()
-        .unwrap_or_else(cache::fallback_cache_base)
+    cache::platform_app_support_base()
+        .unwrap_or_else(cache::fallback_app_support_base)
         .join("snug")
         .join("jdk")
 }
