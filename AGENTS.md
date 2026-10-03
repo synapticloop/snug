@@ -274,6 +274,56 @@ precompiled `launcher-stub.exe` (v2).
 | 10 | Native macOS / Linux `snug` CLI builds    | **done** — `cargo build --workspace` and `cargo test --workspace --lib --bins --tests` pass on macOS (283 tests), and the CLI produces a real `PE32+ executable (GUI) x86-64` end-to-end from a Mac. `scripts/build-macos.sh` stages two thin per-arch binaries into `release/macos-arm64/snug` and `release/macos-x86_64/snug` at a macOS 12.0 deployment floor — same binary name on every platform, platform in the directory, so docs never name two binaries. No universal2: macOS 27 is the last release with Rosetta 2, so arm64 is the future-proof slice and x86_64 only serves the four Intel models that top out at macOS 26. Windows-only surfaces are gated: the six Win32 GUI modules in `snug-launcher` use file-level `#![cfg(windows)]` (joining `jdk_install.rs` / `splash.rs`), while the three Windows-only *binaries* use per-item `#[cfg(windows)]` plus a real non-Windows `main`. `editpe` was made unconditional (pure-Rust PE parsing — `snug-cli` needs it to build EXEs anywhere) and `ureq` Windows-only. Homebrew tap / Developer ID notarization is follow-up; see "Build host". |
 | 11 | macOS launcher runtime (`libjvm.dylib` + JNI) | **done, verified against a real JDK on macOS.** `platform/macos.rs` mirrors `platform/windows.rs` step for step: cache extraction + sweep, log, `Main-Class` resolution, JVM discovery, `libjvm.dylib` load via the same `jni` 0.22 invocation API, and the `main(String[])` / JavaFX `Application.launch` dispatch. `tests/macos_launch_e2e.rs` compiles a real class with `javac`, packages it with `jar`, hands it to the launcher, and asserts the JVM actually runs it — it is skipped rather than failed when no JDK is present. **Not implemented:** splash, the Adoptium download flow, and error dialogs (all Win32); `DownloadJdkMode::Auto`/`Force` degrade to discovery-only and *log* that. The `.app` bundle emitter in `snug-cli` is the remaining piece. |
 
+## Backlog
+
+Deferred work, deliberately not done. Kept here rather than in
+`HANDOFF.md`, which is a dated session snapshot pinned to a specific
+commit — useful history, not a live list.
+
+**Windows**
+- **Refresh `bin/launcher-stub.exe` on a Windows host.** Run
+  `scripts\build-release.cmd`. Not urgent: every change since has been a
+  `cfg(windows)` no-op, so the committed stub is functionally current.
+  It is worth doing anyway as a proof that the committed binary really
+  came from the current source.
+- **Install `mingw-w64` and do a real Windows *link* build from macOS**
+  (`brew install mingw-w64` gives `dlltool` + `windres`). This is
+  *verification only* — the stub must still be built on Windows, per the
+  native-only policy. Today we have `cargo check --all-targets` for the
+  Windows target but no link, so a link-only problem would not be caught
+  from a Mac.
+- Note for whoever tries: a launcher cross-built from macOS gets **no
+  `MAINICON`**. `embed-resource` finds no resource compiler, emits no
+  `icon.lib` and no `cargo:rustc-link-arg`, and does not error — it
+  silently produces an iconless binary. That is another reason the stub
+  is a Windows build product.
+
+**macOS**
+- **The `.app` bundle emitter in `snug-cli`.** The launcher side is done
+  and verified; this is the packaging half: `Contents/MacOS` + `Contents/Resources`
+  layout, `Info.plist` (including `LSMinimumSystemVersion`, which should
+  track the 12.0 deployment floor), the `.icns`, and the arch-matched
+  launcher copy.
+- **Homebrew tap, or Developer ID + notarization.** Until one exists,
+  document `xattr -d com.apple.quarantine snug`. See "Build host".
+- **A fully dynamic macOS cache path.** Today the only hardcoded part is
+  the `Library/Caches` subpath. The completely dynamic answer is
+  `NSSearchPathForDirectoriesInDirectories`, which `objc2-foundation`
+  0.3.2 does not bind — it would mean hand-declared FFI plus the `objc2`
+  runtime, for the identical string. Revisit only if Apple actually
+  moves the location.
+
+**Docs**
+- **README section for running on macOS**, and a note that the release
+  layout is `release/<os>-<arch>/snug` so the binary name is the same
+  everywhere.
+
+**Tests**
+- Two `tempdir()` helpers still key uniqueness on `pid` + `as_nanos()`
+  and will eventually flake the same way the others did:
+  `jdk_install.rs` and `snug_preview/windows_impl.rs`. Both are
+  Windows-gated, so they cannot affect a macOS run.
+
 ## Versioning
 
 Snug is **pre-1.0 and stays that way until the project is declared
