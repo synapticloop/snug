@@ -41,8 +41,12 @@ pub const CACHED_JAR_NAME: &str = "app.jar";
 ///
 /// Resolution order:
 /// 1. Explicit override (passed via `behavior.cache_dir` or `app.cache_dir`).
-/// 2. `%LOCALAPPDATA%\snug\<company>\<app>\` on Windows.
-/// 3. `$HOME/.cache/snug/<company>/<app>/` on other platforms (fallback).
+/// 2. The platform's own per-user cache root, via [`platform_cache_base`]:
+///    `%LOCALAPPDATA%` on Windows, `_CS_DARWIN_USER_CACHE_DIR` on macOS,
+///    `$XDG_CACHE_HOME` / `~/.cache` elsewhere.
+/// 3. `$HOME/.cache`, then the temp dir, as a last resort.
+///
+/// `snug/<company>/<app>/` is appended to whichever base wins.
 pub fn cache_root(app: &AppMetadata, override_root: Option<&Path>) -> PathBuf {
     if let Some(root) = override_root {
         return root.to_path_buf();
@@ -51,7 +55,7 @@ pub fn cache_root(app: &AppMetadata, override_root: Option<&Path>) -> PathBuf {
     let company = sanitize_component(&app.company);
     let name = sanitize_component(&app.name);
 
-    let base = platform_local_app_data().unwrap_or_else(|| fallback_cache_base());
+    let base = platform_cache_base().unwrap_or_else(fallback_cache_base);
     base.join(SNUG_SUBDIR).join(&company).join(&name)
 }
 
@@ -306,8 +310,25 @@ pub fn should_sweep(root: &Path, now: SystemTime) -> bool {
     true
 }
 
+/// The OS's own answer to "where do per-user cached files go".
+///
+/// This is deliberately *asked of the platform* rather than hardcoded, so
+/// that if the convention moves we follow it instead of being wrong.
+///
+/// - **Windows** reads `%LOCALAPPDATA%` via the Win32 API. The variable
+///   is the convention, so reading it is the whole story.
+/// - **macOS** asks `confstr(_CS_DARWIN_USER_CACHE_DIR)`. That is the key
+///   behind `NSSearchPathForDirectoriesInDomains(NSCachesDirectory, …)`,
+///   i.e. the exact analogue of `%LOCALAPPDATA%`, and it is the documented
+///   way to ask. It also honours `CFFIXED_USER_HOME` inside a sandboxed
+///   app, which reading `$HOME` yourself does not.
+///
+/// `LOCALAPPDATA` is *not* a macOS variable. An earlier version read it
+/// for every non-Windows target, so on macOS it always missed and the
+/// path fell through to the `$HOME/.cache` fallback — a Linux convention
+/// in a directory macOS never uses.
 #[cfg(windows)]
-fn platform_local_app_data() -> Option<PathBuf> {
+fn platform_cache_base() -> Option<PathBuf> {
     // %LOCALAPPDATA% is the canonical per-user, per-machine data root
     // on Windows. We read it directly via the Win32 API for accuracy.
     use windows_sys::Win32::System::Environment::GetEnvironmentVariableW;
@@ -327,9 +348,60 @@ fn platform_local_app_data() -> Option<PathBuf> {
     Some(PathBuf::from(String::from_utf16_lossy(&buf)))
 }
 
-#[cfg(not(windows))]
-fn platform_local_app_data() -> Option<PathBuf> {
-    std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
+/// Ask the OS where the per-user cache directory is.
+///
+/// `NSHomeDirectory()` is the value Foundation itself derives
+/// `NSCachesDirectory` from, and it honours `CFFIXED_USER_HOME` inside a
+/// sandboxed `.app` — which reading `$HOME` yourself does not.
+///
+/// # The three APIs that look right and are not
+///
+/// Recorded because each cost a detour, and the first two would have
+/// shipped a worse answer:
+///
+/// - **`confstr(_CS_DARWIN_USER_CACHE_DIR)`** is the obvious answer and it
+///   is wrong. Its man page promises "a good location for user cache data
+///   as it will not be automatically cleaned by the system", but on
+///   macOS 15 it returns `/var/folders/<hash>/C/` — inside the per-boot
+///   temporary tree, which the system *does* purge. Reproducible with the
+///   environment stripped (`env -i`), so it is not an artefact of how snug
+///   was launched. snug's JAR cache there could be deleted out from under
+///   a running app.
+/// - **Declaring `NSHomeDirectory()` by hand** as
+///   `-> *const c_char` returns an `NSString *`, not a `char *`. Reading it
+///   as a C string yields garbage bytes rather than failing loudly, which
+///   is the kind of bug that is invisible until something tries to use the
+///   path. Hence the binding crate rather than a hand-rolled `extern`.
+/// - **The older `objc` 0.2 crate** does not compile on current rustc
+///   (`cannot find macro sel`). `objc2-foundation` is the maintained one.
+///
+/// The one thing this *does* hardcode is the `Library/Caches` subpath.
+/// That is a documented, stable part of the macOS layout and is the same
+/// value Foundation reports; what can actually move — a sandboxed home, a
+/// relocated user — comes from the OS.
+#[cfg(target_os = "macos")]
+fn platform_cache_base() -> Option<PathBuf> {
+    use objc2_foundation::NSHomeDirectory;
+
+    let home = NSHomeDirectory().to_string();
+    let home = home.trim_end_matches('/');
+    if home.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(home).join("Library").join("Caches"))
+}
+
+/// Everything that is neither Windows nor macOS: XDG, which is the Linux
+/// convention. This is also the `~/.cache` fallback's target, so the
+/// common case is unchanged.
+#[cfg(all(not(windows), not(target_os = "macos")))]
+fn platform_cache_base() -> Option<PathBuf> {
+    std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache"))
+        })
 }
 
 fn fallback_cache_base() -> PathBuf {
@@ -342,6 +414,53 @@ fn fallback_cache_base() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn cache_base_is_the_darwin_caches_directory() {
+        let base = platform_cache_base().expect("Foundation should answer on macOS");
+
+        assert!(base.is_absolute(), "{} should be absolute", base.display());
+        assert!(
+            base.is_dir(),
+            "{} should exist on a real machine",
+            base.display()
+        );
+        // The whole point of asking the OS: this is the Darwin caches
+        // directory, not the Linux `~/.cache` convention the old code
+        // fell back to.
+        assert!(
+            base.ends_with("Library/Caches"),
+            "expected .../Library/Caches, got {}",
+            base.display()
+        );
+        assert!(
+            !base.ends_with(".cache"),
+            "must not be the Linux fallback, got {}",
+            base.display()
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn cache_root_sits_under_the_darwin_caches_directory() {
+        let meta = app("SynapticLoop", "Demo");
+        let root = cache_root(&meta, None);
+        let base = platform_cache_base().unwrap();
+
+        assert!(root.starts_with(&base), "{} not under {}", root.display(), base.display());
+        assert!(root.ends_with("snug/SynapticLoop/Demo"), "got {}", root.display());
+    }
+
+    #[test]
+    fn cache_root_honours_an_explicit_override() {
+        let meta = app("SynapticLoop", "Demo");
+        let override_root = Path::new("/tmp/snug-explicit");
+        assert_eq!(
+            cache_root(&meta, Some(override_root)),
+            override_root.to_path_buf()
+        );
+    }
 
     fn app(company: &str, name: &str) -> AppMetadata {
         AppMetadata {
