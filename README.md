@@ -224,10 +224,13 @@ snug/
 │   ├── snug-icon.png           # 1254×1254, used by README + --icon examples
 │   └── snug-javafx-demo.jar    # JavaFX demo fat JAR (Main-Class read from manifest)
 ├── bin/
-│   └── launcher-stub.exe       # precompiled cross-platform stub (PE32+ GUI x86-64, ~1.1 MB)
+│   ├── launcher-stub.exe       # precompiled cross-platform stub (PE32+ GUI x86-64, ~1.1 MB)
+│   ├── launcher-stub-macos-arm64  # precompiled macOS launcher (Mach-O arm64, ~0.6 MB)
+│   └── launcher-stub-macos-x86_64 # precompiled macOS launcher (Mach-O x86_64, ~0.6 MB)
 ├── scripts/
 │   ├── build-release.cmd       # Windows batch pipeline: launcher + CLI + demo EXE
-│   └── build-macos.sh          # macOS pipeline: `snug` CLI for arm64 + x86_64 into release/
+│   ├── build-macos.sh          # macOS pipeline: `snug` CLI for arm64 + x86_64 into release/
+│   └── build-macos-demo.sh     # macOS: build-macos.sh, then package the JavaFX demo as a .app
 └── crates/
     ├── snug-format/            # embedded-payload types + postcard codec (the wire contract)
     │   └── assets/             # snug-localisations.en.txt — canonical English baseline
