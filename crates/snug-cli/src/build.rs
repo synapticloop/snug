@@ -445,21 +445,64 @@ fn check_splash_dimensions(width: u32, height: u32, max_value: &str) {
     }
 }
 
-/// Resolve the final `.exe` output path from the CLI args.
+/// The extension the *default* output name gets on this host.
 ///
-/// Default: `<input-stem>.exe` next to the input JAR / directory.
+/// snug embeds exactly one launcher, selected for the machine it was
+/// built on: a PE stub on Windows, a Mach-O for the host's architecture
+/// on macOS. So the default output should be the artefact this snug is
+/// actually equipped to produce — a macOS `snug` defaults to a `.app`
+/// bundle it can really make, not to a Windows `.exe` it only carries as
+/// a cross-platform convenience.
+///
+/// A Windows `snug` has no macOS launcher at all, so `Foo.app` there is
+/// rejected rather than quietly written as a flat PE — see
+/// [`wants_app_bundle`].
+///
+/// The convenience is still available either way, just explicitly:
+/// `-o App.exe` on a Mac builds a Windows EXE, because the PE stub is
+/// embedded unconditionally. That is how Windows artefacts get built from
+/// a Mac, and it should be something you ask for rather than something
+/// that happens.
+#[cfg(target_os = "macos")]
+const DEFAULT_OUTPUT_EXT: &str = "app";
+
+#[cfg(not(target_os = "macos"))]
+const DEFAULT_OUTPUT_EXT: &str = "exe";
+
+/// Resolve the final output path from the CLI args.
+///
+/// Default: `<input-stem>.<DEFAULT_OUTPUT_EXT>` next to the input JAR /
+/// directory — `App.app` on macOS, `App.exe` elsewhere.
 pub fn output_path(cli: &Cli) -> PathBuf {
     match &cli.output {
         Some(p) => p.clone(),
         None => {
             let default_path = match (&cli.jar, &cli.input) {
-                (Some(j), None) => Some(j.with_extension("exe")),
-                (None, Some(i)) => Some(i.with_extension("exe")),
+                (Some(j), None) => Some(j.with_extension(DEFAULT_OUTPUT_EXT)),
+                (None, Some(i)) => Some(i.with_extension(DEFAULT_OUTPUT_EXT)),
                 _ => None,
             };
-            default_path.unwrap_or_else(|| PathBuf::from("App.exe"))
+            default_path.unwrap_or_else(|| PathBuf::from(format!("App.{DEFAULT_OUTPUT_EXT}")))
         }
     }
+}
+
+/// Did the user ask for a macOS application bundle?
+///
+/// Deliberately platform-neutral, and deliberately a question about the
+/// *request* rather than about what this build can do. It has to be
+/// answerable everywhere, because the interesting half is the answer on
+/// platforms that cannot honour it: a Windows `snug` has no macOS
+/// launcher embedded, so `-o Foo.app` there cannot be satisfied and must
+/// be refused rather than turned into a flat file with a lying name.
+///
+/// Case-insensitive, so `-o Foo.APP` is caught too. The macOS emitter
+/// also refuses to clobber a non-directory at a `.app` path, which is the
+/// other half of the same trap.
+pub fn wants_app_bundle(cli: &Cli) -> bool {
+    output_path(cli)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("app"))
 }
 
 /// Build the final Windows `.exe`.
@@ -549,8 +592,72 @@ fn _silence_path(_: &Path) {}
 mod tests {
     use super::*;
     use crate::manifest::read_main_class;
+    use clap::Parser;
     use std::io::Write;
     use zip::write::SimpleFileOptions;
+
+    #[test]
+    fn default_output_is_the_hosts_native_artefact() {
+        // snug embeds exactly one launcher, chosen for the machine it was
+        // built on, so the default output has to be the artefact this
+        // build can actually produce. A macOS snug defaulting to `.exe`
+        // would be handing out a cross-platform special case as the
+        // common case.
+        let cli = Cli::parse_from(["snug", "app.jar"]);
+        let out = output_path(&cli);
+        #[cfg(target_os = "macos")]
+        assert_eq!(out, PathBuf::from("app.app"));
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(out, PathBuf::from("app.exe"));
+
+        // Same for a directory input.
+        let dir = Cli::parse_from(["snug", "libs"]);
+        assert!(output_path(&dir)
+            .to_string_lossy()
+            .ends_with(DEFAULT_OUTPUT_EXT));
+    }
+
+    #[test]
+    fn default_output_always_has_an_extension() {
+        // Guards the "no input at all" branch, which builds the name with
+        // `format!` rather than `with_extension` and is therefore the one
+        // that could quietly regress to a bare "App".
+        let cli = Cli::parse_from(["snug"]);
+        let out = output_path(&cli);
+        assert_eq!(out.extension().is_some(), true, "got {out:?}");
+    }
+
+    #[test]
+    fn app_bundle_request_is_recognised_on_every_platform() {
+        // The predicate has to be answerable everywhere. The interesting
+        // case is a Windows snug given `-o Foo.app`, which cannot be
+        // honoured and must be refused rather than turned into a flat PE.
+        for name in ["Foo.app", "Foo.APP", "Foo.App"] {
+            let cli = Cli::parse_from(["snug", "app.jar", "-o", name]);
+            assert!(
+                wants_app_bundle(&cli),
+                "{name} should read as a bundle request"
+            );
+        }
+        for name in ["Foo.exe", "Foo.EXE", "App.applescript", "Foo"] {
+            let cli = Cli::parse_from(["snug", "app.jar", "-o", name]);
+            assert!(
+                !wants_app_bundle(&cli),
+                "{name} should not read as a bundle request"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_output_always_wins_over_the_default() {
+        // Including when it disagrees with the default: a macOS snug
+        // asked for `.exe` means it, and must not be talked into a
+        // bundle. That is how Windows artefacts get built from a Mac.
+        let cli = Cli::parse_from(["snug", "app.jar", "-o", "Windows.exe"]);
+        assert_eq!(output_path(&cli), PathBuf::from("Windows.exe"));
+        assert!(!wants_app_bundle(&cli));
+    }
+
 
     fn write_fake_jar(path: &std::path::Path, main_class: Option<&str>) {
         let file = std::fs::File::create(path).unwrap();

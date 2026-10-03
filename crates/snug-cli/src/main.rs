@@ -8,7 +8,7 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser};
 
-use snug_cli::build::{build_exe, build_payload, output_path};
+use snug_cli::build::{build_exe, build_payload, output_path, wants_app_bundle};
 use snug_cli::cli::Cli;
 use snug_cli::{init_localizations, init_options};
 use snug_cli::options_file;
@@ -129,13 +129,31 @@ fn run() -> Result<()> {
     // `snug app.jar -o MyApp.app` builds a macOS bundle; `-o MyApp.exe`
     // builds the Windows one. Branching on the output extension is what
     // keeps the documented command identical on both platforms — the docs
-    // never have to name a flag that only exists on one of them.
-    #[cfg(target_os = "macos")]
-    if snug_cli::macos_bundle::wants_app_bundle(&cli) {
-        let output = snug_cli::macos_bundle::build_app(&cli, &embedded.payload)
-            .context("building the macOS .app bundle")?;
-        eprintln!("snug: built {}", output.display());
-        return Ok(());
+    // never have to name a flag that exists on only one of them.
+    if wants_app_bundle(&cli) {
+        #[cfg(target_os = "macos")]
+        {
+            let output = snug_cli::macos_bundle::build_app(&cli, &embedded.payload)
+                .context("building the macOS .app bundle")?;
+            eprintln!("snug: built {}", output.display());
+            return Ok(());
+        }
+
+        // Refused rather than quietly written. A `.app` is a *directory*
+        // holding a Mach-O launcher plus its payload; a Windows snug has
+        // no macOS launcher embedded, so the request cannot be honoured,
+        // and the alternative — a flat PE named `Foo.app` — is precisely
+        // the trap this check exists to prevent.
+        #[cfg(not(target_os = "macos"))]
+        anyhow::bail!(
+            "-o {} names a macOS application, which is a *directory* \
+             containing a macOS launcher.\n\
+             snug on this platform embeds a Windows launcher, so a .app \
+             cannot be built here.\n\
+             hint: pass -o MyApp.exe for a Windows executable, or use the \
+             macOS snug.",
+            output_path(&cli).display()
+        );
     }
 
     let output = build_exe(&cli, &embedded.payload)
@@ -159,7 +177,7 @@ fn dry_run(cli: &Cli, embedded: &SnugEmbedded) -> Result<()> {
             .or(cli.input.as_ref())
             .map_or("(none)".into(), |p| p.display().to_string())
     );
-    println!("  output exE:  {}", output.display());
+    println!("  output:      {}", output.display());
     println!(
         "  main-class:  {}",
         payload.config.main_class.as_deref().unwrap_or("(from manifest)")
@@ -197,6 +215,14 @@ fn dry_run(cli: &Cli, embedded: &SnugEmbedded) -> Result<()> {
             .collect::<Vec<_>>()
             .join(", ")
     );
+    // Spelled per platform because it is: the `.exe` path stamps an icon,
+    // a version resource and a manifest with `editpe`, while the `.app`
+    // path converts the icon with `iconutil` and ad-hoc signs the bundle.
+    // Printing "editpe" on a macOS dry-run would be a lie about what is
+    // about to happen.
+    #[cfg(target_os = "macos")]
+    println!("  resources:   iconutil (icon as App.icns) + codesign --sign -");
+    #[cfg(not(target_os = "macos"))]
     println!("  resources:   editpe (icon + version + manifest if set)");
     println!("  stub bytes:  {}", snug_cli::stub::STUB_BYTES.len());
     println!(
