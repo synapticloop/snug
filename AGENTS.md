@@ -72,13 +72,32 @@ none of them.
 
 ## Build host
 
-Developers are expected to be on macOS / Linux; the build target is
-**Windows `.exe`**. The intended build strategy:
+### Builds are native, never cross-artefact
 
-- **Local dev:** `cargo-zigbuild` for cross-compiling from macOS / Linux
-  to `x86_64-pc-windows-gnu`. No Visual Studio Build Tools needed.
-  Requires `zig` (any recent 0.14+ release) and the
-  `x86_64-pc-windows-gnu` Rust target installed via `rustup`.
+**A platform's artefacts are built on that platform.** Windows targets are
+built on Windows; macOS targets are built on macOS. There is no
+cross-artefact toolchain and none is wanted.
+
+This is not a limitation, it is what makes the precompiled-stub design
+work at all. `snug-cli` embeds its launcher with `include_bytes!`, so the
+launcher must exist *before* the CLI compiles. Built natively and
+sequentially that is trivial — `scripts\build-release.cmd` step 3 builds
+`snug-launcher` and copies it to `bin/launcher-stub.exe`, then the CLI
+compile picks it up, and `scripts\verify-embedded-stub.ps1` proves the two
+agree. Cross-compiling instead means maintaining a foreign toolchain
+(`zig` / mingw) purely to refresh a binary that the target machine could
+have produced itself, and `cargo-zigbuild` additionally has to track a
+compatible `zig` version — a real source of breakage for no benefit. The
+committed binary is a *bootstrap convenience* so a fresh clone can
+`cargo build -p snug-cli` without first building the launcher; it is not
+the source of truth. Each release pipeline regenerates it.
+
+`cargo-zigbuild` therefore remains useful only as an optional
+local-iteration convenience on a non-Windows box, and is not on the
+release path. Nothing in the release process depends on it.
+
+### Windows
+
 - **CI / releases:** GitHub Actions `windows-latest` runner, so
   Authenticode signing is available.
 - **Native Windows host:** no cross-compilation needed at all —
@@ -87,19 +106,8 @@ Developers are expected to be on macOS / Linux; the build target is
   produced EXE can be launched locally to exercise the runtime
   (extraction, JVM discovery, cache GC) against a real JDK.
 
-```bash
-# one-time setup on a fresh Mac/Linux dev box
-brew install zig                                  # or download from ziglang.org
-rustup target add x86_64-pc-windows-gnu
-cargo install cargo-zigbuild --locked
-
-# build the precompiled stub (committed to bin/launcher-stub.exe)
-cargo zigbuild --target x86_64-pc-windows-gnu --release -p snug-launcher
-cp target/x86_64-pc-windows-gnu/release/snug-launcher.exe bin/launcher-stub.exe
-```
-
 ```powershell
-# same thing on a native Windows host — no zigbuild
+# regenerate the committed stub, then the CLI that embeds it
 cargo build --release -p snug-launcher
 Copy-Item target\release\snug-launcher.exe bin\launcher-stub.exe
 ```
@@ -131,6 +139,33 @@ export MACOSX_DEPLOYMENT_TARGET=12.0
 cargo build --release -p snug-cli --target x86_64-apple-darwin
 cargo build --release -p snug-cli --target aarch64-apple-darwin
 ```
+
+### Where the macOS launcher comes from
+
+Same model as the Windows stub, and native-only building is what makes it
+cheap: `build-macos.sh` builds `snug-launcher` for the target, copies it
+into `bin/` as `launcher-stub-macos-<arch>`, and *then* compiles
+`snug-cli`, which embeds it. The committed binary is a bootstrap
+convenience exactly as `bin/launcher-stub.exe` is, not the source of
+truth.
+
+**One launcher per `snug` binary, matching its own arch.** The embedded
+path is selected by `#[cfg(target_arch)]`, so `release/macos-arm64/snug`
+embeds the arm64 launcher and `release/macos-x86_64/snug` embeds the
+Intel one. Each binary can only build a `.app` for its own
+architecture, which is a feature rather than a limitation: a Mac never
+has to reason about a foreign Mach-O, and each artefact carries exactly
+one launcher instead of two.
+
+**The `.app` payload is a sibling file, not a stamped resource.** On
+Windows the payload is written into the PE as `RT_RCDATA` via `editpe`,
+which is why `editpe` sits in the build path. A macOS `.app` is a
+*directory*, so the launcher needs no stamping at all: `snug` writes the
+encoded payload to `Contents/Resources/<App>.snugpayload` and copies the
+launcher into `Contents/MacOS/<App>` as a plain byte-copy. Strictly less
+work than the Windows model, easier to inspect (the payload file can be
+hexdumped), and it sidesteps the fact that there is no Mach-O resource
+writer in the dependency graph — `editpe` is PE-only.
 
 ### Release layout
 
@@ -245,10 +280,14 @@ finished.** Bump the version on every change; never land on `1.0.0`
 by accident.
 
 - **Single source of truth:** `[workspace.package] version` in the
-  root `Cargo.toml`. All three crates inherit it via
+  root `Cargo.toml`. All four crates inherit it via
   `version.workspace = true`, so that one line is the only thing to
   edit. `snug --snug-version` and `cargo metadata` read the compiled
-  value; `snug-launcher/src/main.rs` exposes it as `env!("CARGO_PKG_VERSION")`.
+  value via `env!("CARGO_PKG_VERSION")` in `snug-cli` (both the clap
+  `version` attribute and the `--snug-version` flag). **`snug-launcher`
+  does not embed the version at all** — which is why a version bump never
+  invalidates `bin/launcher-stub.exe`, and why refreshing the stub is
+  hygiene rather than a consequence of a release.
 - **Default increment is the micro (patch) number:**
   `0.2.0` → `0.2.1` → `0.2.2`. Use this for fixes, copy changes,
   refactors, and anything that doesn't alter the CLI surface or the
