@@ -143,9 +143,15 @@ mod tests {
 
     fn tempdir() -> std::path::PathBuf {
         let base = std::env::temp_dir();
+        // Counter is load-bearing: pid + nanos is not unique under
+        // parallel tests on a coarse clock (see the same fix in
+        // snug-cli's options_file tests).
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let unique = format!(
-            "snug-locator-test-{}-{}",
+            "snug-locator-test-{}-{}-{}",
             std::process::id(),
+            n,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()

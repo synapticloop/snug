@@ -278,9 +278,14 @@ mod tests {
 
     fn tmpdir() -> PathBuf {
         let base = std::env::temp_dir();
+        // The counter is load-bearing: pid + nanos is not unique when
+        // tests run in parallel on a coarse clock (macOS). See the same
+        // fix in options_file's tempdir().
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let unique = format!(
-            "snug-localize-{}-{}",
+            "snug-localize-{}-{}-{}",
             std::process::id(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_nanos())

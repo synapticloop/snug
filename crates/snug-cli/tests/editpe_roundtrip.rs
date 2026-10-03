@@ -263,11 +263,15 @@ fn write_fake_jar(path: &Path) {
 fn tempdir() -> PathBuf {
     let base = std::env::temp_dir();
     let pid = std::process::id();
+    // Counter is load-bearing: pid + nanos is not unique when tests run in
+    // parallel on a coarse clock (macOS).
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let dir = base.join(format!("snug-test-{pid}-{nanos}"));
+    let dir = base.join(format!("snug-test-{pid}-{seq}-{nanos}"));
     fs::create_dir_all(&dir).expect("create tempdir");
     dir
 }

@@ -115,9 +115,13 @@ mod tests {
         let _guard = serialised();
         // Init, write, init again — the second init should wipe the
         // first session's content.
+        // Counter is load-bearing: pid + nanos is not unique when tests run
+        // in parallel on a coarse clock (macOS).
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "snug-log-test-{}-{}",
+            "snug-log-test-{}-{}-{}",
             std::process::id(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -141,9 +145,11 @@ mod tests {
     #[test]
     fn init_creates_parent_dirs() {
         let _guard = serialised();
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "snug-log-nested-{}-{}",
+            "snug-log-nested-{}-{}-{}",
             std::process::id(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
