@@ -78,9 +78,11 @@ mod tests {
 
     #[test]
     fn reads_main_class_from_jar() {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "snug-runtime-test-{}-{}",
+            "snug-runtime-test-{}-{}-{}",
             std::process::id(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -98,9 +100,11 @@ mod tests {
 
     #[test]
     fn returns_none_when_no_manifest() {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "snug-runtime-test-{}-{}",
+            "snug-runtime-test-{}-{}-{}",
             std::process::id(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()

@@ -39,7 +39,6 @@ editpe = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }
-jni = { workspace = true }
 # `ureq` is Windows-only. Its only reader is `jdk_install` (the Adoptium
 # runtime download in the launcher runtime), which is itself
 # `#![cfg(windows)]`. On macOS `native-tls` resolves to Security.framework
@@ -47,6 +46,14 @@ jni = { workspace = true }
 # `snug` link a system framework for an update check the CLI never
 # performs.
 ureq = { workspace = true }
+
+# `jni` is needed by every target that has a real launcher runtime, not
+# just Windows: `platform/macos.rs` loads `libjvm.dylib` through the same
+# `jni` invocation API. Scoped this way it stays out of the Linux build,
+# where `platform/other.rs` is a deliberate no-op and would only warn
+# about unused dependencies.
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+jni = { workspace = true }
 
 # `build.rs` (this file's sibling) wraps `assets/snug-icon.png` as
 # a single-entry ICO and embeds it as `MAINICON` via `embed-resource`

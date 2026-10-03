@@ -40,7 +40,7 @@ fn main() -> ExitCode {
 fn run() -> Result<u32, LauncherError> {
     let self_path = std::env::current_exe().map_err(LauncherError::SelfPath)?;
 
-    let payload = match snug_launcher::find_in_file(&self_path)? {
+    let payload = match platform::locate_payload(&self_path)? {
         Some(p) => p,
         None => {
             // Bare stub — no payload appended yet. Be helpful about it.

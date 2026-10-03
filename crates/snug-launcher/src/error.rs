@@ -179,14 +179,20 @@ mod tests {
     }
 }
 
-#[cfg(windows)]
+// These two impls exist for `JavaVM::attach_current_thread`, whose
+// signature requires the closure's error type to be `From<jni::errors::Error>`.
+// That is a bound on the *type*, so it cannot be satisfied by mapping the
+// error after the call — every target with a real launcher runtime needs
+// them, which is Windows and macOS. Widening this cfg is additive:
+// Windows gets precisely the impls it always had.
+#[cfg(any(windows, target_os = "macos"))]
 impl From<jni::errors::Error> for LauncherError {
     fn from(e: jni::errors::Error) -> Self {
         LauncherError::JniInvoke(e.to_string())
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 impl From<jni::errors::StartJvmError> for LauncherError {
     fn from(e: jni::errors::StartJvmError) -> Self {
         LauncherError::JniCreate(e.to_string())

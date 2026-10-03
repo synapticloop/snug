@@ -4,9 +4,15 @@
 
 use std::path::Path;
 
-use snug_format::SnugEmbedded;
+use snug_format::{FormatError, SnugEmbedded};
 
 use crate::LauncherError;
+
+/// No payload location to probe — there is no real runtime on this
+/// platform, so nothing could be read from one anyway.
+pub fn locate_payload(_self_path: &Path) -> Result<Option<SnugEmbedded>, FormatError> {
+    Ok(None)
+}
 
 pub fn run(_self_path: &Path, _payload: &SnugEmbedded) -> Result<u32, LauncherError> {
     Err(LauncherError::UnsupportedPlatform)

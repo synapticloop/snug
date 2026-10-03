@@ -746,9 +746,21 @@ mod tests {
 
     fn tempdir() -> std::path::PathBuf {
         let base = std::env::temp_dir();
+        // The counter is load-bearing, not belt-and-braces. The obvious
+        // key — pid + `SystemTime::now().as_nanos()` — is NOT unique
+        // enough: tests share a pid and macOS clock resolution is coarse
+        // enough that two tests running in parallel can read the same
+        // nanosecond. They then share a directory, one test's
+        // `snug.options` shows up inside another test's deliberately
+        // empty exe dir, and the failure looks like a `resolve()` bug
+        // rather than a collision. Observed as an intermittent failure
+        // of `resolve_uses_cwd_when_exe_dir_has_no_default`.
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let unique = format!(
-            "snug-options-{}-{}",
+            "snug-options-{}-{}-{}",
             std::process::id(),
+            n,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()

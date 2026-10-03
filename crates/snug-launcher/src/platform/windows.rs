@@ -25,7 +25,7 @@ use windows_sys::Win32::System::Registry::{
 };
 use windows_sys::Win32::UI::Shell::CommandLineToArgvW;
 
-use snug_format::{DownloadJdkMode, JvmDiscovery, SnugEmbedded};
+use snug_format::{DownloadJdkMode, FormatError, JvmDiscovery, SnugEmbedded};
 
 use crate::cache;
 use crate::jdk_install;
@@ -33,6 +33,17 @@ use crate::log;
 use crate::manifest;
 use crate::splash;
 use crate::LauncherError;
+
+/// Locate this launcher's embedded payload.
+///
+/// Windows stamps the payload into the EXE's `RT_RCDATA`, so the lookup is
+/// a PE resource-tree walk over the running image. The macOS module
+/// implements the same signature with a sibling-file lookup instead;
+/// `main.rs` is shared, so it calls this through
+/// [`crate::platform::locate_payload`] and never branches on the OS.
+pub fn locate_payload(self_path: &Path) -> Result<Option<SnugEmbedded>, FormatError> {
+    crate::payload_locator::find_in_file(self_path)
+}
 
 /// Orchestrate the launch: extract JAR to cache, locate JVM, load
 /// jvm.dll, invoke Java `main`, return its exit code.
