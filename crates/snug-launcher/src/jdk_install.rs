@@ -1888,11 +1888,10 @@ mod tests {
     #[test]
     #[ignore = "touches the network"]
     fn download_probe_reports_where_the_time_goes() {
-        use std::time::{Duration, Instant};
-        use ureq::native_tls::TlsConnector;
+        use std::time::Instant;
 
         let t0 = Instant::now();
-        let meta = match fetch_metadata(21) {
+        let meta = match fetch_metadata(25) {
             Ok(m) => m,
             Err(e) => {
                 println!("metadata FAILED after {:?}: {e}", t0.elapsed());
@@ -1901,57 +1900,58 @@ mod tests {
         };
         println!("metadata ok after {:?}: {}", t0.elapsed(), meta.version);
 
-        let agent = ureq::AgentBuilder::new()
-            .tls_connector(std::sync::Arc::new(TlsConnector::new().unwrap()))
-            .build();
 
+        // Reproduce the launcher's conditions exactly: the agent from
+        // `http_agent()` (with timeouts) and the download on a *spawned
+        // worker thread*, which is where `worker_thread` puts it.
         let t1 = Instant::now();
-        let resp = match agent.get(&meta.package_link).call() {
-            Ok(r) => r,
-            Err(e) => {
-                println!("GET FAILED after {:?}: {e}", t1.elapsed());
-                println!("url: {}", meta.package_link);
-                return;
+        let url = meta.package_link.clone();
+        let total_bytes = meta.size_bytes;
+        let handle = std::thread::spawn(move || {
+            let agent = match http_agent() {
+                Ok(a) => a,
+                Err(e) => return Err(format!("agent: {e}")),
+            };
+            let resp = agent
+                .get(&url)
+                .call()
+                .map_err(|e| format!("call: {e}"))?;
+            println!("  [worker] headers after {:?}", t1.elapsed());
+            let mut reader = resp.into_reader();
+            let mut buf = vec![0u8; 256 * 1024];
+            let mut total = 0u64;
+            let started = Instant::now();
+            while total < total_bytes {
+                match std::io::Read::read(&mut reader, &mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        total += n as u64;
+                        if total % (16 * 1_048_576) < n as u64 {
+                            println!(
+                                "  [worker] {:.0}/{:.0} MiB at {:.1} MiB/s ({:?})",
+                                total as f64 / 1_048_576.0,
+                                total_bytes as f64 / 1_048_576.0,
+                                total as f64 / started.elapsed().as_secs_f64().max(0.001)
+                                    / 1_048_576.0,
+                                started.elapsed(),
+                            );
+                        }
+                    }
+                    Err(e) => return Err(format!("read: {e}")),
+                }
             }
-        };
-        println!("headers after {:?}: {}", t1.elapsed(), resp.status());
-        for name in ["location", "content-length", "transfer-encoding"] {
-            println!("  {name}: {:?}", resp.header(name));
+            println!(
+                "  [worker] finished {:.0} MiB in {:?}",
+                total as f64 / 1_048_576.0,
+                started.elapsed()
+            );
+            Ok::<(), String>(())
+        });
+        match handle.join() {
+            Ok(Ok(())) => println!("worker completed"),
+            Ok(Err(e)) => println!("worker FAILED: {e}"),
+            Err(_) => println!("worker PANICKED"),
         }
-
-        // Sustained rate over a few seconds: the difference between "hung"
-        // and "slow" is the whole question.
-        let t2 = Instant::now();
-        let mut reader = resp.into_reader();
-        let mut buf = vec![0u8; 64 * 1024];
-        let (mut total, mut reads) = (0u64, 0u32);
-        let cap = Duration::from_secs(5);
-        while t2.elapsed() < cap {
-            match std::io::Read::read(&mut reader, &mut buf) {
-                Ok(0) => {
-                    println!("body ended after {total} bytes");
-                    break;
-                }
-                Ok(n) => {
-                    total += n as u64;
-                    reads += 1;
-                }
-                Err(e) => {
-                    println!("body read FAILED after {total} bytes: {e}");
-                    break;
-                }
-            }
-        }
-        let secs = t2.elapsed().as_secs_f64().max(0.001);
-        println!(
-            "read {total} bytes in {reads} reads over {secs:.1}s = {:.2} MB/s",
-            total as f64 / secs / 1_048_576.0
-        );
-        println!(
-            "=> a {} MB archive would take about {:.0}s",
-            194_316_575 / 1_048_576,
-            194_316_575 as f64 / (total as f64 / secs)
-        );
     }
 
     #[test]

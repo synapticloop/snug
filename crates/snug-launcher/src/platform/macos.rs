@@ -630,6 +630,36 @@ fn take_exception_message(env: &mut jni::Env<'_>) -> Option<String> {
     })
 }
 
+/// Try one candidate from a *scan* of many.
+///
+/// [`check_candidate`] reports a JDK that is too old as an error, and for
+/// a single explicit choice that is right — if you set `JAVA_HOME` to a
+/// Java 11 and asked for 17, "you have Java 11, you need 17" is the
+/// answer you want.
+///
+/// Inside a scan it is wrong, and it was a real bug: `common_install_paths`
+/// returns its results sorted, so a machine with both a JDK 11 and a
+/// JDK 25 hit the 11 first and gave up, never reaching the 25. Any
+/// ordinary developer machine with an old JDK left lying around could not
+/// discover the new one. So during a scan a too-old JDK is recorded and
+/// stepped over, and only reported if nothing better turns up.
+fn scan_candidate(
+    too_old: &mut Option<(PathBuf, u16)>,
+    dir: &Path,
+    min_java: u16,
+) -> Result<Option<PathBuf>, LauncherError> {
+    match check_candidate(dir, min_java) {
+        Ok(found) => Ok(found),
+        Err(LauncherError::JvmTooOld { path, found, .. }) => {
+            if too_old.is_none() {
+                *too_old = Some((path, found));
+            }
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// Discover a `JAVA_HOME` satisfying `min_java`.
 ///
 /// Walk order, mirroring `windows.rs` with the registry step replaced by
@@ -667,6 +697,9 @@ pub fn discover_jvm(
             }
         }
     }
+    // Remembered across the scan; reported only if nothing qualifies.
+    let mut too_old: Option<(PathBuf, u16)> = None;
+
     if strategy.try_path {
         if let Some(raw) = std::env::var_os("PATH") {
             // `split_paths` rather than a hand-rolled split: the separator
@@ -675,7 +708,7 @@ pub fn discover_jvm(
             for dir in std::env::split_paths(&raw) {
                 // `java` lives in `<home>/bin`, so the home is the parent.
                 let candidate = dir.parent().unwrap_or(&dir).to_path_buf();
-                if let Some(ok) = check_candidate(&candidate, min_java)? {
+                if let Some(ok) = scan_candidate(&mut too_old, &candidate, min_java)? {
                     return Ok(Some(ok));
                 }
             }
@@ -691,12 +724,12 @@ pub fn discover_jvm(
         // already sorted by version. Ask it for our minimum and take the
         // first answer.
         if let Some(home) = java_home_tool(min_java) {
-            if let Some(ok) = check_candidate(&home, min_java)? {
+            if let Some(ok) = scan_candidate(&mut too_old, &home, min_java)? {
                 return Ok(Some(ok));
             }
         }
         for c in common_install_paths() {
-            if let Some(ok) = check_candidate(&c, min_java)? {
+            if let Some(ok) = scan_candidate(&mut too_old, &c, min_java)? {
                 return Ok(Some(ok));
             }
         }
@@ -1010,6 +1043,84 @@ mod tests {
         };
         assert!(home.is_dir(), "{} is not a directory", home.display());
         assert!(locate_libjvm_dylib(&home).is_some());
+    }
+
+    #[test]
+    fn a_too_old_jdk_does_not_abort_the_scan() {
+        // The bug: `common_install_paths` is sorted, so a machine with a
+        // JDK 11 *and* a JDK 25 hit the 11 first and returned
+        // JvmTooOld — never reaching the 25. Any developer machine with an
+        // old JDK lying around could not discover a new one.
+        let root = tempdir();
+        let old_home = root.join("java-11.jdk").join("Contents").join("Home");
+        let new_home = root.join("java-25.jdk").join("Contents").join("Home");
+        for (home, version) in [(&old_home, "11"), (&new_home, "25")] {
+            std::fs::create_dir_all(home.join("bin")).unwrap();
+            std::fs::write(home.join("bin").join("java"), b"").unwrap();
+            std::fs::write(home.join("release"), format!("JAVA_VERSION=\"{version}\"\n")).unwrap();
+        }
+
+        let mut too_old = None;
+        // Sorted order, exactly as `common_install_paths` returns it: the
+        // old one is visited first.
+        let mut candidates = vec![old_home.clone(), new_home.clone()];
+        candidates.sort();
+
+        let mut found = None;
+        for c in &candidates {
+            if let Some(ok) = scan_candidate(&mut too_old, c, 25).unwrap() {
+                found = Some(ok);
+                break;
+            }
+        }
+
+        assert_eq!(
+            found.as_deref(),
+            Some(new_home.as_path()),
+            "the scan must step over the too-old JDK and reach the good one"
+        );
+        assert!(too_old.is_some(), "the too-old JDK should be remembered");
+    }
+
+    #[test]
+    fn a_too_old_jvm_is_still_reported_when_nothing_qualifies() {
+        // Stepping over it during a scan must not lose the information.
+        // "you have Java 11, you need 25" is far more actionable than
+        // "not found", and is what Windows has always reported.
+        let root = tempdir();
+        let home = root.join("java-11.jdk").join("Contents").join("Home");
+        std::fs::create_dir_all(home.join("bin")).unwrap();
+        std::fs::write(home.join("bin").join("java"), b"").unwrap();
+        std::fs::write(home.join("release"), "JAVA_VERSION=\"11\"\n").unwrap();
+
+        let mut too_old = None;
+        assert!(scan_candidate(&mut too_old, &home, 25).unwrap().is_none());
+        assert_eq!(too_old, Some((home, 11)));
+    }
+
+    /// Network/filesystem diagnostic: what would discovery have found on
+    /// this machine? Ignored by default; run with
+    /// `cargo test -p snug-launcher --lib discovery_probe -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "reads the host's JVM installs"]
+    fn discovery_probe_reports_what_would_be_found() {
+        for min in [8u16, 17, 21, 25] {
+            let found = discover_jvm(&JvmDiscovery::default(), min)
+                .expect("discovery should not error");
+            match found {
+                Some(home) => {
+                    let major = read_java_major(&home).unwrap();
+                    let dylib = locate_libjvm_dylib(&home);
+                    println!(
+                        "min {min:>2}: found {}{} (dylib: {})",
+                        home.display(),
+                        major.map(|m| format!(" [java {m}]")).unwrap_or_default(),
+                        if dylib.is_some() { "yes" } else { "NO" },
+                    );
+                }
+                None => println!("min {min:>2}: nothing found"),
+            }
+        }
     }
 
     #[test]
