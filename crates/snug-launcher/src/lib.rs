@@ -31,7 +31,6 @@ pub mod log;
 pub mod manifest;
 pub mod metadata_failed_window;
 pub mod modal_window;
-pub mod payload_locator;
 pub mod progress_window;
 pub mod prompt_window;
 pub mod retry_window;
@@ -40,4 +39,9 @@ pub mod splash;
 pub mod platform;
 
 pub use error::LauncherError;
-pub use payload_locator::find_in_file;
+/// Re-exported so the launcher keeps one import path for both payload
+/// lookups. The implementation now lives in `snug-payload`, which is a
+/// separate crate so `snug-cli` can read the wire format without pulling
+/// in the whole runtime.
+pub use snug_payload as payload_locator;
+pub use snug_payload::find_in_file;

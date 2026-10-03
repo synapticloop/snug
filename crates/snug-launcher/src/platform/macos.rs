@@ -51,7 +51,13 @@ use crate::manifest;
 use crate::LauncherError;
 
 /// Suffix of the payload file snug writes into a `.app` bundle.
-pub const PAYLOAD_SUFFIX: &str = "snugpayload";
+///
+/// Deliberately *not* defined here. The producer is `snug-cli`, which
+/// writes the file; this module is the consumer that reads it. Both take
+/// the constant from `snug-payload`, where it lives with
+/// `PAYLOAD_RESOURCE_NAME`, so the two spellings cannot drift — which is
+/// the failure that surfaces only as a bare "payload not found".
+pub use snug_payload::PAYLOAD_SUFFIX;
 
 /// Locate this launcher's embedded payload.
 ///

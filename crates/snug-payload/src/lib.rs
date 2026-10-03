@@ -1,13 +1,34 @@
-//! Locate the snug embedded payload inside the launcher binary itself.
+//! Locate a snug embedded payload on disk.
 //!
-//! v2 (slice 4): the encoded payload is stored as an `RT_RCDATA`
-//! resource entry named `"SNUGEMBD"` in the launcher's own resource
-//! directory, instead of being appended as a binary overlay. The
-//! launcher parses its own PE image, walks the resource directory to
-//! the `SNUGEMBD` entry, and decodes the bytes with `snug_format`.
+//! This is the seam between snug's two output shapes. The payload itself
+//! is defined by [`snug_format`] and is identical either way; what differs
+//! is *where it lives*:
 //!
-//! The lookup is O(1): one PE parse plus one resource-tree walk,
-//! regardless of payload size.
+//! - **Windows.** The payload is stamped into the launcher's own PE
+//!   resource directory as an `RT_RCDATA` entry named
+//!   [`PAYLOAD_RESOURCE_NAME`], so the launcher reads it out of its
+//!   running image. `editpe` is a pure Rust PE parser with no Win32
+//!   dependency, so this lookup works on macOS and Linux too — which is
+//!   what lets `snug-cli` *build* a Windows EXE from a Mac.
+//! - **macOS.** A `.app` is a *directory*, so there is nothing to stamp
+//!   into: a Mach-O has no resource directory. The launcher is a plain
+//!   byte-copy and the payload sits beside it as
+//!   `Contents/Resources/<App>.<PAYLOAD_SUFFIX>`, read by
+//!   `snug-launcher`'s `platform::macos::locate_payload`.
+//!
+//! It is its own crate, depending only on `snug-format` and `editpe`,
+//! for one reason: **`snug-cli` needs the lookup and none of the runtime.**
+//! It used to depend on the whole `snug-launcher` library to read three
+//! things from this module, which dragged the 1600-line JDK download
+//! flow, `jni`, `windows-sys` and `ureq` into a CLI that never launches
+//! anything. Keeping this module separate lets the CLI depend on the wire
+//! format and a PE parser, and nothing else.
+//!
+//! The two filename constants live here together for a reason: the
+//! producer (`snug-cli` stamping the resource or writing the sibling
+//! file) and the consumer (the launcher reading it) must agree exactly.
+//! Spelling the string out in both places is how a mismatch gets written,
+//! and it surfaces only as a bare "payload not found".
 
 use std::path::Path;
 
@@ -17,12 +38,21 @@ use snug_format::{decode, FormatError, SnugEmbedded};
 /// The resource entry name that holds the encoded snug payload.
 pub const PAYLOAD_RESOURCE_NAME: &str = "SNUGEMBD";
 
+/// File-name suffix of a macOS bundle's payload file: `<App>.snugpayload`.
+///
+/// Re-exported from `snug-launcher`'s platform layer so both ends agree —
+/// see the module docs.
+pub const PAYLOAD_SUFFIX: &str = "snugpayload";
+
 /// Re-export the embedded-payload magic from `snug-format` for callers
 /// who want it without depending on `snug-format` directly.
 pub use snug_format::MAGIC;
 
 /// Scan `path` for a snug payload stored as an `RT_RCDATA` resource
 /// entry. Returns `Ok(None)` if no valid payload is found.
+///
+/// O(1): one PE parse plus one resource-tree walk, regardless of payload
+/// size.
 pub fn find_in_file(path: &Path) -> Result<Option<SnugEmbedded>, FormatError> {
     let image = Image::parse_file(path).map_err(|e| {
         FormatError::Io(std::io::Error::new(

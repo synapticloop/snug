@@ -1133,7 +1133,7 @@ dependencies = [
  "sha2",
  "shell-words",
  "snug-format",
- "snug-launcher",
+ "snug-payload",
  "thiserror 1.0.69",
  "zip",
 ]
@@ -1171,10 +1171,19 @@ dependencies = [
  "serde_json",
  "sha2",
  "snug-format",
+ "snug-payload",
  "thiserror 1.0.69",
  "ureq",
  "windows-sys 0.59.0",
  "zip",
+]
+
+[[package]]
+name = "snug-payload"
+version = "0.7.5"
+dependencies = [
+ "editpe",
+ "snug-format",
 ]
 
 [[package]]

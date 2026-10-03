@@ -18,7 +18,7 @@ path = "src/lib.rs"
 
 [dependencies]
 snug-format = { path = "../snug-format" }
-snug-launcher = { path = "../snug-launcher" }
+snug-payload = { path = "../snug-payload" }
 serde = { workspace = true }
 postcard = { workspace = true }
 clap = { workspace = true }

@@ -23,7 +23,9 @@ use snug_format::{
     embedded_file, AppMetadata, LauncherBehavior, LauncherConfig, SnugEmbedded, SnugPayload,
 };
 use snug_launcher::platform;
-use snug_launcher::platform::PAYLOAD_SUFFIX;
+// Taken from the same place the emitter uses, so a rename cannot make the
+// test build a bundle the launcher then refuses to read.
+use snug_payload::PAYLOAD_SUFFIX;
 
 const MAIN_CLASS: &str = "com.example.SnugMacosSmoke";
 

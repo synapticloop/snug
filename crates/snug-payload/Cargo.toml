@@ -1,0 +1,17 @@
+[package]
+name = "snug-payload"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Locate a snug embedded payload on disk — an RT_RCDATA resource in a Windows PE, or a sibling file beside a macOS .app launcher."
+
+[dependencies]
+snug-format = { path = "../snug-format" }
+# `editpe` is a pure Rust PE/COFF parser with no Win32 dependency, so the
+# Windows lookup compiles and runs on macOS and Linux too. `snug-cli`
+# builds Windows EXEs from a Mac, which is the whole reason this is its
+# own crate rather than something buried in the launcher.
+editpe = { workspace = true }

@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use snug_format::{embedded_file, AppMetadata, LauncherBehavior, LauncherConfig};
-use snug_launcher::find_in_file;
+use snug_payload::find_in_file;
 use zip::write::SimpleFileOptions;
 
 use snug_cli::build::{build_exe, output_path};
