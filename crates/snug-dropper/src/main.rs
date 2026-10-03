@@ -13,22 +13,36 @@
 //! **same folder as `snug.exe`** — that folder is where this looks for
 //! the real builder, where it writes `snug-build.log`, and where the
 //! double-click opens its terminal.
+//!
+//! **Windows-only.** Every item below is `#[cfg(windows)]` because the
+//! crate is useless anywhere else: it ships as a `.exe`, it is renamed to
+//! a `.exe`, and it is dragged onto by beginners who will never run it on
+//! macOS. It used to be gated with a single file-level `#![cfg(windows)]`,
+//! which is tidier but leaves `cargo build --workspace` failing on a
+//! macOS dev box with `E0601: main function not found` — a bin whose whole
+//! body was configured out has no entry point. The per-item form keeps
+//! the crate building everywhere so `--workspace` builds *and* `--workspace`
+//! tests run on macOS / Linux, which is where the library half of this
+//! crate (the drop decision and build plumbing) is developed. The
+//! non-Windows `main` at the bottom is the price of that, and it says
+//! exactly one thing.
 
-#![cfg(windows)]
-// Console-subsystem in debug builds only, matching `snug-launcher`: a
-// developer running `cargo run` gets stdout, while the shipped artefact
-// never flashes a console window at someone who is dragging a JAR onto
-// it.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+// `ExitCode` is ungated: the non-Windows stub `main` needs it too.
+#[cfg(windows)]
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+#[cfg(windows)]
 use snug_dropper::build::{self, Invocation, Outcome, LOG_FILE_NAME};
+#[cfg(windows)]
 use snug_dropper::decide::{decide, Mode, Reject};
+#[cfg(windows)]
 use snug_dropper::{terminal, ui};
 
 /// `snug`'s own executable name, looked for beside this one.
+#[cfg(windows)]
 const SNUG_EXE: &str = "snug.exe";
 
 // ---- Copy ---------------------------------------------------------------
@@ -37,22 +51,28 @@ const SNUG_EXE: &str = "snug.exe";
 // place, and so every dialog body is visibly CRLF-terminated — a bare
 // `\n` in a `MessageBoxW` body renders inconsistently.
 
+#[cfg(windows)]
 const MARQUEE_HEADING: &str = "Building your application...";
+#[cfg(windows)]
 const MARQUEE_SUB: &str = "This can take a minute for a large application.";
 
+#[cfg(windows)]
 const TOO_MANY_BODY: &str = "Only one jar is allowed.\r\n\
     \r\n\
     A command window has been opened so you can build it yourself.";
 
+#[cfg(windows)]
 const BAD_TYPE_BODY: &str =
     "Only .jar files and folders can be dropped on Build with Snug.\r\n\
      \r\n\
      A command window has been opened so you can build it yourself.";
 
+#[cfg(windows)]
 const MISSING_SNUG_BODY: &str = "snug.exe could not be found.\r\n\
     \r\n\
     Keep Build with Snug.exe in the same folder as snug.exe.";
 
+#[cfg(windows)]
 fn main() -> ExitCode {
     // Before any window exists, so the dialogs are laid out once and
     // drawn crisply rather than bitmap-stretched.
@@ -86,6 +106,7 @@ fn main() -> ExitCode {
 }
 
 /// The directory this executable lives in.
+#[cfg(windows)]
 fn exe_dir() -> PathBuf {
     std::env::current_exe()
         .ok()
@@ -97,10 +118,12 @@ fn exe_dir() -> PathBuf {
 /// on top of whatever the user already saw — they are being handed the
 /// terminal as a convenience, and if the OS won't give them one there is
 /// nothing useful to say about it.
+#[cfg(windows)]
 fn open_terminal(dir: &Path) {
     let _ = terminal::open(dir);
 }
 
+#[cfg(windows)]
 fn build(home: &Path, input: PathBuf) -> ExitCode {
     let snug_exe = home.join(SNUG_EXE);
     if !snug_exe.is_file() {
@@ -149,6 +172,7 @@ fn build(home: &Path, input: PathBuf) -> ExitCode {
 /// replaces the previous one — and for a beginner who just edited and
 /// rebuilt, "nothing happened" is indistinguishable from a successful
 /// rebuild. One extra click on the rare second build beats that.
+#[cfg(windows)]
 fn confirm_overwrite(invocation: &Invocation) -> bool {
     let file = invocation
         .output
@@ -158,4 +182,19 @@ fn confirm_overwrite(invocation: &Invocation) -> bool {
         "{file} already exists in {}.\r\n\r\nReplace it?",
         invocation.cwd.display()
     ))
+}
+
+/// Non-Windows entry point. This binary is a Windows-only artefact (see
+/// the module docs), so there is nothing here to do beyond saying so.
+/// It exists so `cargo build --workspace` and `cargo test --workspace`
+/// succeed on a macOS / Linux dev box instead of failing with
+/// `E0601: main function not found`.
+#[cfg(not(windows))]
+fn main() -> ExitCode {
+    eprintln!(
+        "snug-dropper / \"Build with Snug\" is a Windows-only tool. \
+         It is shipped beside snug.exe for Windows users; on macOS, use \
+         `snug` directly."
+    );
+    ExitCode::FAILURE
 }

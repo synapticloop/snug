@@ -250,12 +250,26 @@ pub fn run(inv: &Invocation, log: &Path) -> Outcome {
 mod tests {
     use super::*;
 
+    /// Build a path the *host* actually parses as several segments.
+    ///
+    /// [`invocation`] only ever calls `Path::parent` and `Path::join`, so
+    /// it is genuinely separator-agnostic — a hardcoded `C:\work\App.jar`
+    /// is not. On macOS a backslash is an ordinary filename character, so
+    /// that literal is one opaque segment: `parent()` returns `None`, the
+    /// function takes its bare-filename fallback, and the test then fails
+    /// on an assumption about separators rather than on a real bug.
+    /// Joining the segments keeps each test asserting what it is actually
+    /// about — parent-of-parent, verbatim pass-through, spaces and `&` —
+    /// on every platform.
+    fn p(segments: &[&str]) -> PathBuf {
+        segments.iter().collect()
+    }
+
     #[test]
     fn invocation_pins_name_company_and_output() {
-        let inv = invocation(
-            Path::new(r"C:\tools\snug.exe"),
-            Path::new(r"C:\work\App.jar"),
-        );
+        let work = p(&["C:", "work"]);
+        let input = work.join("App.jar");
+        let inv = invocation(&p(&["C:", "tools", "snug.exe"]), &input);
 
         assert_eq!(
             inv.args,
@@ -265,8 +279,8 @@ mod tests {
                 OsString::from("--company"),
                 OsString::from("Example Company Pty Ltd"),
                 OsString::from("-o"),
-                OsString::from(r"C:\work\Example Application Name.exe"),
-                OsString::from(r"C:\work\App.jar"),
+                work.join(format!("{OUTPUT_STEM}.exe")).into_os_string(),
+                input.into_os_string(),
             ]
         );
     }
@@ -285,12 +299,10 @@ mod tests {
     fn invocation_lands_beside_a_dropped_folder_not_inside_it() {
         // Dropping `C:\proj\build\libs` must not write into the build
         // directory — `gradle clean` would eat the artefact.
-        let inv = invocation(Path::new("snug.exe"), Path::new(r"C:\proj\build\libs"));
-        assert_eq!(inv.cwd, PathBuf::from(r"C:\proj\build"));
-        assert_eq!(
-            inv.output,
-            PathBuf::from(r"C:\proj\build\Example Application Name.exe")
-        );
+        let build_dir = p(&["C:", "proj", "build"]);
+        let inv = invocation(Path::new("snug.exe"), &build_dir.join("libs"));
+        assert_eq!(inv.cwd, build_dir);
+        assert_eq!(inv.output, build_dir.join(format!("{OUTPUT_STEM}.exe")));
     }
 
     #[test]
@@ -298,18 +310,11 @@ mod tests {
         // No shell is involved, so these are passed through verbatim.
         // This is the property that would break if anyone "simplified"
         // this into a `cmd /c` string.
-        let inv = invocation(
-            Path::new(r"C:\Program Files\snug.exe"),
-            Path::new(r"C:\My Builds\a&b\App.jar"),
-        );
-        assert_eq!(
-            inv.args.last().unwrap(),
-            &OsString::from(r"C:\My Builds\a&b\App.jar")
-        );
-        assert_eq!(
-            inv.output,
-            PathBuf::from(r"C:\My Builds\a&b\Example Application Name.exe")
-        );
+        let builds = p(&["C:", "My Builds", "a&b"]);
+        let input = builds.join("App.jar");
+        let inv = invocation(&p(&["C:", "Program Files", "snug.exe"]), &input);
+        assert_eq!(inv.args.last().unwrap(), &OsString::from(&input));
+        assert_eq!(inv.output, builds.join(format!("{OUTPUT_STEM}.exe")));
     }
 
     #[test]

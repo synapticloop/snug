@@ -34,6 +34,8 @@
 //! the localization bundle): this dialog does not have an expand/collapse
 //! toggle — both `content` and `expanded` are always rendered.
 
+#![cfg(windows)]
+
 use windows_sys::Win32::Foundation::HWND;
 
 use crate::dialogs::InstallPromptDialog;

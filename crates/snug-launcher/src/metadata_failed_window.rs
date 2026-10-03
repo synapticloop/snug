@@ -9,6 +9,8 @@
 //! `MetadataFailedDialog` onto the modal `&[Button]` slice and
 //! resolves the per-dialog TOML fallback for info copy.
 
+#![cfg(windows)]
+
 use windows_sys::Win32::Foundation::HWND;
 
 use crate::modal_window;

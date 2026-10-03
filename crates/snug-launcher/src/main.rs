@@ -17,6 +17,7 @@
 
 use std::process::ExitCode;
 
+#[cfg(windows)]
 use snug_launcher::error;
 use snug_launcher::localize;
 use snug_launcher::platform;

@@ -16,6 +16,8 @@
 //! TOML fallback for info / button copy (the cross-cutting link-label
 //! fallback lives in `modal_window::show`).
 
+#![cfg(windows)]
+
 use windows_sys::Win32::Foundation::HWND;
 
 use crate::modal_window;

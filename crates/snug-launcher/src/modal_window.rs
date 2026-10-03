@@ -55,6 +55,8 @@
 //! `IDI_ERROR` via `LoadIconW`. **One mascot path** falls back to the
 //! EXE main icon when `mascot_hbitmap == 0`.
 
+#![cfg(windows)]
+
 use std::sync::OnceLock;
 
 use windows_sys::Win32::Foundation::SIZE;

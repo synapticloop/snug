@@ -37,6 +37,8 @@
 //! image as the title-bar icon, loaded at 256 px and drawn into the
 //! 154 px mascot slot. Windows decodes both PNG and DIB icon resources.
 
+#![cfg(windows)]
+
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;

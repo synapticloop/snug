@@ -24,12 +24,29 @@ serde_json = { workspace = true }
 postcard = { workspace = true }
 sha2 = { workspace = true }
 zip = { workspace = true }
-ureq = { workspace = true }
+# `editpe` is deliberately *unconditional*, unlike `windows-sys` / `jni`
+# below. It is a pure Rust PE/COFF parser with no Win32 dependency, and
+# `payload_locator` needs it on every platform: it reads the `RT_RCDATA`
+# "SNUGEMBD" entry out of the launcher stub's PE image. That lookup is
+# platform-neutral — it parses a *file format*, it does not call a
+# platform API — and `snug-cli` builds Windows EXEs from macOS and
+# Linux, so gating it behind `cfg(windows)` broke `cargo build -p
+# snug-cli` everywhere but Windows. (The visible symptom was a batch of
+# `E0277: the size for values of type [u8] cannot be known at
+# compilation time` errors from `get_rcdata` — the unresolved-crate
+# return type, not a real bug.)
+editpe = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }
 jni = { workspace = true }
-editpe = { workspace = true }
+# `ureq` is Windows-only. Its only reader is `jdk_install` (the Adoptium
+# runtime download in the launcher runtime), which is itself
+# `#![cfg(windows)]`. On macOS `native-tls` resolves to Security.framework
+# via `security-framework`, so leaving `ureq` unconditional made a macOS
+# `snug` link a system framework for an update check the CLI never
+# performs.
+ureq = { workspace = true }
 
 # `build.rs` (this file's sibling) wraps `assets/snug-icon.png` as
 # a single-entry ICO and embeds it as `MAINICON` via `embed-resource`
