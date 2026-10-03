@@ -87,14 +87,11 @@ const DATA_FILE_MODE: u32 = 0o644;
 
 /// Should this invocation produce a `.app` rather than a Windows `.exe`?
 ///
-/// Decided purely by the output extension, so the documented command is
-/// the same everywhere. An explicit `--output App.app` on macOS is a
-/// deliberate request for a bundle.
-pub fn wants_app_bundle(cli: &Cli) -> bool {
-    output_path(cli)
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("app"))
-}
+/// The predicate itself lives in [`crate::build::wants_app_bundle`] so
+/// that *every* platform can ask it — the interesting half is the answer
+/// on the platforms that cannot honour it. Re-exported here because this
+/// is the module people look in for it.
+pub use crate::build::wants_app_bundle;
 
 /// Build the `.app` bundle and return the bundle directory path.
 pub fn build_app(cli: &Cli, payload: &SnugPayload) -> Result<PathBuf> {

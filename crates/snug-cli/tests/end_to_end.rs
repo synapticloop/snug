@@ -100,13 +100,25 @@ fn construct_cli(jar: &std::path::Path, exe: &std::path::Path) -> Cli {
 }
 
 #[test]
-fn output_path_defaults_to_jar_stem_exe() {
+fn output_path_defaults_to_the_jar_stem() {
+    // The default is the artefact *this* snug is equipped to build: snug
+    // embeds exactly one launcher, chosen for the machine it was built
+    // on, so a macOS snug defaults to a `.app` bundle and everything else
+    // to a `.exe`. Naming it after the input stem is the part that has
+    // never changed.
     let tmp = tempdir();
     let jar = tmp.join("MyApp.jar");
     write_fake_jar(&jar, None);
     let cli = Cli::parse_from(["snug", &jar.display().to_string()]);
     let p = output_path(&cli);
-    assert_eq!(p, tmp.join("MyApp.exe"));
+
+    assert_eq!(p.parent(), Some(tmp.as_path()));
+    let stem = p.file_stem().expect("output should have a stem");
+    assert_eq!(stem, "MyApp");
+    #[cfg(target_os = "macos")]
+    assert_eq!(p.extension().and_then(|e| e.to_str()), Some("app"));
+    #[cfg(not(target_os = "macos"))]
+    assert_eq!(p.extension().and_then(|e| e.to_str()), Some("exe"));
 }
 
 fn write_fake_jar(path: &std::path::Path, main_class: Option<&str>) {
