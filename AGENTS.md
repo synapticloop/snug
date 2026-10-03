@@ -104,6 +104,102 @@ cargo build --release -p snug-launcher
 Copy-Item target\release\snug-launcher.exe bin\launcher-stub.exe
 ```
 
+### The `snug` CLI also builds and runs natively on macOS / Linux
+
+Producing *Windows EXEs* is the job, but `snug` itself is an ordinary Rust
+CLI that compiles for the host: `cargo build -p snug-cli`, `cargo run`, and
+`cargo test --workspace --lib --bins --tests` all work on macOS and Linux,
+and nothing in it is Windows-specific — it reads a JAR, writes a PE file,
+and calls no OS API. The whole workspace builds there too, which matters
+because macOS is where snug is *developed* (the launcher runtime is what
+needs Windows).
+
+`scripts/build-macos.sh` is the release path. It is not a replacement for
+`scripts\build-release.cmd` — that one is the Windows pipeline (launcher
+stub, dropper, demo JAR, icon stamping) and needs a native Windows host.
+This one is macOS-only and touches nothing Windows produces.
+
+```bash
+scripts/build-macos.sh            # both arches, staged into release/
+scripts/build-macos.sh --clean    # wipe release/macos-* first
+```
+
+```bash
+# what it does, if you ever need to do it by hand:
+rustup target add aarch64-apple-darwin
+export MACOSX_DEPLOYMENT_TARGET=12.0
+cargo build --release -p snug-cli --target x86_64-apple-darwin
+cargo build --release -p snug-cli --target aarch64-apple-darwin
+```
+
+### Release layout
+
+Two thin per-architecture binaries, **not** a universal2. arm64 is the
+future-proof slice; x86_64 is kept only for the four Intel models that top
+out at macOS 26 Tahoe (MacBook Pro 16" 2019, MacBook Pro 13" 2020, iMac
+27" 2020, Mac Pro 2019). A universal2 would cost ~2× on disk, and
+**macOS 27 Golden Gate is the final release with Rosetta 2** — so an
+x86_64-only artefact stops working on Apple Silicon in macOS 28 anyway.
+That asymmetry is why "just ship the Intel one" is no longer the
+maximally-compatible single answer it used to be.
+
+The *binary name is always `snug`*; the platform lives in the directory:
+
+```text
+release/
+├── snug.exe, Build with Snug.exe, …   # the existing flat Windows bundle
+├── macos-arm64/snug
+└── macos-x86_64/snug
+```
+
+That is the point of the subdirectory: every platform invokes `snug`, so
+the documentation never has to name two different binaries. `arm64` is
+`uname -m` on Apple Silicon, which is what someone reading a directory
+listing will recognise — the Rust target is spelled `aarch64`.
+
+`build-macos.sh` verifies each artefact's `lipo` arch and its emitted
+`minos` *before* staging and aborts on a mismatch, because a wrong-arch
+or wrong-floor binary sitting in `release/` is the failure hardest to
+notice downstream. It also `codesign -s -` ad-hoc: arm64 refuses to
+execute a binary with no signature at all, and saying it explicitly keeps
+that true if the linker's default ever changes. It executes a binary only
+when the artefact's arch matches the host, so an Intel dev box verifies
+the arm64 slice structurally rather than pretending to run it.
+
+**Deployment-target floor.** rustc's *defaults* — and hard minimums — are
+macOS 10.12 on Intel and 11.0 on ARM64. Don't ship at them: 10.12 Sierra
+(2016) has had no security updates for years, and Apple Silicon cannot go
+below 11.0 at all. `snug` sets `MACOSX_DEPLOYMENT_TARGET=12.0` (Monterey)
+on **both** targets, which collapses the Intel/ARM asymmetry into one
+floor. Nothing in the dependency graph forces anything higher — every
+`snug-cli` dependency is pure Rust, and `ureq` / `native-tls` is
+`cfg(windows)` precisely so a macOS `snug` doesn't link Security.framework
+for an update check it never performs.
+
+Two traps, both verified the hard way:
+
+- **`cargo` does not fingerprint `MACOSX_DEPLOYMENT_TARGET`.** Change it,
+  rebuild, and you silently get the cached binary at the *old* floor — no
+  warning. That is exactly why `build-macos.sh` checks `minos` instead of
+  trusting the build; to prove a new value took effect, use a fresh
+  `CARGO_TARGET_DIR`, then confirm with `otool -l … | grep minos`.
+- **A lower `clang` default can silently *raise* the floor.** rustc passes
+  its own deployment target to the linker, but a C dependency built by
+  `clang` without `MACOSX_DEPLOYMENT_TARGET` inherits the SDK version, and
+  the linker warns and keeps the higher one. Only a concern if a `*-sys`
+  crate is ever added.
+
+**Distribution is the real macOS cost, not the build.** arm64 refuses to
+execute a binary with *no* code signature, which the linker satisfies with
+an ad-hoc signature automatically. The friction is Gatekeeper: a user who
+downloads a release tarball *in a browser* picks up
+`com.apple.quarantine` and macOS blocks the run. Either ship via Homebrew
+— the formula ad-hoc-signs on download, which is how GitHub CLI dodges
+notarization — or sign with a Developer ID and notarize with
+`xcrun notarytool` + `stapler` (Apple has required `notarytool` over
+`altool` / Xcode 13 since November 2023). Until one of those exists,
+document `xattr -d com.apple.quarantine snug`.
+
 ## Embedded-payload format (`snug-format`)
 
 The launcher locates its data by scanning for the 8-byte magic
@@ -140,6 +236,7 @@ precompiled `launcher-stub.exe` (v2).
 | 7 | Per-user cache + old-version cleanup           | **done** — cache entries expire. `cache::touch` stamps a cached JAR's mtime on **every** launch that uses it, and `cache::sweep` runs off a detached thread (rate-limited to once per 6h by a `.sweep` stamp file) to delete the ones no longer wanted. Policy: keep the most recently used `KEEP_RECENT` (3) entries — the running build's own entries count toward that depth — up to a per-app byte budget of `clamp(build_bytes * 3, 512 MB, 8 GB)`, and evict anything untouched for `MAX_UNUSED_AGE` (30 days) regardless of rank. The current build is never evicted; everything else is recoverable because a missing entry is re-extracted from the payload on the next launch. Sweeping is *not* triggered by the builder — `snug-cli` never writes to the cache, so the launcher is the sole owner of the policy. |
 | 8 | GitHub Actions CI (windows-latest release)     | planned    |
 | 9 | `Build with Snug` beginner drag-and-drop shim   | **done** — separate `crates/snug-dropper` crate. Drop a `.jar` or a folder of JARs on `Build with Snug.exe` and it runs `snug.exe --name "Example Application Name" --company "Example Company Pty Ltd" -o "<parent>/Example Application Name.exe" <input>` behind an indeterminate marquee on a worker thread, then reports with a `MessageBoxW`. Double-click opens a command window in the EXE's own folder. Two or more items, or one item that is neither a `.jar` nor a directory, get a dialog and *then* the terminal as a hand-off. A build failure or a missing `snug.exe` gets an error dialog and **no** terminal. Built as `snug-dropper.exe`; renamed to `Build with Snug.exe` at packaging time. Must ship in the same folder as `snug.exe`. |
+| 10 | Native macOS / Linux `snug` CLI builds    | **done** — `cargo build --workspace` and `cargo test --workspace --lib --bins --tests` pass on macOS (262 tests), and the CLI produces a real `PE32+ executable (GUI) x86-64` end-to-end from a Mac. `scripts/build-macos.sh` stages two thin per-arch binaries into `release/macos-arm64/snug` and `release/macos-x86_64/snug` at a macOS 12.0 deployment floor — same binary name on every platform, platform in the directory, so docs never name two binaries. No universal2: macOS 27 is the last release with Rosetta 2, so arm64 is the future-proof slice and x86_64 only serves the four Intel models that top out at macOS 26. Windows-only surfaces are gated: the six Win32 GUI modules in `snug-launcher` use file-level `#![cfg(windows)]` (joining `jdk_install.rs` / `splash.rs`), while the three Windows-only *binaries* use per-item `#[cfg(windows)]` plus a real non-Windows `main`. `editpe` was made unconditional (pure-Rust PE parsing — `snug-cli` needs it to build EXEs anywhere) and `ureq` Windows-only. Homebrew tap / Developer ID notarization is follow-up; see "Build host". |
 
 ## Versioning
 
@@ -176,6 +273,30 @@ by accident.
   boundary.
 - No `unsafe` in any crate. (`#![forbid(unsafe_code)]` is set in
   `snug-format` and `snug-cli`.)
+- **A file-level `#![cfg(windows)]` is correct in a library module and
+  fatal in a binary root.** It is the right tool for `jdk_install.rs`,
+  `splash.rs`, `modal_window.rs` and the rest of the Win32 GUI — the whole
+  file genuinely is Windows. In a `[[bin]]` / `examples/` crate root it
+  configures out `main` too, and you get
+  `error[E0601]: main function not found`, which fails
+  `cargo build --workspace` on macOS and Linux. So the Windows-only
+  *binaries* — `snug-dropper`, `stamp_dropper_icon`, `snug_preview` — keep
+  a real `main` and gate per item instead: either `#[cfg(windows)]` on each
+  item (`snug-dropper`, `stamp_dropper_icon`) or, for a large file, one
+  `#[cfg(windows)] #[path = "..."] mod imp;` with the implementation moved
+  beside it (`snug_preview`). Either way a non-Windows `main` exists that
+  prints why the tool is Windows-only. Bin *names* must not change —
+  `build-release.cmd` invokes them.
+- **Never hardcode a Windows path literal in a test of portable logic.**
+  `Path::new(r"C:\work\App.jar")` is one opaque segment on macOS, so
+  `parent()` returns `None` and the code takes its bare-filename fallback:
+  the test then fails on an assumption about separators rather than on a
+  bug. Build test paths by joining segments (see the `p()` helper in
+  `snug-dropper/src/build.rs`) so both the input and the expectation use the
+  host's real separators.
+- **`cargo test` builds examples; `cargo build` does not.** On macOS / Linux
+  the three Windows-only examples still need a `main`, so the portable test
+  command is `cargo test --workspace --lib --bins --tests`.
 - Binary artefacts embedded in the launcher are referenced by their
   SHA-256 digest — that digest is also the cache key. It is a
   **content key, not an integrity check**: `ensure_cached` returns early

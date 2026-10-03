@@ -46,16 +46,25 @@
 //! ```
 //!
 //! Exit code 0 on success, 1 on failure (with a stderr message).
+//!
+//! **Windows-only**, for the same reason as the dropper itself: it stamps
+//! a `.exe` that only ever ships to Windows users. The items below carry
+//! per-item `#[cfg(windows)]` rather than one file-level
+//! `#![cfg(windows)]`, so the crate still builds on a macOS / Linux dev
+//! box — a bin whose whole body is configured out has no `main`, which
+//! fails `cargo build --workspace` with `E0601`. See `../main.rs` for the
+//! longer version of this note.
 
-#![cfg(windows)]
-
+#[cfg(windows)]
 use std::path::{Path, PathBuf};
 
 /// The name the dropper ships under. Windows shows this in the taskbar
 /// and to anyone browsing the folder, so it has to be a real display
 /// name rather than the crate's target name.
+#[cfg(windows)]
 const SHIPPED_NAME: &str = "Build with Snug.exe";
 
+#[cfg(windows)]
 fn main() {
     let mut package: Option<Option<PathBuf>> = None;
     let mut positional: Vec<String> = Vec::new();
@@ -135,6 +144,7 @@ fn main() {
     );
 }
 
+#[cfg(windows)]
 fn print_help() {
     println!(
         "stamp_dropper_icon - stamp an icon into snug-dropper.exe and optionally\n\
@@ -160,6 +170,7 @@ fn print_help() {
 /// routinely wiped by `cargo clean`, so the shipping artefact is a
 /// derived copy. Stamping is idempotent, so re-running the whole
 /// pipeline over an already-stamped `target\` binary is safe.
+#[cfg(windows)]
 fn emit_package(exe: &Path, dest: &Path, out: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dest)
         .map_err(|e| format!("creating {}: {e}", dest.display()))?;
@@ -180,6 +191,7 @@ fn emit_package(exe: &Path, dest: &Path, out: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(windows)]
 fn default_exe_path() -> PathBuf {
     // Derive the profile from this helper's *own* build rather than the
     // `PROFILE` env var. `cfg!(debug_assertions)` is always the profile
@@ -201,6 +213,7 @@ fn default_exe_path() -> PathBuf {
         .join("snug-dropper.exe")
 }
 
+#[cfg(windows)]
 fn default_png_path() -> PathBuf {
     workspace_root().join("assets").join("snug-dropper.png")
 }
@@ -208,6 +221,7 @@ fn default_png_path() -> PathBuf {
 /// `CARGO_MANIFEST_DIR` at compile time is the snug-dropper crate root
 /// (`crates/snug-dropper/`); the workspace root is two levels up (`snug/`).
 /// `target/` and `assets/` both live at the workspace root.
+#[cfg(windows)]
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
@@ -216,6 +230,7 @@ fn workspace_root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+#[cfg(windows)]
 fn stamp_icon(exe: &Path, png: &Path) -> Result<(), String> {
     let png_str = png
         .to_str()
@@ -281,4 +296,16 @@ fn stamp_icon(exe: &Path, png: &Path) -> Result<(), String> {
         .write_file(exe)
         .map_err(|e| format!("write_file({}): {e}", exe.display()))?;
     Ok(())
+}
+
+/// Non-Windows entry point — see the module docs. The stamp helper runs
+/// as part of `build-release.cmd` against a natively-built `.exe`; there
+/// is no macOS / Linux equivalent to run.
+#[cfg(not(windows))]
+fn main() {
+    eprintln!(
+        "stamp_dropper_icon is a Windows-only build helper. It stamps a \
+         natively-built snug-dropper.exe via build-release.cmd."
+    );
+    std::process::exit(1);
 }
