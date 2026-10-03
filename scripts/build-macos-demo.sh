@@ -48,6 +48,8 @@ readonly RELEASE_DIR="$ROOT/release"
 readonly DEMO_SUBDIR="macos-$(uname -m)"
 readonly PLATFORM_DIR="$RELEASE_DIR/$DEMO_SUBDIR"
 readonly STAGED_CLI="$PLATFORM_DIR/snug"
+readonly LSREGISTER="/System/Library/Frameworks/CoreServices.framework/\
+Frameworks/LaunchServices.framework/Support/lsregister"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
     echo "build-macos-demo: must run on macOS (found $(uname -s))." >&2
@@ -204,7 +206,17 @@ mkdir -p "$PLATFORM_DIR"
 # Remove the previous staged bundle first. `cp -R` into an existing
 # directory of the same name copies *inside* it, which would quietly
 # produce release/…/snug-javafx-demo.app/snug-javafx-demo.app.
+#
+# Unregister from Launch Services *first*. Deleting a registered .app
+# leaves a stale record pointing at the old path, and the rebuilt bundle
+# has the same identifier - so Finder keeps resolving the id to the dead
+# path and refuses to open the new one with
+# `_LSOpenURLsWithCompletionHandler() failed with error -1712`. The new
+# bundle validates, lints and verifies, so that error is very hard to
+# connect to its real cause. Advisory: a bundle LS never saw is fine, so
+# the exit status is ignored.
 if [[ -d "$PLATFORM_DIR/snug-javafx-demo.app" ]]; then
+    "$LSREGISTER" -u "$PLATFORM_DIR/snug-javafx-demo.app" >/dev/null 2>&1 || true
     rm -rf "$PLATFORM_DIR/snug-javafx-demo.app"
 fi
 cp -R "$DEMO_APP" "$PLATFORM_DIR/"
