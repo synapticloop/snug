@@ -73,6 +73,235 @@ static LAST_SHOWN: Mutex<Option<Shown>> = Mutex::new(None);
 
 /// Make every subsequent alert answer with `button_index` without
 /// showing. `None` restores the real behaviour.
+
+// ---------------------------------------------------------------------------
+//  Progress
+// ---------------------------------------------------------------------------
+
+/// Adoptium's own name for this platform, as it appears in the progress
+/// line. The localisation baseline used to hardcode "Windows x64" in a
+/// *shared* key, which printed the wrong architecture on macOS.
+fn adoptium_arch_label() -> &'static str {
+    match std::env::consts::ARCH {
+        "aarch64" => "macOS arm64",
+        _ => "macOS x86_64",
+    }
+}
+
+/// The live status line under the progress bar.
+///
+/// Split out and pure so the wording is testable without a window. It
+/// mirrors the Win32 progress window's fields: a percent, the phase, and
+/// — once bytes are actually moving — a throughput line. The rate is only
+/// shown when we have two samples, because the first would divide by an
+/// elapsed time of nearly zero and print something absurd.
+fn progress_status(
+    phase: i32,
+    pct: u32,
+    done: u64,
+    total: u64,
+    mib_s: Option<f64>,
+    arch: &str,
+) -> String {
+    let d = dialogs::dialogs();
+    let p = &d.jdk_install.progress;
+
+    let phase_text = dialogs::fill(p.phase_label.as_str(), &[("arch", arch)]);
+    let pct_text = dialogs::fill(p.pct_label.as_str(), &[("pct", &pct.to_string())]);
+
+    let mut parts = vec![phase_text, pct_text];
+    if let Some(rate) = mib_s {
+        let done_mb = format!("{:.0}", done as f64 / 1_048_576.0);
+        let total_mb = format!("{:.0}", total as f64 / 1_048_576.0);
+        let speed = format!("{rate:.1}");
+        parts.push(dialogs::fill(
+            p.detail_with_size.as_str(),
+            &[
+                ("done_mb", done_mb.as_str()),
+                ("total_mb", total_mb.as_str()),
+                ("speed_mb_s", speed.as_str()),
+            ],
+        ));
+    } else if total == 0 {
+        parts.push(p.detail_no_size.clone());
+    }
+    let _ = phase;
+    parts.join("\n")
+}
+
+/// Show download progress until the worker finishes or the user cancels.
+///
+/// An `NSAlert` with an accessory view rather than a hand-built
+/// `NSWindow`. A deliberate trade: an alert gets a real window, correct
+/// focus and a working close box for free, and needs no
+/// `NSWindowDelegate` and no target/action, neither of which is pleasant
+/// to express from Rust. What it does not get is a resizable window or
+/// the mascot panel, and neither is worth the plumbing here.
+///
+/// The run loop is pumped by hand rather than through `runModal`, because
+/// the progress has to be sampled *between* event-loop turns and
+/// `runModal` offers no such seam. `objc2-app-kit` 0.3.2 binds no
+/// `NSTimer`, so a timer block was not an option either.
+///
+/// Returns `true` if the user let it run to completion. Cancellation is
+/// recorded on `shared` exactly as the Windows window records it, so the
+/// caller's post-conditions match on both platforms.
+pub(crate) fn progress(
+    main: &str,
+    shared: std::sync::Arc<crate::jdk_install::ProgressShared>,
+) -> bool {
+    use std::sync::atomic::Ordering;
+    use std::time::Instant;
+
+    use objc2_app_kit::{
+        NSLineBreakMode, NSProgressIndicator, NSProgressIndicatorStyle, NSStackView, NSTextField,
+        NSUserInterfaceLayoutOrientation,
+    };
+    use objc2_foundation::{NSDate, NSRunLoop};
+
+    let d = dialogs::dialogs();
+    let p = &d.jdk_install.progress;
+    let arch = adoptium_arch_label();
+
+    let Some(mtm) = activate_app() else {
+        // No main thread to put a window on. We must not return early:
+        // the caller joins the worker next, and the download is live.
+        return log_only_progress(&shared);
+    };
+
+    let alert = NSAlert::new(mtm);
+    alert.setAlertStyle(NSAlertStyle::Informational);
+    let heading = NSString::from_str(&p.heading);
+    alert.setMessageText(&heading);
+    let subtitle = NSString::from_str(&p.subtitle);
+    alert.setInformativeText(&subtitle);
+    let _ = main;
+
+    // One button, and it cancels. The baseline's
+    // `cancel_button_during_download` reads "Install" because that label
+    // belongs to the Windows *prompt* window, where pressing it means "go
+    // ahead". Here the download is already running, so the only useful
+    // action is abort, and "Install" would be a lie.
+    let cancel_label = NSString::from_str(&d.jdk_install.prompt.button_cancel);
+    alert.addButtonWithTitle(&cancel_label);
+
+    let bar = NSProgressIndicator::new(mtm);
+    bar.setStyle(NSProgressIndicatorStyle::Bar);
+    bar.setIndeterminate(false);
+    bar.setMinValue(0.0);
+    bar.setMaxValue(100.0);
+    bar.setDoubleValue(0.0);
+    // SAFETY: a progress indicator only needs the main thread for its own
+    // bookkeeping, and `mtm` is proof we hold it - that is exactly what
+    // `MainThreadMarker` exists to assert.
+    unsafe { bar.startAnimation(None) };
+
+    let status = NSTextField::labelWithString(&NSString::from_str(""), mtm);
+    status.setLineBreakMode(NSLineBreakMode::ByWordWrapping);
+
+    let stack = NSStackView::new(mtm);
+    stack.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
+    stack.addArrangedSubview(&bar);
+    stack.addArrangedSubview(&status);
+    alert.setAccessoryView(Some(&stack));
+
+    let window = alert.window();
+    window.makeKeyAndOrderFront(None);
+
+    let mut cancelled = false;
+    let mut last: Option<(u64, Instant)> = None;
+
+    while shared.done.load(Ordering::SeqCst) == 0 {
+        let (done, total, phase, pct) = (
+            shared.bytes.load(Ordering::SeqCst),
+            shared.total_bytes.load(Ordering::SeqCst),
+            shared.phase.load(Ordering::SeqCst),
+            shared.pct.load(Ordering::SeqCst).min(100),
+        );
+
+        // A rate needs two samples; the first would divide by ~0.
+        let now = Instant::now();
+        let mib_s = last.map(|(prev_bytes, prev_at)| {
+            let secs = now.duration_since(prev_at).as_secs_f64().max(0.001);
+            (done.saturating_sub(prev_bytes) as f64 / secs) / 1_048_576.0
+        });
+        last = Some((done, now));
+
+        bar.setDoubleValue(pct as f64);
+        let text = progress_status(phase, pct, done, total, mib_s, arch);
+        let ns = NSString::from_str(&text);
+        status.setStringValue(&ns);
+
+        // Closing the alert - close box, Escape or Cancel - is the
+        // abort. `isVisible` is the cheapest honest signal and needs no
+        // delegate.
+        if !window.isVisible() {
+            cancelled = true;
+            break;
+        }
+
+        // Pump briefly, then look again. Without this the window would
+        // not repaint and the bar would sit frozen.
+        let limit = NSDate::dateWithTimeIntervalSinceNow(0.05);
+        NSRunLoop::currentRunLoop().runUntilDate(&limit);
+    }
+
+    window.close();
+
+    if cancelled {
+        // Identical bookkeeping to the Windows progress window: the
+        // worker is still alive and `cancel` is what stops it. Without
+        // also setting `done`, the caller would read a half-finished
+        // download as a success.
+        shared.cancel.store(true, Ordering::SeqCst);
+        if shared.done.load(Ordering::SeqCst) == 0 {
+            shared.done.store(3, Ordering::SeqCst);
+        }
+        eprintln!("snug: download cancelled");
+        return false;
+    }
+
+    true
+}
+
+/// Progress reporting when there is no main thread to put a window on.
+fn log_only_progress(shared: &std::sync::Arc<crate::jdk_install::ProgressShared>) -> bool {
+    use std::sync::atomic::Ordering;
+    use std::time::Instant;
+
+    let arch = adoptium_arch_label();
+    let mut last: Option<(u64, Instant)> = None;
+    let mut last_pct = 0u32;
+    let mut last_phase = -1i32;
+
+    while shared.done.load(Ordering::SeqCst) == 0 {
+        let (done, total, phase, pct) = (
+            shared.bytes.load(Ordering::SeqCst),
+            shared.total_bytes.load(Ordering::SeqCst),
+            shared.phase.load(Ordering::SeqCst),
+            shared.pct.load(Ordering::SeqCst).min(100),
+        );
+        let now = Instant::now();
+        let mib_s = last.map(|(prev_bytes, prev_at)| {
+            let secs = now.duration_since(prev_at).as_secs_f64().max(0.001);
+            (done.saturating_sub(prev_bytes) as f64 / secs) / 1_048_576.0
+        });
+        last = Some((done, now));
+        // The same decision the log-only poller used to make inline, and
+        // the one `jdk_install::should_report` exists to pin.
+        if crate::jdk_install::should_report(phase, last_phase, pct, last_pct) {
+            last_phase = phase;
+            last_pct = pct;
+            eprintln!(
+                "{}",
+                progress_status(phase, pct, done, total, mib_s, arch)
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    true
+}
+
 #[cfg(test)]
 pub(crate) fn set_test_response(button_index: Option<usize>) {
     RESPONSE_OVERRIDE.store(
@@ -384,6 +613,50 @@ mod tests {
         });
         assert_eq!(shown.style, "critical");
         assert_eq!(shown.buttons.len(), 1);
+    }
+
+    #[test]
+    fn progress_status_names_this_platform_not_windows() {
+        // The baseline shipped `Downloading runtime (Windows x64)` as a
+        // *shared* key, so a macOS download announced itself as a Windows
+        // one. The key now takes `{arch}` and each platform fills it in.
+        let text = progress_status(0, 42, 0, 0, None, adoptium_arch_label());
+        assert!(
+            text.contains(&adoptium_arch_label()),
+            "arch missing from: {text}"
+        );
+        assert!(!text.contains("Windows"), "leaked the Windows arch: {text}");
+        assert!(text.contains("42%"), "percent missing from: {text}");
+    }
+
+    #[test]
+    fn progress_status_shows_a_rate_only_once_it_is_meaningful() {
+        // First sample: no rate yet. Dividing by a near-zero elapsed time
+        // would print something absurd, so the line is omitted instead.
+        let no_rate = progress_status(0, 5, 5 << 20, 100 << 20, None, "macOS arm64");
+        assert!(!no_rate.contains("MB/s"), "invented a rate: {no_rate}");
+
+        let with_rate = progress_status(
+            0,
+            20,
+            20 << 20,
+            100 << 20,
+            Some(3.7),
+            "macOS arm64",
+        );
+        assert!(with_rate.contains("MB/s"), "rate missing: {with_rate}");
+        // 20 MiB of 100 MiB at 3.7 MB/s, as the Win32 window shows it.
+        assert!(with_rate.contains("20"), "done_mb missing: {with_rate}");
+        assert!(with_rate.contains("100"), "total_mb missing: {with_rate}");
+    }
+
+    #[test]
+    fn progress_status_never_leaves_a_raw_placeholder() {
+        // Same class of bug as the `{major}` one: a wrong substitution key
+        // puts `{arch}` in the user's face rather than failing.
+        let text = progress_status(0, 7, 7 << 20, 100 << 20, Some(1.0), "macOS x86_64");
+        assert!(!text.contains('{'), "unsubstituted placeholder in: {text}");
+        assert!(!text.contains("%}"), "unsubstituted placeholder in: {text}");
     }
 
     #[test]
