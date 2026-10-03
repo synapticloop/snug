@@ -55,6 +55,16 @@ ureq = { workspace = true }
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 jni = { workspace = true }
 
+# macOS-only: `NSHomeDirectory` is how snug asks the OS where the per-user
+# cache directory is, rather than hardcoding `~/Library/Caches`. Windows
+# reads %LOCALAPPDATA% through the Win32 API and needs none of this.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-foundation = { version = "0.3", default-features = false, features = ["alloc", "std", "NSString", "NSPathUtilities"] }
+# `confstr` is how snug asks macOS where the per-user cache directory is,
+# rather than hardcoding `~/Library/Caches`. Windows reads
+# %LOCALAPPDATA% through the Win32 API instead, so it needs no libc.
+
+
 # `build.rs` (this file's sibling) wraps `assets/snug-icon.png` as
 # a single-entry ICO and embeds it as `MAINICON` via `embed-resource`
 # so `find_best_icon_hicon` in `jdk_install.rs` finds the icon when

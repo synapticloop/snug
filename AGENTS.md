@@ -349,6 +349,26 @@ by accident.
   helper therefore folds in a `static COUNTER: AtomicU64`. Remaining
   sites: `jdk_install.rs` and `snug_preview/windows_impl.rs` (both
   Windows-gated, so they cannot affect a macOS run).
+- **The per-user cache base is asked of the OS, never hardcoded.**
+  `cache::platform_cache_base` is `cfg`-split: `%LOCALAPPDATA%` via the
+  Win32 API on Windows, `NSHomeDirectory() + Library/Caches` on macOS,
+  `$XDG_CACHE_HOME` / `~/.cache` elsewhere. Two traps, both found
+  empirically:
+  - **`confstr(_CS_DARWIN_USER_CACHE_DIR)` is the obvious answer and it is
+    wrong.** Its man page promises a location "not automatically cleaned
+    by the system", but on macOS 15 it returns `/var/folders/<hash>/C/` —
+    inside the per-boot temporary tree, which the system *does* purge.
+    Reproducible with `env -i`, so it is not a launch artefact. The JAR
+    cache there could be deleted out from under a running app. Use
+    Foundation instead.
+  - **`NSHomeDirectory()` returns an `NSString *`, not a `char *`.**
+    Declaring it by hand as `-> *const c_char` compiles, links, and
+    returns *garbage bytes* rather than failing — so use the
+    `objc2-foundation` binding. (The older `objc` 0.2 crate does not
+    compile on current rustc at all: `cannot find macro sel`.)
+  - Note also that reading `LOCALAPPDATA` for a non-Windows target is
+    never right: on macOS it is always unset, which is how the old code
+    silently fell through to the Linux `~/.cache` convention.
 - **The classpath separator is `:` on macOS and `;` on Windows, and a
   wrong one fails *inside the JVM*.** A `;`-joined classpath is not a
   snug-side error — it is one enormous bogus path, so classes fail to
