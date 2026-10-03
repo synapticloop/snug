@@ -2,4 +2,9 @@
 /snug-javafx-demo.exe
 /assets/snug-javafx-demo.exe
 /assets/snug-javafx-demo-*.exe
+# Demo build outputs, same reasoning as the .exe lines above.
+# `snug-javafx-demo.app` is a *Windows* PE that happens to be named .app,
+# not a macOS bundle - it is easy to create by accident and must not be
+# committed.
+/assets/*.app
 *.err

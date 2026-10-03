@@ -265,7 +265,12 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
     //    snug-side error.
     let classpath = std::env::join_paths(&cached_paths)
         .map_err(|e| LauncherError::JniInit(format!("classpath: {e}")))?;
-    let mut builder = InitArgsBuilder::new().version(JNIVersion::V21);
+    let discovered_major = read_java_major(&jvm_dir)?;
+    let (jni_label, jni_version) = jni_version_for(discovered_major);
+    log::log(&format!(
+        "requesting JNI {jni_label} from the discovered JVM (Java {discovered_major:?})"
+    ));
+    let mut builder = InitArgsBuilder::new().version(jni_version);
     for arg in &config.jvm_args {
         builder = builder.option(arg.clone());
     }
@@ -428,6 +433,33 @@ fn ensure_cached(dest: &Path, bytes: &[u8]) -> Result<(), LauncherError> {
     }
     fs::write(dest, bytes)?;
     Ok(())
+}
+
+/// The JNI spec version to request from the JVM we just discovered.
+///
+/// Asking for a version *newer* than the JVM understands is how
+/// `JNI_CreateJavaVM` fails with a useless "JNI call failed". This used
+/// to pin `JNIVersion::V21` unconditionally, so a user who set
+/// `--min-java 17` got a perfectly good Java 17 discovered and loaded —
+/// and then was asked for a JNI 21 entry point that does not exist in it.
+/// Same failure shape as a `;`-joined classpath: snug reports nothing
+/// useful and the error surfaces from inside the JVM.
+///
+/// Everything used here (`FindClass`, `GetStaticMethodID`,
+/// `CallStaticMethod`, `NewString`, the array and exception calls) is
+/// JNI 1.0-era, so requesting exactly what the JVM provides costs
+/// nothing and is correct for every version. `None` — meaning we could
+/// not read the JVM's version — falls back to the lowest spec
+/// everything understands, which can only ever succeed.
+fn jni_version_for(major: Option<u16>) -> (&'static str, JNIVersion) {
+    match major {
+        Some(m) if m >= 21 => ("21", JNIVersion::V21),
+        Some(m) if m >= 20 => ("20", JNIVersion::V20),
+        Some(m) if m >= 19 => ("19", JNIVersion::V19),
+        Some(m) if m >= 10 => ("10", JNIVersion::V10),
+        Some(m) if m >= 9 => ("9", JNIVersion::V9),
+        _ => ("1.8", JNIVersion::V1_8),
+    }
 }
 
 /// Locate the `libjvm.dylib` for a `JAVA_HOME`.
@@ -881,6 +913,25 @@ mod tests {
         };
         assert!(home.is_dir(), "{} is not a directory", home.display());
         assert!(locate_libjvm_dylib(&home).is_some());
+    }
+
+    #[test]
+    fn jni_version_never_exceeds_the_discovered_jvm() {
+        // The bug: a hardcoded JNIVersion::V21 made a discovered Java 17
+        // fail at JNI_CreateJavaVM with "JNI call failed".
+        assert_eq!(jni_version_for(None).1, JNIVersion::V1_8);
+        assert_eq!(jni_version_for(Some(8)).1, JNIVersion::V1_8);
+        assert_eq!(jni_version_for(Some(9)).1, JNIVersion::V9);
+        assert_eq!(jni_version_for(Some(11)).1, JNIVersion::V10);
+        assert_eq!(jni_version_for(Some(17)).1, JNIVersion::V10);
+        assert_eq!(jni_version_for(Some(19)).1, JNIVersion::V19);
+        assert_eq!(jni_version_for(Some(21)).1, JNIVersion::V21);
+        assert_eq!(jni_version_for(Some(25)).1, JNIVersion::V21);
+        // The label is what goes in the log, so it must be the readable
+        // spec name rather than the raw `ver` field.
+        assert_eq!(jni_version_for(Some(25)).0, "21");
+        assert_eq!(jni_version_for(Some(17)).0, "10");
+        assert_eq!(jni_version_for(None).0, "1.8");
     }
 
     fn tempdir() -> std::path::PathBuf {

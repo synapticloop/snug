@@ -126,6 +126,18 @@ fn run() -> Result<()> {
         return dry_run(&cli, &embedded);
     }
 
+    // `snug app.jar -o MyApp.app` builds a macOS bundle; `-o MyApp.exe`
+    // builds the Windows one. Branching on the output extension is what
+    // keeps the documented command identical on both platforms — the docs
+    // never have to name a flag that only exists on one of them.
+    #[cfg(target_os = "macos")]
+    if snug_cli::macos_bundle::wants_app_bundle(&cli) {
+        let output = snug_cli::macos_bundle::build_app(&cli, &embedded.payload)
+            .context("building the macOS .app bundle")?;
+        eprintln!("snug: built {}", output.display());
+        return Ok(());
+    }
+
     let output = build_exe(&cli, &embedded.payload)
         .context("building the Windows EXE")?;
     eprintln!("snug: built {}", output.display());

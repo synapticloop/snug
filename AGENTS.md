@@ -272,7 +272,8 @@ precompiled `launcher-stub.exe` (v2).
 | 8 | GitHub Actions CI (windows-latest release)     | planned    |
 | 9 | `Build with Snug` beginner drag-and-drop shim   | **done** — separate `crates/snug-dropper` crate. Drop a `.jar` or a folder of JARs on `Build with Snug.exe` and it runs `snug.exe --name "Example Application Name" --company "Example Company Pty Ltd" -o "<parent>/Example Application Name.exe" <input>` behind an indeterminate marquee on a worker thread, then reports with a `MessageBoxW`. Double-click opens a command window in the EXE's own folder. Two or more items, or one item that is neither a `.jar` nor a directory, get a dialog and *then* the terminal as a hand-off. A build failure or a missing `snug.exe` gets an error dialog and **no** terminal. Built as `snug-dropper.exe`; renamed to `Build with Snug.exe` at packaging time. Must ship in the same folder as `snug.exe`. |
 | 10 | Native macOS / Linux `snug` CLI builds    | **done** — `cargo build --workspace` and `cargo test --workspace --lib --bins --tests` pass on macOS (283 tests), and the CLI produces a real `PE32+ executable (GUI) x86-64` end-to-end from a Mac. `scripts/build-macos.sh` stages two thin per-arch binaries into `release/macos-arm64/snug` and `release/macos-x86_64/snug` at a macOS 12.0 deployment floor — same binary name on every platform, platform in the directory, so docs never name two binaries. No universal2: macOS 27 is the last release with Rosetta 2, so arm64 is the future-proof slice and x86_64 only serves the four Intel models that top out at macOS 26. Windows-only surfaces are gated: the six Win32 GUI modules in `snug-launcher` use file-level `#![cfg(windows)]` (joining `jdk_install.rs` / `splash.rs`), while the three Windows-only *binaries* use per-item `#[cfg(windows)]` plus a real non-Windows `main`. `editpe` was made unconditional (pure-Rust PE parsing — `snug-cli` needs it to build EXEs anywhere) and `ureq` Windows-only. Homebrew tap / Developer ID notarization is follow-up; see "Build host". |
-| 11 | macOS launcher runtime (`libjvm.dylib` + JNI) | **done, verified against a real JDK on macOS.** `platform/macos.rs` mirrors `platform/windows.rs` step for step: cache extraction + sweep, log, `Main-Class` resolution, JVM discovery, `libjvm.dylib` load via the same `jni` 0.22 invocation API, and the `main(String[])` / JavaFX `Application.launch` dispatch. `tests/macos_launch_e2e.rs` compiles a real class with `javac`, packages it with `jar`, hands it to the launcher, and asserts the JVM actually runs it — it is skipped rather than failed when no JDK is present. **Not implemented:** splash, the Adoptium download flow, and error dialogs (all Win32); `DownloadJdkMode::Auto`/`Force` degrade to discovery-only and *log* that. The `.app` bundle emitter in `snug-cli` is the remaining piece. |
+| 11 | macOS launcher runtime (`libjvm.dylib` + JNI) | **done, verified against a real JDK on macOS.** `platform/macos.rs` mirrors `platform/windows.rs` step for step: cache extraction + sweep, log, `Main-Class` resolution, JVM discovery, `libjvm.dylib` load via the same `jni` 0.22 invocation API, and the `main(String[])` / JavaFX `Application.launch` dispatch. `tests/macos_launch_e2e.rs` compiles a real class with `javac`, packages it with `jar`, hands it to the launcher, and asserts the JVM actually runs it — it is skipped rather than failed when no JDK is present. **Not implemented:** splash, the Adoptium download flow, and error dialogs (all Win32); `DownloadJdkMode::Auto`/`Force` degrade to discovery-only and *log* that. |
+| 12 | macOS `.app` bundle emitter | **done, verified by launching a real bundle.** `snug app.jar -o MyApp.app` produces a bundle; `-o MyApp.exe` produces the Windows one. The platform comes from the output extension, so the documented command is identical on both and the docs never name a flag that exists on only one. `macos_bundle.rs` writes `Contents/{Info.plist,MacOS/<App>,Resources/<App>.snugpayload,Resources/App.icns}` and ad-hoc signs it. The launcher is a **byte-copy** — unlike the Windows stub there is nothing to stamp, because a Mach-O has no resource directory and `editpe` is PE-only. `bin/launcher-stub-macos-<arch>` is embedded per `#[cfg(target_arch)]`, so each `snug` binary carries one launcher and can only build a `.app` for its own arch. |
 
 ## Backlog
 
@@ -299,11 +300,6 @@ commit — useful history, not a live list.
   is a Windows build product.
 
 **macOS**
-- **The `.app` bundle emitter in `snug-cli`.** The launcher side is done
-  and verified; this is the packaging half: `Contents/MacOS` + `Contents/Resources`
-  layout, `Info.plist` (including `LSMinimumSystemVersion`, which should
-  track the 12.0 deployment floor), the `.icns`, and the arch-matched
-  launcher copy.
 - **Homebrew tap, or Developer ID + notarization.** Until one exists,
   document `xattr -d com.apple.quarantine snug`. See "Build host".
 - **A fully dynamic macOS cache path.** Today the only hardcoded part is
@@ -312,6 +308,13 @@ commit — useful history, not a live list.
   0.3.2 does not bind — it would mean hand-declared FFI plus the `objc2`
   runtime, for the identical string. Revisit only if Apple actually
   moves the location.
+- **`--bundle-id` for a real reverse-DNS prefix.** `CFBundleIdentifier`
+  is currently derived from the company and app names
+  (`com.synapticloop.snug-demo`). macOS treats it as a uniqueness key,
+  so a vendor with an actual domain should be able to set it.
+- **macOS splash, error dialogs, and the Adoptium download flow** — the
+  Win32 three. Until then the launcher logs to the per-launch file and
+  stderr.
 
 **Docs**
 - **README section for running on macOS**, and a note that the release
@@ -399,6 +402,25 @@ by accident.
   helper therefore folds in a `static COUNTER: AtomicU64`. Remaining
   sites: `jdk_install.rs` and `snug_preview/windows_impl.rs` (both
   Windows-gated, so they cannot affect a macOS run).
+- **A `.app` is a *directory*, and its permissions are load-bearing.**
+  `macos_bundle.rs` writes `Contents/{Info.plist, MacOS/<App>, Resources/}`
+  and signs the result. Directories are `0755` because a directory needs
+  `x` to be **traversable** — `0644` makes the bundle invisible to
+  `execve`. The executable is `0755`, *not* the `0555` a sealed bundle
+  would use: both run, but `0555` blocks `codesign`, and we emit an
+  ad-hoc signature. Resources and `Info.plist` are `0644`. Note also that
+  ad-hoc signing is not optional polish — **arm64 refuses to execute a
+  binary with no code signature at all.**
+- **`JNIVersion` must not be pinned above the JVM you discovered.**
+  Requesting a spec version newer than the loaded `libjvm` understands is
+  how `JNI_CreateJavaVM` fails with a useless `JNI call failed`: with
+  `JNIVersion::V21` hardcoded, a user who set `--min-java 17` got a good
+  Java 17 discovered and loaded, and was then asked for a JNI 21 entry
+  point that does not exist in it. `jni_version_for` maps the discovered
+  major version to the matching spec (everything used here is JNI
+  1.0-era, so nothing is lost). **`platform/windows.rs` still has this
+  bug** — same hardcoded `V21`, same failure; it just needs a JVM older
+  than 21 to show up, and snug's default is `min_java` 25.
 - **The per-user cache base is asked of the OS, never hardcoded.**
   `cache::platform_cache_base` is `cfg`-split: `%LOCALAPPDATA%` via the
   Win32 API on Windows, `NSHomeDirectory() + Library/Caches` on macOS,
