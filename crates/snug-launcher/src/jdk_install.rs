@@ -1128,7 +1128,7 @@ fn worker_thread(
 ///
 /// A phase change always reports, because it is the boundary where the
 /// meaning of "bytes" changes (download -> verify -> extract).
-fn should_report(phase: i32, last_phase: i32, pct: u32, last_pct: u32) -> bool {
+pub(crate) fn should_report(phase: i32, last_phase: i32, pct: u32, last_pct: u32) -> bool {
     phase != last_phase || pct >= last_pct + 5
 }
 
@@ -1477,77 +1477,18 @@ mod ui {
         clicked == IDOK
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
     pub fn progress(
         _parent: ParentWindow,
         title: &str,
         main: &str,
         shared: Arc<ProgressShared>,
     ) -> bool {
-        use std::time::{Duration, Instant};
-
-        log::log(&format!("{title}: {main}"));
-        // No window to close, so this cannot be cancelled by the user.
-        //
-        // Report on *progress*, not merely on phase change. That was the
-        // bug: `phase` is 0 for the whole download, so reporting only the
-        // phase produced one line and then nothing for the entire fetch.
-        // The download is fast — 185 MB arrives in well under a minute on
-        // a normal link — and a silent minute is indistinguishable from a
-        // hang, which is exactly what it was reported as.
-        //
-        // Interim stand-in for a real progress window, which is the right
-        // answer and is still to do. Until then the log is all the user
-        // has, so it has to say "still moving, at this rate".
-        let mut last_phase = -1i32;
-        let mut last_pct = 0u32;
-        let mut last_at = Instant::now();
-        let mut last_bytes = 0u64;
-
-        while shared.done.load(Ordering::SeqCst) == 0 {
-            let phase = shared.phase.load(Ordering::SeqCst);
-            let done = shared.bytes.load(Ordering::SeqCst);
-            let total = shared.total_bytes.load(Ordering::SeqCst);
-            let pct = if total == 0 {
-                0
-            } else {
-                (done as f64 / total as f64 * 100.0) as u32
-            };
-
-            // Every 5%, or immediately on a phase change.
-            if should_report(phase, last_phase, pct, last_pct) {
-                let now = Instant::now();
-                let elapsed = now.duration_since(last_at).as_secs_f64().max(0.001);
-                let mib_s = (done.saturating_sub(last_bytes) as f64 / elapsed) / 1_048_576.0;
-                last_phase = phase;
-                last_pct = pct;
-                last_at = now;
-                last_bytes = done;
-                log::log(&format!(
-                    "phase {phase}: {pct}% ({:.0}/{:.0} MiB) at {mib_s:.1} MiB/s",
-                    done as f64 / 1_048_576.0,
-                    total as f64 / 1_048_576.0,
-                ));
-            }
-            std::thread::sleep(Duration::from_millis(200));
-        }
-
-        // One last line, so the log does not simply stop mid-narrative.
-        let (done, total) = (
-            shared.bytes.load(Ordering::SeqCst),
-            shared.total_bytes.load(Ordering::SeqCst),
-        );
-        let pct = if total == 0 {
-            0
-        } else {
-            (done as f64 / total as f64 * 100.0) as u32
-        };
-        log::log(&format!(
-            "download finished: {pct}% ({:.0}/{:.0} MiB)",
-            done as f64 / 1_048_576.0,
-            total as f64 / 1_048_576.0,
-        ));
-        true
+        // A real AppKit progress window on the main thread. The log-only
+        // poller that used to live here is now the fallback *inside*
+        // `appkit::progress`, for the off-main-thread case.
+        let _ = title;
+        crate::appkit::progress(main, shared)
     }
 }
 

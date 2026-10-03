@@ -332,12 +332,34 @@ commit — useful history, not a live list.
 **macOS**
 - **The macOS dialogs are AppKit `NSAlert`s, and that is the point.**
   `appkit.rs` is the macOS half of the `jdk_install::ui` seam. The
-  install prompt, metadata-failed, retry and terminal-failure dialogs are
-  done; the **download progress window** and the **launcher error
-  window** (`error_window`, called from `main.rs`) are not. Reuse the
-  same `dialogs()` strings — nothing in the seam formats a string of its
-  own, so a `--localization <tag>` bundle translates the macOS dialogs
-  exactly as it translates the Windows ones.
+  metadata-failed, retry, terminal-failure **and the download progress
+  window** are done; only the **launcher error window** (`error_window`,
+  called from `main.rs`) is not. Reuse the same `dialogs()` strings —
+  nothing in the seam formats a string of its own, so a
+  `--localization <tag>` bundle translates the macOS dialogs exactly as
+  it translates the Windows ones.
+  - The progress window is an `NSAlert` with an **accessory view** (an
+    `NSProgressIndicator` in a vertical `NSStackView`), not a hand-built
+    `NSWindow`. An alert gets a real window, correct focus and a working
+    close box for free, and needs no `NSWindowDelegate` and no
+    target/action — neither of which is pleasant from Rust. It is not
+    resizable and has no mascot panel, and neither is worth the plumbing.
+    The run loop is pumped by hand with `NSRunLoop::runUntilDate`
+    because `runModal` offers no seam to sample progress between event
+    turns, and `objc2-app-kit` 0.3.2 binds no `NSTimer`. Cancel is
+    "the window is no longer visible", which needs no delegate.
+  - Its Cancel button is labelled `prompt.button_cancel`, **not**
+    `progress.cancel_button_during_download` (which reads "Install",
+    because on Windows that label belongs to the *prompt* window where
+    pressing it means "go ahead" — here the download is already running,
+    so "Install" would be a lie).
+  - `jdk_install.progress.phase_label` used to hardcode
+    "Downloading runtime (Windows x64)" in the *shared* baseline, so a
+    macOS download announced itself as a Windows one. It now takes
+    `{arch}` and each platform fills it in. **Watch for this class of
+    bug**: a platform-specific string in the shared baseline, or a wrong
+    substitution key, shows up in the user's copy rather than in a
+    compiler error.
   - It looks like a macOS dialog, *not* like the Windows one. That is a
     deliberate choice, not a compromise: AppKit supplies correct HiDPI,
     accessibility, keyboard focus and system integration, and a
