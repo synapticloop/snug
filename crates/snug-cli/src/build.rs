@@ -16,7 +16,7 @@ use snug_format::{
     AppMetadata, EmbeddedFile, LauncherBehavior, LauncherConfig, SnugEmbedded, SnugPayload,
     SplashConfig, SplashImage, embedded_file, encode,
 };
-use snug_launcher::payload_locator::PAYLOAD_RESOURCE_NAME;
+use snug_payload::PAYLOAD_RESOURCE_NAME;
 
 /// Build the full [`SnugPayload`] that the launcher will consume.
 ///

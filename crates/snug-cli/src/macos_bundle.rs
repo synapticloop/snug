@@ -130,10 +130,7 @@ pub fn build_app(cli: &Cli, payload: &SnugPayload) -> Result<PathBuf> {
     //    The suffix is imported from the launcher crate rather than
     //    retyped: this is the producer, `platform::macos` is the
     //    consumer, and a mismatch surfaces only as "payload not found".
-    let payload_name = format!(
-        "{app_name}.{}",
-        snug_launcher::platform::PAYLOAD_SUFFIX
-    );
+    let payload_name = format!("{app_name}.{}", snug_payload::PAYLOAD_SUFFIX);
     let payload_path = resources_dir.join(&payload_name);
     let embedded = snug_format::SnugEmbedded::new(payload.clone());
     let encoded = snug_format::encode(&embedded).context("encoding snug payload")?;
