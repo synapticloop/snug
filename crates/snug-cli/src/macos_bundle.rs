@@ -161,6 +161,26 @@ pub fn build_app(cli: &Cli, payload: &SnugPayload) -> Result<PathBuf> {
     Ok(bundle)
 }
 
+/// Tell Launch Services to forget a bundle we are about to delete.
+///
+/// Deleting a registered `.app` leaves a **stale** record pointing at the
+/// old path. Rebuild the same bundle id somewhere else and Finder can keep
+/// resolving the id to the dead path, refusing to open anything with
+/// `_LSOpenURLsWithCompletionHandler() failed with error -1712` — which
+/// gives no hint that the new copy is perfectly fine, and is maddening
+/// to debug because the bundle validates, lints and verifies.
+///
+/// Unregistering first is cheap and advisory, so the exit status is
+/// ignored: a bundle LS never saw is not a reason to fail a build.
+fn unregister_bundle(path: &Path) {
+    const LSREGISTER: &str = "/System/Library/Frameworks/CoreServices.framework/\
+        Frameworks/LaunchServices.framework/Support/lsregister";
+    let _ = std::process::Command::new(LSREGISTER)
+        .arg("-u")
+        .arg(path)
+        .output();
+}
+
 /// Refuse to clobber anything that is not obviously a snug bundle.
 ///
 /// A `.app` is a directory, so "the output already exists" is ambiguous:
@@ -186,6 +206,7 @@ fn prepare_bundle_dir(bundle: &Path) -> Result<()> {
             bundle.display()
         );
     }
+    unregister_bundle(bundle);
     fs::remove_dir_all(bundle)
         .with_context(|| format!("removing the previous bundle at {}", bundle.display()))?;
     Ok(())

@@ -536,6 +536,19 @@ by accident.
   handed to the retry dialog. `timeout_connect` is stated even though it
   matches ureq's default, so a silent change there cannot silently
   change our behaviour.
+- **Unregister a `.app` from Launch Services before deleting it.** A
+  deleted bundle leaves a *stale* record pointing at the old path, and a
+  rebuild under the same `CFBundleIdentifier` does not displace it. Finder
+  then keeps resolving the identifier to the dead path and refuses the
+  new one with `_LSOpenURLsWithCompletionHandler() failed with error
+  -1712` — while the new bundle lints, verifies and runs perfectly when
+  invoked directly. Nothing in that error points at its real cause, so
+  both `macos_bundle::prepare_bundle_dir` and `build-macos-demo.sh` call
+  `lsregister -u` first. It is advisory: the exit status is ignored,
+  because a bundle LS never saw is not a reason to fail a build.
+  Corollary worth remembering: a bundle invoked as
+  `Foo.app/Contents/MacOS/Foo` **bypasses Launch Services entirely**, so
+  it working is no evidence that double-clicking will.
 - **A `ParentWindow` type alias is how a `cfg` split stays invisible.**
   `jdk_install::ui::ParentWindow` is `HWND` on Windows and `()` elsewhere.
   Because the alias *is* `HWND` there, every existing signature and call
