@@ -217,14 +217,41 @@ pub struct JdkMetadata {
     pub major: u16,
 }
 
-pub fn fetch_metadata(min_java_major: u16) -> Result<JdkMetadata, JdkError> {
+/// Build an HTTP agent with timeouts that suit a multi-hundred-megabyte
+/// download.
+///
+/// `ureq` defaults to `timeout_read: None` — **no read timeout at all** —
+/// so a connection that establishes and then goes quiet blocks forever with
+/// no error, no retry, and nothing in the log. That is indistinguishable
+/// from a hang, and it is the worst possible failure for something the user
+/// cannot see into.
+///
+/// A per-read timeout is the right shape rather than a total-download
+/// budget: each successful read resets it, so a slow-but-progressing
+/// 185 MB fetch is never killed, while a dead socket is caught in 30
+/// seconds and handed to the retry dialog.
+fn http_agent() -> Result<std::sync::Arc<ureq::Agent>, JdkError> {
+    use std::time::Duration;
     use ureq::native_tls::TlsConnector;
 
-    let agent = ureq::AgentBuilder::new()
-        .tls_connector(std::sync::Arc::new(
-            TlsConnector::new().map_err(|e| JdkError::MetadataFetch(e.to_string()))?,
-        ))
-        .build();
+    Ok(std::sync::Arc::new(
+        ureq::AgentBuilder::new()
+            .tls_connector(std::sync::Arc::new(
+                TlsConnector::new().map_err(|e| JdkError::Download(e.to_string()))?,
+            ))
+            // Stated rather than relied upon: this happens to match
+            // ureq's default today, and a silent change there should not
+            // silently change our behaviour.
+            .timeout_connect(Duration::from_secs(30))
+            // Per-read, so a stall is caught but progress is not punished.
+            .timeout_read(Duration::from_secs(30))
+            .timeout_write(Duration::from_secs(30))
+            .build(),
+    ))
+}
+
+pub fn fetch_metadata(min_java_major: u16) -> Result<JdkMetadata, JdkError> {
+    let agent = http_agent()?;
 
     // The `/v3/assets/latest/{maj}/hotspots` endpoint returns an empty
     // array for current majors (verified against Adoptium 2026-09). The
@@ -685,13 +712,7 @@ fn download_to_disk(
     total_bytes: u64,
     mut on_progress: impl FnMut(u64),
 ) -> Result<u64, JdkError> {
-    use ureq::native_tls::TlsConnector;
-
-    let agent = ureq::AgentBuilder::new()
-        .tls_connector(std::sync::Arc::new(
-            TlsConnector::new().map_err(|e| JdkError::Download(e.to_string()))?,
-        ))
-        .build();
+    let agent = http_agent()?;
 
     let resp = agent
         .get(url)
@@ -1097,6 +1118,20 @@ fn worker_thread(
 ///   here instead, with
 ///   an "Open the download page in my browser" button so the user
 ///   can still install Temurin manually.
+/// Should this progress sample be logged?
+///
+/// Split out because it is the whole bug. The first version reported only
+/// a *phase* change, and `phase` is 0 for the entire download - so a
+/// 114 MB fetch produced exactly one line and then silence, which reads
+/// as a hang. Reporting on byte progress as well is what makes the wait
+/// legible.
+///
+/// A phase change always reports, because it is the boundary where the
+/// meaning of "bytes" changes (download -> verify -> extract).
+fn should_report(phase: i32, last_phase: i32, pct: u32, last_pct: u32) -> bool {
+    phase != last_phase || pct >= last_pct + 5
+}
+
 pub fn maybe_install(
     parent: ui::ParentWindow,
     min_java_major: u16,
@@ -1449,31 +1484,69 @@ mod ui {
         main: &str,
         shared: Arc<ProgressShared>,
     ) -> bool {
+        use std::time::{Duration, Instant};
+
         log::log(&format!("{title}: {main}"));
         // No window to close, so this cannot be cancelled by the user.
-        // Poll just often enough to notice the worker finishing, and log
-        // a coarse phase change so a multi-hundred-MB download is not a
-        // silent pause in the log.
+        //
+        // Report on *progress*, not merely on phase change. That was the
+        // bug: `phase` is 0 for the whole download, so reporting only the
+        // phase produced one line and then nothing for the entire fetch.
+        // The download is fast — 185 MB arrives in well under a minute on
+        // a normal link — and a silent minute is indistinguishable from a
+        // hang, which is exactly what it was reported as.
+        //
+        // Interim stand-in for a real progress window, which is the right
+        // answer and is still to do. Until then the log is all the user
+        // has, so it has to say "still moving, at this rate".
         let mut last_phase = -1i32;
+        let mut last_pct = 0u32;
+        let mut last_at = Instant::now();
+        let mut last_bytes = 0u64;
+
         while shared.done.load(Ordering::SeqCst) == 0 {
             let phase = shared.phase.load(Ordering::SeqCst);
-            if phase != last_phase {
+            let done = shared.bytes.load(Ordering::SeqCst);
+            let total = shared.total_bytes.load(Ordering::SeqCst);
+            let pct = if total == 0 {
+                0
+            } else {
+                (done as f64 / total as f64 * 100.0) as u32
+            };
+
+            // Every 5%, or immediately on a phase change.
+            if should_report(phase, last_phase, pct, last_pct) {
+                let now = Instant::now();
+                let elapsed = now.duration_since(last_at).as_secs_f64().max(0.001);
+                let mib_s = (done.saturating_sub(last_bytes) as f64 / elapsed) / 1_048_576.0;
                 last_phase = phase;
-                let (done, total) = (
-                    shared.bytes.load(Ordering::SeqCst),
-                    shared.total_bytes.load(Ordering::SeqCst),
-                );
-                let pct = if total == 0 {
-                    0
-                } else {
-                    (done as f64 / total as f64 * 100.0) as u32
-                };
+                last_pct = pct;
+                last_at = now;
+                last_bytes = done;
                 log::log(&format!(
-                    "download phase={phase} {done}/{total} bytes ({pct}%)"
+                    "phase {phase}: {pct}% ({:.0}/{:.0} MiB) at {mib_s:.1} MiB/s",
+                    done as f64 / 1_048_576.0,
+                    total as f64 / 1_048_576.0,
                 ));
             }
-            std::thread::sleep(std::time::Duration::from_millis(200));
+            std::thread::sleep(Duration::from_millis(200));
         }
+
+        // One last line, so the log does not simply stop mid-narrative.
+        let (done, total) = (
+            shared.bytes.load(Ordering::SeqCst),
+            shared.total_bytes.load(Ordering::SeqCst),
+        );
+        let pct = if total == 0 {
+            0
+        } else {
+            (done as f64 / total as f64 * 100.0) as u32
+        };
+        log::log(&format!(
+            "download finished: {pct}% ({:.0}/{:.0} MiB)",
+            done as f64 / 1_048_576.0,
+            total as f64 / 1_048_576.0,
+        ));
         true
     }
 }
@@ -1803,6 +1876,107 @@ mod tests {
         let err = extract_jdk_archive(&archive, &dir.join("install")).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains(".tar.gz"), "unhelpful error: {msg}");
+    }
+
+    /// Network diagnostic, not a unit test. Run with
+    /// `cargo test -p snug-launcher --lib download_probe -- --ignored --nocapture`.
+    ///
+    /// Reports *where* the Adoptium download spends its time, which the
+    /// flow's own log cannot: `download_to_disk` creates the file only
+    /// *after* the response arrives, so a hang there is indistinguishable
+    /// from a hang before it.
+    #[test]
+    #[ignore = "touches the network"]
+    fn download_probe_reports_where_the_time_goes() {
+        use std::time::{Duration, Instant};
+        use ureq::native_tls::TlsConnector;
+
+        let t0 = Instant::now();
+        let meta = match fetch_metadata(21) {
+            Ok(m) => m,
+            Err(e) => {
+                println!("metadata FAILED after {:?}: {e}", t0.elapsed());
+                return;
+            }
+        };
+        println!("metadata ok after {:?}: {}", t0.elapsed(), meta.version);
+
+        let agent = ureq::AgentBuilder::new()
+            .tls_connector(std::sync::Arc::new(TlsConnector::new().unwrap()))
+            .build();
+
+        let t1 = Instant::now();
+        let resp = match agent.get(&meta.package_link).call() {
+            Ok(r) => r,
+            Err(e) => {
+                println!("GET FAILED after {:?}: {e}", t1.elapsed());
+                println!("url: {}", meta.package_link);
+                return;
+            }
+        };
+        println!("headers after {:?}: {}", t1.elapsed(), resp.status());
+        for name in ["location", "content-length", "transfer-encoding"] {
+            println!("  {name}: {:?}", resp.header(name));
+        }
+
+        // Sustained rate over a few seconds: the difference between "hung"
+        // and "slow" is the whole question.
+        let t2 = Instant::now();
+        let mut reader = resp.into_reader();
+        let mut buf = vec![0u8; 64 * 1024];
+        let (mut total, mut reads) = (0u64, 0u32);
+        let cap = Duration::from_secs(5);
+        while t2.elapsed() < cap {
+            match std::io::Read::read(&mut reader, &mut buf) {
+                Ok(0) => {
+                    println!("body ended after {total} bytes");
+                    break;
+                }
+                Ok(n) => {
+                    total += n as u64;
+                    reads += 1;
+                }
+                Err(e) => {
+                    println!("body read FAILED after {total} bytes: {e}");
+                    break;
+                }
+            }
+        }
+        let secs = t2.elapsed().as_secs_f64().max(0.001);
+        println!(
+            "read {total} bytes in {reads} reads over {secs:.1}s = {:.2} MB/s",
+            total as f64 / secs / 1_048_576.0
+        );
+        println!(
+            "=> a {} MB archive would take about {:.0}s",
+            194_316_575 / 1_048_576,
+            194_316_575 as f64 / (total as f64 / secs)
+        );
+    }
+
+    #[test]
+    fn progress_is_reported_on_bytes_not_just_phase() {
+        // The regression, stated as a test. `phase` is 0 for the whole
+        // download, so a poller that only watched the phase logged one
+        // line and then nothing - and silence reads as a hang.
+        assert!(
+            should_report(0, 0, 5, 0),
+            "5% of a 114 MB download must produce a line"
+        );
+        assert!(
+            should_report(0, 0, 100, 95),
+            "a full download must report even at 100%"
+        );
+
+        // No movement, no line: a busy-wait that logged every poll would
+        // bury the log in thousands of identical entries.
+        assert!(!should_report(0, 0, 4, 0), "under a 5% step, stay quiet");
+        assert!(!should_report(3, 3, 99, 99), "no movement, stay quiet");
+
+        // A phase change always reports - it is where "bytes" changes
+        // meaning (download -> verify -> extract).
+        assert!(should_report(1, 0, 0, 0), "phase change must report");
+        assert!(should_report(0, 1, 0, 0), "phase change must report");
     }
 
     #[cfg(target_os = "macos")]
