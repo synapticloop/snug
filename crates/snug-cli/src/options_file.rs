@@ -154,8 +154,9 @@ pub fn load(path: &Path) -> Result<Vec<String>, OptionsFileError> {
 ///   CLI portion so clap doesn't see them twice (the file has already
 ///   been loaded and merged).
 pub fn merge(raw_args: &[String], file_tokens: Vec<String>) -> Vec<String> {
-    let cli_flag_names = collect_long_flag_names(&raw_args[1..]);
-    let file_tokens_filtered = strip_overridden_flags(&file_tokens, &cli_flag_names);
+    let spec = FlagSpec::from_cli();
+    let cli_flag_names = spec.collect_cli_flags(&raw_args[1..]);
+    let file_tokens_filtered = spec.strip_overridden(&file_tokens, &cli_flag_names);
 
     let mut out = Vec::with_capacity(raw_args.len() + file_tokens_filtered.len());
     if let Some(prog) = raw_args.first() {
@@ -183,69 +184,195 @@ pub fn merge(raw_args: &[String], file_tokens: Vec<String>) -> Vec<String> {
     out
 }
 
-/// Collect long-flag names (`--name`, `--name=value`) from a slice of
-/// argv tokens. Excludes `--options` and its value, stops at `--`.
-fn collect_long_flag_names(args: &[String]) -> std::collections::HashSet<String> {
-    let mut names = std::collections::HashSet::new();
-    let mut skip_next = false;
-    for arg in args {
-        if skip_next {
-            skip_next = false;
-            continue;
-        }
-        if arg == "--" {
-            break;
-        }
-        if arg == "--options" {
-            skip_next = true;
-            continue;
-        }
-        if arg.starts_with("--options=") {
-            continue;
-        }
-        if let Some(name) = long_flag_name(arg) {
-            names.insert(name);
-        }
-    }
-    names
+/// What clap knows about the flag surface, resolved once per merge.
+///
+/// This exists because the previous implementation compared flag *strings*.
+/// A `snug.options` carrying `--output` was therefore not overridden by
+/// `-o` on the command line, and clap rejected the merged argv with
+///
+/// ```text
+/// error: the argument '--output <EXE>' cannot be used multiple times
+/// ```
+///
+/// which is the worst possible shape for a documented rule ("CLI flags
+/// always override file values"): the file, the short form, and the error
+/// message all have to be read together to see that nothing is actually
+/// wrong. Deriving the alias table from the [`Cli`] definition means a
+/// new `#[arg(short = 'x')]` can never be half-wired, and it lets us learn
+/// arity — which is what makes `--jvm-arg -Xmx2g` parse as one flag plus
+/// its value rather than two flags.
+struct FlagSpec {
+    /// Every accepted spelling (long, short, hidden and visible aliases)
+    /// mapped to the arg's long name — the canonical form used everywhere
+    /// below.
+    aliases: std::collections::HashMap<String, String>,
+    /// Canonical names of args that consume a following value token.
+    takes_value: std::collections::HashSet<String>,
+    /// Canonical names of `ArgAction::Append` args, i.e. `Vec<T>` fields.
+    /// Their values accumulate across file and CLI instead of overriding.
+    repeatable: std::collections::HashSet<String>,
 }
 
-/// Flag names whose `Cli` field is `Vec<T>` (ArgAction::Append).
-///
-/// Repeated occurrences of these flags must NOT be deduped at merge
-/// time — both file and CLI contributions are collected and appended.
-const REPEATABLE_FLAGS: &[&str] = &["jvm-arg", "localization"];
+impl FlagSpec {
+    /// Build the table from the `Cli` definition itself.
+    fn from_cli() -> Self {
+        use clap::CommandFactory;
 
-/// Strip any long flag (and its separate value token) from `tokens`
-/// whose name is in `cli_flags` *and* is not in [`REPEATABLE_FLAGS`].
-/// Embedded `--name=value` is stripped as a single token;
-/// space-separated `--name value` consumes both.
-fn strip_overridden_flags(
-    tokens: &[String],
-    cli_flags: &std::collections::HashSet<String>,
-) -> Vec<String> {
-    let mut out = Vec::with_capacity(tokens.len());
-    let mut skip_next = false;
-    for token in tokens {
-        if skip_next {
-            skip_next = false;
-            continue;
-        }
-        if token == "--" {
-            out.push(token.clone());
-            continue;
-        }
-        if let Some(name) = long_flag_name(token) {
-            if cli_flags.contains(&name) && !REPEATABLE_FLAGS.contains(&name.as_str()) {
-                if !token.contains('=') {
-                    skip_next = true;
+        let mut spec = Self {
+            aliases: std::collections::HashMap::new(),
+            takes_value: std::collections::HashSet::new(),
+            repeatable: std::collections::HashSet::new(),
+        };
+
+        for arg in crate::cli::Cli::command().get_arguments() {
+            // A positional has no long name; fall back to its id so the
+            // sets below still get a key. It can never collide with a
+            // flag because positionals do not start with `-`.
+            let canonical = arg
+                .get_long()
+                .unwrap_or_else(|| arg.get_id().as_str())
+                .to_string();
+
+            if let Some(long) = arg.get_long() {
+                spec.aliases.insert(long.to_string(), canonical.clone());
+            }
+            if let Some(aliases) = arg.get_all_aliases() {
+                for alias in aliases {
+                    spec.aliases.insert(alias.to_string(), canonical.clone());
                 }
-                continue;
+            }
+            if let Some(short) = arg.get_short() {
+                spec.aliases.insert(short.to_string(), canonical.clone());
+            }
+            if let Some(shorts) = arg.get_all_short_aliases() {
+                for short in shorts {
+                    spec.aliases.insert(short.to_string(), canonical.clone());
+                }
+            }
+
+            // `ArgAction` is the reliable signal. `Arg::get_num_args`
+            // reads a field clap only populates while *building* a
+            // command, so on a freshly derived `Command` it reports
+            // `None` for everything and every arg looks valueless — which
+            // silently turns off the value-skipping below and lets a
+            // flag's value survive as a stray positional.
+            let action = arg.get_action();
+            if action.takes_values() {
+                spec.takes_value.insert(canonical.clone());
+            }
+            if matches!(action, clap::ArgAction::Append) {
+                spec.repeatable.insert(canonical);
             }
         }
-        out.push(token.clone());
+
+        spec
     }
-    out
+
+    /// The canonical flag a token names, plus whether that token already
+    /// carries its value. `None` for anything that is not a known flag —
+    /// positionals, `--`, a bare `-`, and unknown flags, which must not be
+    /// allowed to override anything.
+    fn token_flag(&self, token: &str) -> Option<(String, bool)> {
+        if let Some(name) = long_flag_name(token) {
+            return Some((self.aliases.get(&name)?.clone(), token.contains('=')));
+        }
+
+        let rest = token.strip_prefix('-')?;
+        if rest.is_empty() || rest.starts_with('-') {
+            return None;
+        }
+
+        // Short form. clap accepts `-o`, `-oVALUE` and `-o=VALUE`, and
+        // bundles several boolean shorts as `-abc`. Walk the characters:
+        // the first one that takes a value ends the scan, because
+        // everything after it is that value rather than another flag.
+        let mut last: Option<String> = None;
+        for (idx, ch) in rest.char_indices() {
+            let canonical = match self.aliases.get(&ch.to_string()) {
+                Some(c) => c.clone(),
+                // An unrecognised short means this is not a flag we know.
+                // Stop rather than guess which prefix was meant.
+                None => return None,
+            };
+            if self.takes_value.contains(&canonical) {
+                return Some((canonical, idx + ch.len_utf8() < rest.len()));
+            }
+            last = Some(canonical);
+        }
+        last.map(|c| (c, false))
+    }
+
+    /// Canonical names of the flags the user actually typed.
+    fn collect_cli_flags(&self, args: &[String]) -> std::collections::HashSet<String> {
+        let mut names = std::collections::HashSet::new();
+        let mut skip_next = false;
+
+        for arg in args {
+            if skip_next {
+                skip_next = false;
+                continue;
+            }
+            if arg == "--" {
+                break;
+            }
+            if arg == "--options" {
+                skip_next = true;
+                continue;
+            }
+            if arg.starts_with("--options=") {
+                continue;
+            }
+            if let Some((canonical, attached)) = self.token_flag(arg) {
+                names.insert(canonical.clone());
+                // `--name value` consumes the next token. Skipping it is
+                // what stops a value that begins with `-` from being read
+                // as a flag of its own — `--jvm-arg -Xmx2g` declares
+                // `--jvm-arg`, not `--jvm-arg` *and* nothing else.
+                if !attached && self.takes_value.contains(&canonical) {
+                    skip_next = true;
+                }
+            }
+        }
+
+        names
+    }
+
+    /// Drop file tokens for any flag the CLI also set.
+    ///
+    /// Repeatable flags survive: `--jvm-arg` and `--localization` are
+    /// `Vec<T>` fields, so both sides' occurrences are meant to accumulate.
+    /// Stripping either would silently discard the file's half of the JVM
+    /// options.
+    fn strip_overridden(
+        &self,
+        tokens: &[String],
+        cli_flags: &std::collections::HashSet<String>,
+    ) -> Vec<String> {
+        let mut out = Vec::with_capacity(tokens.len());
+        let mut skip_next = false;
+
+        for token in tokens {
+            if skip_next {
+                skip_next = false;
+                continue;
+            }
+            if token == "--" {
+                out.push(token.clone());
+                continue;
+            }
+            if let Some((canonical, attached)) = self.token_flag(token) {
+                if cli_flags.contains(&canonical) && !self.repeatable.contains(&canonical) {
+                    if !attached && self.takes_value.contains(&canonical) {
+                        skip_next = true;
+                    }
+                    continue;
+                }
+            }
+            out.push(token.clone());
+        }
+
+        out
+    }
 }
 
 /// Extract the long-flag name from a token, or `None` if the token is
@@ -472,6 +599,149 @@ mod tests {
         std::fs::write(dir.join(DEFAULT_OPTIONS_FILE), "--name Same\n").unwrap();
         let raw = args(&["snug", "app.jar"]);
         assert_eq!(resolve(&raw, &dir, Some(&dir)), Some(dir.join(DEFAULT_OPTIONS_FILE)));
+    }
+
+    // ---- Short/long flag identity -------------------------------------
+    //
+    // The regression these guard: overriding was matched on the literal
+    // flag *string*, so `-o` on the command line did not strip
+    // `--output` from `snug.options` and clap aborted the whole build
+    // with "the argument '--output <EXE>' cannot be used multiple
+    // times". Both directions matter, because either side of the merge
+    // can be written in either form.
+
+    #[test]
+    fn flag_spec_derives_short_and_long_aliases_from_the_cli_definition() {
+        let spec = FlagSpec::from_cli();
+        // The pair that actually caused the bug.
+        assert_eq!(spec.aliases.get("o").map(String::as_str), Some("output"));
+        assert_eq!(spec.aliases.get("output").map(String::as_str), Some("output"));
+        // Repeatable flags come from ArgAction::Append, not a hand-written
+        // list, so a new `Vec<T>` field is classified correctly on arrival.
+        assert!(spec.repeatable.contains("jvm-arg"));
+        assert!(spec.repeatable.contains("localization"));
+        // `--output` takes a value, so `--output App.exe` must not be
+        // mistaken for the positional JAR.
+        assert!(spec.takes_value.contains("output"));
+    }
+
+    #[test]
+    fn cli_short_form_overrides_file_long_form() {
+        // The exact reported failure: `snug -o App.exe app.jar` against a
+        // `snug.options` that already sets `--output`.
+        let raw = args(&["snug", "app.jar", "-o", "CLI.exe"]);
+        let merged = merge(
+            &raw,
+            vec!["--output".into(), "File.exe".into(), "--company".into(), "Co".into()],
+        );
+        assert_eq!(
+            merged,
+            vec![
+                "snug".to_string(),
+                "--company".to_string(),
+                "Co".to_string(),
+                "app.jar".to_string(),
+                "-o".to_string(),
+                "CLI.exe".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn cli_long_form_overrides_file_short_form() {
+        // The mirror image: the file may use the short form too.
+        let raw = args(&["snug", "app.jar", "--output", "CLI.exe"]);
+        let merged = merge(
+            &raw,
+            vec!["-o".into(), "File.exe".into(), "--company".into(), "Co".into()],
+        );
+        assert_eq!(
+            merged,
+            vec![
+                "snug".to_string(),
+                "--company".to_string(),
+                "Co".to_string(),
+                "app.jar".to_string(),
+                "--output".to_string(),
+                "CLI.exe".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn short_form_with_attached_value_is_one_token() {
+        // clap accepts `-oApp.exe`. It is a single token carrying a value,
+        // so it must not leave a tail behind, and it must still override
+        // the file's two-token form.
+        let raw = args(&["snug", "app.jar", "-oCLI.exe"]);
+        let merged = merge(&raw, vec!["--output".into(), "File.exe".into()]);
+        assert_eq!(
+            merged,
+            vec![
+                "snug".to_string(),
+                "app.jar".to_string(),
+                "-oCLI.exe".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn stripped_file_flag_consumes_its_value_token() {
+        // Guards the arity lookup. Without it, stripping `--name` from the
+        // file left a bare `File` behind, which clap then read as a second
+        // positional alongside app.jar.
+        let raw = args(&["snug", "app.jar", "--name", "CLI"]);
+        let merged = merge(
+            &raw,
+            vec![
+                "--name".into(),
+                "File".into(),
+                "--min-java".into(),
+                "25".into(),
+            ],
+        );
+        assert_eq!(
+            merged,
+            vec![
+                "snug".to_string(),
+                "--min-java".to_string(),
+                "25".to_string(),
+                "app.jar".to_string(),
+                "--name".to_string(),
+                "CLI".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_value_beginning_with_a_dash_is_not_mistaken_for_a_flag() {
+        // `--jvm-arg` allows hyphen values, and snug's own generated
+        // `snug.options` ships `--jvm-arg --enable-native-access=…`. The
+        // value must be consumed as a value, and — because `jvm-arg` is
+        // repeatable — both sides' occurrences survive.
+        let raw = args(&["snug", "app.jar", "--jvm-arg", "-Xmx2g"]);
+        let merged = merge(
+            &raw,
+            vec![
+                "--jvm-arg".into(),
+                "-Xms256m".into(),
+                "--name".into(),
+                "File".into(),
+            ],
+        );
+        assert_eq!(
+            merged,
+            vec![
+                "snug".to_string(),
+                "--jvm-arg".to_string(),
+                "-Xms256m".to_string(),
+                "--name".to_string(),
+                "File".to_string(),
+                "app.jar".to_string(),
+                "--jvm-arg".to_string(),
+                "-Xmx2g".to_string(),
+            ]
+        );
     }
 
     fn tempdir() -> std::path::PathBuf {

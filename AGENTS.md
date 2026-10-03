@@ -368,6 +368,21 @@ by accident.
   sources. Resolution lives in `options_file::resolve`, which takes
   the CWD and the exe dir (`options_file::current_exe_dir()`) so the
   precedence order is testable without spawning the binary.
+  - **Override matching is by flag *identity*, not by string.** Both the
+    CLI tokens and the file tokens are resolved through a `FlagSpec`
+    built from the `Cli` definition itself, so `-o` on the command line
+    strips `--output` from the file and vice versa. This was a real bug:
+    the merge used to compare flag *strings*, so the scaffolded
+    `snug.options` (which writes `--output`) could not be overridden with
+    the `-o` shown in `--help`, and clap aborted with "the argument
+    '--output <EXE>' cannot be used multiple times". Hand-maintained
+    tables are the trap, so there are none — the repeatable set comes
+    from `ArgAction::Append` and the arity set from
+    `ArgAction::takes_values()`. Do **not** reach for
+    `Arg::get_num_args()` here: it reads a field clap only populates
+    while *building* a command, so on a derived `Command` it reports
+    `None` for every arg and value-skipping silently stops working,
+    leaving a stripped flag's value behind as a stray positional.
 - **The `--init-*` family scaffolds project files and exits.** Two modes,
   both short-circuiting before options-file loading and before the
   JAR-required check, both strict (a dedicated mini-parser in
