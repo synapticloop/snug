@@ -8,3 +8,8 @@
 # committed.
 /assets/*.app
 *.err
+# macOS: Finder writes one into every directory it visits, including
+# build output trees like release/. The path-scoped exclusion used in
+# `git add` only ever covered the root one.
+.DS_Store
+**/.DS_Store
