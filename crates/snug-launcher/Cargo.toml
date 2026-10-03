@@ -40,14 +40,6 @@ editpe = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }
-# `ureq` is Windows-only. Its only reader is `jdk_install` (the Adoptium
-# runtime download in the launcher runtime), which is itself
-# `#![cfg(windows)]`. On macOS `native-tls` resolves to Security.framework
-# via `security-framework`, so leaving `ureq` unconditional made a macOS
-# `snug` link a system framework for an update check the CLI never
-# performs.
-ureq = { workspace = true }
-
 # `jni` is needed by every target that has a real launcher runtime, not
 # just Windows: `platform/macos.rs` loads `libjvm.dylib` through the same
 # `jni` invocation API. Scoped this way it stays out of the Linux build,
@@ -55,6 +47,18 @@ ureq = { workspace = true }
 # about unused dependencies.
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 jni = { workspace = true }
+# Adoptium ships Windows JDKs as .zip and macOS JDKs as .tar.gz, so the
+# extraction step needs both. Hand-rolling a tar reader (header parsing,
+# long-name GNU extensions, pax headers) is not worth the risk on input
+# that came off the network.
+tar = "0.4"
+flate2 = "1"
+# `ureq` is the Adoptium download in `jdk_install`, which now runs on
+# Windows and macOS. It is deliberately NOT unconditional: the macOS
+# `snug` CLI must not compile or link it, which is only guaranteed now
+# that `snug-cli` depends on `snug-payload` rather than on this crate.
+# (`native-tls` resolves to Security.framework on macOS.)
+ureq = { workspace = true }
 
 # macOS-only: `NSHomeDirectory` is how snug asks the OS where the per-user
 # cache directory is, rather than hardcoding `~/Library/Caches`. Windows

@@ -328,7 +328,7 @@ pub fn should_sweep(root: &Path, now: SystemTime) -> bool {
 /// path fell through to the `$HOME/.cache` fallback — a Linux convention
 /// in a directory macOS never uses.
 #[cfg(windows)]
-fn platform_cache_base() -> Option<PathBuf> {
+pub fn platform_cache_base() -> Option<PathBuf> {
     // %LOCALAPPDATA% is the canonical per-user, per-machine data root
     // on Windows. We read it directly via the Win32 API for accuracy.
     use windows_sys::Win32::System::Environment::GetEnvironmentVariableW;
@@ -380,7 +380,7 @@ fn platform_cache_base() -> Option<PathBuf> {
 /// value Foundation reports; what can actually move — a sandboxed home, a
 /// relocated user — comes from the OS.
 #[cfg(target_os = "macos")]
-fn platform_cache_base() -> Option<PathBuf> {
+pub fn platform_cache_base() -> Option<PathBuf> {
     use objc2_foundation::NSHomeDirectory;
 
     let home = NSHomeDirectory().to_string();
@@ -395,7 +395,7 @@ fn platform_cache_base() -> Option<PathBuf> {
 /// convention. This is also the `~/.cache` fallback's target, so the
 /// common case is unchanged.
 #[cfg(all(not(windows), not(target_os = "macos")))]
-fn platform_cache_base() -> Option<PathBuf> {
+pub fn platform_cache_base() -> Option<PathBuf> {
     std::env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
@@ -404,7 +404,7 @@ fn platform_cache_base() -> Option<PathBuf> {
         })
 }
 
-fn fallback_cache_base() -> PathBuf {
+pub fn fallback_cache_base() -> PathBuf {
     if let Some(home) = std::env::var_os("HOME") {
         return PathBuf::from(home).join(".cache");
     }

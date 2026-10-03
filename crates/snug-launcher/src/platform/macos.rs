@@ -46,6 +46,7 @@ use jni::{InitArgsBuilder, JNIVersion, JavaVM};
 use snug_format::{decode, DownloadJdkMode, FormatError, JvmDiscovery, SnugEmbedded};
 
 use crate::cache;
+use crate::jdk_install;
 use crate::log;
 use crate::manifest;
 use crate::LauncherError;
@@ -209,18 +210,82 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
     };
     log::log(&format!("main class: {main_class_name}"));
 
-    // 3. Locate a compatible JVM. `Auto` and `Force` both degrade to
-    //    discovery-only on macOS — see the module docs — and we say so
-    //    rather than silently ignoring the build's intent.
-    match config.behavior.download_jdk {
-        DownloadJdkMode::Off => {}
-        mode => log::log(&format!(
-            "download-jdk mode is {mode:?}, but the Adoptium download flow is \
-             not implemented on macOS; falling back to discovery only"
-        )),
-    }
+    // 3. Locate a compatible JVM, downloading a Temurin JDK first if the
+    //    build asked for that and none is installed.
+    //
+    //    The download itself now works on macOS — the Adoptium query uses
+    //    this host's `os`/`architecture`, macOS assets unpack as `.tar.gz`,
+    //    and the HICON/plumbing is gone. What does not work yet is the
+    //    *dialog*: there is none, so `Auto` has nothing to ask with and
+    //    degrades to discovery-only, and `Force` downloads while logging
+    //    its progress rather than showing a progress window. Both say so.
+    let mut jvm_dir = match config.behavior.download_jdk {
+        DownloadJdkMode::Off => discover_jvm(&config.behavior.jvm_discovery, config.min_java)?,
+        DownloadJdkMode::Auto => {
+            let found = discover_jvm(&config.behavior.jvm_discovery, config.min_java)?;
+            if found.is_none() {
+                log::log(
+                    "download-jdk=auto, but there is no dialog to ask with on macOS yet; \
+                     falling back to discovery only",
+                );
+            }
+            found
+        }
+        DownloadJdkMode::Force => {
+            log::log("JVM discovery: skipped (download-jdk=force)");
+            None
+        }
+    };
 
-    let jvm_dir = discover_jvm(&config.behavior.jvm_discovery, config.min_java)?;
+    let should_offer_install = match config.behavior.download_jdk {
+        DownloadJdkMode::Off => false,
+        // `Auto` is excluded: offering it would mean downloading a
+        // multi-hundred-megabyte JDK without asking, which is exactly what
+        // `auto` means to not do. It returns here rather than silently
+        // installing, and the log line above says why.
+        DownloadJdkMode::Auto => false,
+        DownloadJdkMode::Force => true,
+    };
+    if should_offer_install {
+        let install_root = jdk_install_root();
+        log::log(&format!(
+            "JDK install flow starting; root: {}",
+            install_root.display()
+        ));
+        let result = jdk_install::maybe_install((), config.min_java, &install_root);
+        match result {
+            Ok(Some(new_home)) => {
+                log::log(&format!("JDK install flow succeeded: {}", new_home.display()));
+                // `set_var` is unsafe in Rust 2024 because it races with
+                // `getenv` reads on other threads. Single-threaded during
+                // launch makes it safe in practice; we wrap it rather
+                // than serialise the whole runtime.
+                unsafe {
+                    std::env::set_var("JAVA_HOME", &new_home);
+                }
+                // `Force` skipped discovery, so the install path is the
+                // only source of a JAVA_HOME. Point discovery at what we
+                // just installed.
+                let mut retry = config.behavior.jvm_discovery.clone();
+                retry.explicit = Some(new_home);
+                jvm_dir = discover_jvm(&retry, config.min_java)?;
+            }
+            Ok(None) => {
+                log::log("JDK install flow: declined or exhausted (see the log above)");
+                // `Force` skipped discovery upfront, so run it now as a
+                // courtesy — a JDK may already be installed.
+                if jvm_dir.is_none() {
+                    jvm_dir = discover_jvm(&config.behavior.jvm_discovery, config.min_java)?;
+                }
+            }
+            Err(e) => {
+                log::log(&format!("JDK install flow failed: {e}"));
+                if jvm_dir.is_none() {
+                    jvm_dir = discover_jvm(&config.behavior.jvm_discovery, config.min_java)?;
+                }
+            }
+        }
+    }
     log::log(&format!(
         "JVM discovery: {}",
         jvm_dir
@@ -427,6 +492,20 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
     let _ = unsafe { vm.destroy() };
 
     Ok(exit_code as u32)
+}
+
+/// Root directory for cached JDK installations on macOS.
+///
+/// Sits beside the app's own cache rather than inside it: the extracted
+/// JDKs are shared by every app snug has built on this machine, and must
+/// outlive any one app's cache entry — the app cache is swept by age and
+/// by byte budget, and an installed JDK is neither. Mirrors Windows'
+/// `%LOCALAPPDATA%\snug\jdk\`.
+fn jdk_install_root() -> PathBuf {
+    cache::platform_cache_base()
+        .unwrap_or_else(cache::fallback_cache_base)
+        .join("snug")
+        .join("jdk")
 }
 
 /// Copy `bytes` to `dest` (creating parents) unless it already exists.
