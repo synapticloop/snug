@@ -11,6 +11,7 @@ pub mod init_localizations;
 pub mod init_options;
 pub mod localization;
 pub mod manifest;
+pub mod macos_bundle;
 pub mod options_file;
 pub mod resources;
 pub mod stub;

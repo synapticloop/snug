@@ -35,3 +35,6 @@ editpe = { workspace = true }
 image = { workspace = true }
 
 [dev-dependencies]
+# Dev-only: parses the generated Info.plist back so a malformed plist
+# fails a test instead of producing a bundle the Dock calls "damaged".
+plist = "1"
