@@ -29,12 +29,13 @@
 //! | No cache, user picks Cancel | bail, no install                    |
 //! | No cache, user picks Download | progress dialog â†’ worker thread â†’ result |
 
-#![cfg(windows)]
+#![cfg(any(windows, target_os = "macos"))]
 
 use std::io::{Read, Write};
-use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, AtomicU32, AtomicU64, Ordering};
+#[cfg(windows)]
+use std::sync::atomic::AtomicIsize;
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -42,6 +43,7 @@ use std::thread;
 /// new console for the child. Without this, spawning a console-subsystem
 /// binary (like `java.exe`) from our GUI-subsystem launcher would flash a
 /// command prompt window briefly before the child exits.
+#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 use crate::dialogs;
@@ -50,11 +52,35 @@ use crate::log;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
+#[cfg(windows)]
 use windows_sys::Win32::Foundation::HWND;
+#[cfg(windows)]
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
+#[cfg(windows)]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     HICON, IDCANCEL, IDOK, IDYES, SW_SHOWNORMAL,
 };
+
+/// Mirrors of the Win32 control IDs, for platforms that have no
+/// `windows-sys` dependency at all.
+///
+/// Only the comparisons matter: the flow compares what `ui::*` returned
+/// against these, and on a non-Windows target `ui::*` is the only thing
+/// that produced a return value. Declared here rather than imported
+/// because `windows-sys` is not a dependency off Windows.
+#[cfg(not(windows))]
+mod id {
+    /// `IDYES`
+    pub const IDYES: i32 = 6;
+    /// `IDOK`
+    #[allow(dead_code)]
+    pub const IDOK: i32 = 1;
+    /// `IDCANCEL`
+    #[allow(dead_code)]
+    pub const IDCANCEL: i32 = 2;
+}
+#[cfg(not(windows))]
+use id::IDYES;
 
 // ===========================================================================
 //  Errors
@@ -207,9 +233,10 @@ pub fn fetch_metadata(min_java_major: u16) -> Result<JdkMetadata, JdkError> {
     // and `version_data.semver` â€” exactly the fields `AdoptiumBinary`
     // deserialises. We take the first element, which Adoptium returns
     // sorted newest-first by `timestamp`.
+    let (os, arch) = adoptium_target();
     let url = format!(
         "https://api.adoptium.net/v3/assets/feature_releases/{maj}/ga\
-         ?architecture=x64&image_type=jdk&os=windows&vendor=eclipse",
+         ?architecture={arch}&image_type=jdk&os={os}&vendor=eclipse",
         maj = min_java_major,
     );
 
@@ -447,6 +474,7 @@ impl ProgressShared {
 /// windows on detached threads that can outlive whatever installed the
 /// override, so the effective owner is the process. Handles from
 /// `LoadImageW(..., LR_LOADFROMFILE)` are additionally system-managed.
+#[cfg(windows)]
 static WINDOW_ICON_OVERRIDE: AtomicIsize = AtomicIsize::new(0);
 
 /// Process-wide override for the in-dialog **mascot** image (the large
@@ -459,15 +487,18 @@ static WINDOW_ICON_OVERRIDE: AtomicIsize = AtomicIsize::new(0);
 /// [`MASCOT_LOAD_CX`] while the title bar wants `SM_CXICON`. Loading
 /// once at each size and handing the right handle to the right slot
 /// also avoids upscaling a 32 px icon into a 154 px box.
+#[cfg(windows)]
 static MASCOT_ICON_OVERRIDE: AtomicIsize = AtomicIsize::new(0);
 
 /// Install the dialogs' title-bar / Alt-Tab / taskbar icon override.
 /// Pass `0` to go back to the EXE resource.
+#[cfg(windows)]
 pub fn set_window_icon_override(hicon: isize) {
     WINDOW_ICON_OVERRIDE.store(hicon, Ordering::SeqCst);
 }
 
 /// The current title-bar icon override, `None` when unset.
+#[cfg(windows)]
 pub fn window_icon_override() -> Option<HICON> {
     match WINDOW_ICON_OVERRIDE.load(Ordering::SeqCst) {
         0 => None,
@@ -477,11 +508,13 @@ pub fn window_icon_override() -> Option<HICON> {
 
 /// Install the in-dialog mascot image override. Pass `0` to go back to
 /// the EXE icon.
+#[cfg(windows)]
 pub fn set_mascot_icon_override(hicon: isize) {
     MASCOT_ICON_OVERRIDE.store(hicon, Ordering::SeqCst);
 }
 
 /// The current mascot override, `None` when unset.
+#[cfg(windows)]
 pub fn mascot_icon_override() -> Option<HICON> {
     match MASCOT_ICON_OVERRIDE.load(Ordering::SeqCst) {
         0 => None,
@@ -497,6 +530,7 @@ pub fn mascot_icon_override() -> Option<HICON> {
 /// DPI) so the title bar / taskbar end up with their natural pixel
 /// target. Delegates to [`find_best_icon_hicon`] which walks the
 /// resource tree rather than guessing at a fixed resource id.
+#[cfg(windows)]
 pub(crate) fn load_exe_main_icon_hicon() -> Option<HICON> {
     use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXICON, SM_CYICON};
 
@@ -520,6 +554,7 @@ pub(crate) fn load_exe_main_icon_hicon() -> Option<HICON> {
 /// the actual RT_ICON ids from the ICONDIR and `LoadImageW`s against
 /// one of those. The returned handle is `LR_SHARED` â€” the system owns
 /// it, no `DestroyIcon` needed.
+#[cfg(windows)]
 pub(crate) fn find_best_icon_hicon(cx: i32, cy: i32) -> Option<HICON> {
     use windows_sys::Win32::System::LibraryLoader::{
         FindResourceW, GetModuleHandleW, LoadResource, LockResource, SizeofResource,
@@ -705,6 +740,60 @@ fn hash_file_sha256(path: &Path) -> Result<String, JdkError> {
     Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
+/// Unpack a downloaded JDK archive into `dest_dir`.
+///
+/// Split per platform because Adoptium ships a different format for each:
+/// Windows gets a `.zip`, macOS a `.tar.gz`. There is no runtime sniffing
+/// of the file name — a hardcoded zip reader handed a tarball does not
+/// fail on the tarball, it fails much later during extraction with an
+/// unhelpful "not a zip file" about a file that was never supposed to be
+/// one. Each platform asserts the name it expects and says so plainly.
+#[cfg(windows)]
+fn extract_jdk_archive(archive: &Path, dest_dir: &Path) -> Result<PathBuf, JdkError> {
+    expect_extension(archive, ".zip")?;
+    extract_jdk_zip(archive, dest_dir)
+}
+
+#[cfg(target_os = "macos")]
+fn extract_jdk_archive(archive: &Path, dest_dir: &Path) -> Result<PathBuf, JdkError> {
+    expect_extension(archive, ".tar.gz")?;
+    let file = std::fs::File::open(archive)?;
+    let gz = flate2::read::GzDecoder::new(file);
+    let mut tar = tar::Archive::new(gz);
+    std::fs::create_dir_all(dest_dir)?;
+    // The `tar` crate refuses absolute paths and `..` components itself,
+    // which is the property we want: this archive came off the network.
+    tar.unpack(dest_dir)
+        .map_err(|e| JdkError::Extract(format!("unpack {}: {e}", archive.display())))?;
+    Ok(dest_dir.to_path_buf())
+}
+
+/// Fail early, and legibly, if the download is not the format this
+/// platform asked for.
+#[cfg(any(windows, target_os = "macos"))]
+fn expect_extension(archive: &Path, expected: &str) -> Result<(), JdkError> {
+    let mut name = archive
+        .file_name()
+        .map(|n| n.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    // The download lands in a *temp* file, so the real name on disk is
+    // `<major>.tar.gz.tmp`, not `<major>.tar.gz`. Strip that before
+    // looking at the extension — checking the raw name rejects every
+    // download the flow actually performs.
+    if let Some(stripped) = name.strip_suffix(".tmp") {
+        name = stripped.to_string();
+    }
+    if name.ends_with(expected) {
+        Ok(())
+    } else {
+        Err(JdkError::Extract(format!(
+            "expected a {expected} archive on this platform, got {}",
+            archive.display()
+        )))
+    }
+}
+
+#[cfg(windows)]
 fn extract_jdk_zip(zip: &Path, dest_dir: &Path) -> Result<PathBuf, JdkError> {
     let file = std::fs::File::open(zip)?;
     let mut zip_reader = zip::ZipArchive::new(file)?;
@@ -757,7 +846,7 @@ fn find_java_home(root: &Path) -> Option<PathBuf> {
         if depth > MAX_JAVA_HOME_DEPTH {
             return None;
         }
-        let java = dir.join("bin").join("java.exe");
+        let java = java_binary(dir);
         if java.is_file() {
             return Some(dir.to_path_buf());
         }
@@ -808,15 +897,8 @@ fn find_cached_jdk(min_java_major: u16, install_root: &Path) -> Option<PathBuf> 
         let Some(home) = find_java_home(&path) else {
             continue;
         };
-        let java = home.join("bin").join("java.exe");
-        // `CREATE_NO_WINDOW` keeps the parent (GUI subsystem) from
-        // flashing a console window for this short-lived `java -version`
-        // probe while scanning cached Temurin installs.
-        let Ok(out) = std::process::Command::new(&java)
-            .arg("-version")
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-        else {
+        let java = java_binary(&home);
+        let Ok(out) = java_version_probe(&java) else {
             continue;
         };
         let combined = format!(
@@ -965,7 +1047,7 @@ fn worker_thread(
         tmp_zip.display(),
         install_dir.display()
     ));
-    if let Err(e) = extract_jdk_zip(&tmp_zip, &install_dir) {
+    if let Err(e) = extract_jdk_archive(&tmp_zip, &install_dir) {
         log::log(&format!("phase 2 failed: extract: {e}"));
         set_error(format!("extract: {e}"));
         shared.done.store(2, Ordering::SeqCst);
@@ -1016,7 +1098,7 @@ fn worker_thread(
 ///   an "Open the download page in my browser" button so the user
 ///   can still install Temurin manually.
 pub fn maybe_install(
-    parent_hwnd: HWND,
+    parent: ui::ParentWindow,
     min_java_major: u16,
     install_root: &Path,
 ) -> Result<Option<PathBuf>, JdkError> {
@@ -1053,7 +1135,7 @@ pub fn maybe_install(
         }
         Err(e) => {
             log::log(&format!("Adoptium metadata fetch failed: {e}"));
-            if show_metadata_failed_dialog(parent_hwnd, min_java_major, &e.to_string())
+            if ui::metadata_failed(parent, min_java_major, &e.to_string())
                 == IDYES
             {
                 let url = format!(
@@ -1087,13 +1169,17 @@ pub fn maybe_install(
     // immediately without asking.
     const MAX_DOWNLOAD_ATTEMPTS: u32 = 3;
     let install_dir = install_root.join(min_java_major.to_string());
-    let tmp_zip = install_root.join(format!("{}.zip.tmp", min_java_major));
+    // Named after the actual archive format: `extract_jdk_archive`
+    // dispatches on this extension, and a `.zip.tmp` holding a tarball
+    // would be handed to the zip reader.
+    let archive_suffix = if cfg!(target_os = "macos") { ".tar.gz" } else { ".zip" };
+    let tmp_zip = install_root.join(format!("{min_java_major}{archive_suffix}.tmp"));
 
     for attempt in 1..=MAX_DOWNLOAD_ATTEMPTS {
         log::log(&format!(
             "JDK download attempt {attempt}/{MAX_DOWNLOAD_ATTEMPTS}"
         ));
-        match run_one_install_attempt(parent_hwnd, &metadata, &install_dir, &tmp_zip) {
+        match run_one_install_attempt(parent, &metadata, &install_dir, &tmp_zip) {
             AttemptOutcome::Success(home) => {
                 // No success dialog; the download + verify + extract
                 // was the long part, and the dialog stayed up while
@@ -1118,16 +1204,16 @@ pub fn maybe_install(
                             ("error", err.as_str()),
                         ],
                     );
-                    show_error_dialog(
-                        parent_hwnd,
+                    ui::failure(
+                        parent,
                         &dlg.jdk_install.failure.title,
                         &dlg.jdk_install.failure.title,
                         &content,
                     );
                     return Ok(None);
                 }
-                if !show_retry_dialog(
-                    parent_hwnd,
+                if !ui::retry(
+                    parent,
                     attempt,
                     MAX_DOWNLOAD_ATTEMPTS,
                     &metadata.version,
@@ -1169,7 +1255,7 @@ enum AttemptOutcome {
 /// `ERROR_HOLD_DURATION` red-bar hold). User-cancel (`done == 3`)
 /// short-circuits.
 fn run_one_install_attempt(
-    parent_hwnd: HWND,
+    parent: ui::ParentWindow,
     metadata: &JdkMetadata,
     install_dir: &Path,
     tmp_zip: &Path,
@@ -1214,30 +1300,17 @@ fn run_one_install_attempt(
             ),
         ],
     );
-    let _clicked = unsafe {
-        crate::progress_window::show(
-            parent_hwnd,
-            &dlg.jdk_install.progress.title,
-            &progress_main,
-            shared.clone(),
-        )
-    };
+    ui::progress(
+        parent,
+        &dlg.jdk_install.progress.title,
+        &progress_main,
+        shared.clone(),
+    );
 
-    // If the dialog was dismissed before the worker finished — user
-    // clicked Cancel, closed the window via X / Alt+F4, or the
-    // dialog returned `IDCANCEL` — the worker is still alive
-    // and `shared.cancel` is what aborts it. The default
-    // `progress_window` path flips this flag itself in `WM_COMMAND` /
-    // `WM_CLOSE`. Either way, setting it twice is a no-op. Without this
-    // the worker would happily finish downloading and report
-    // `done == 1` (success), and we'd return `AttemptOutcome::Success`
-    // for a download the user explicitly cancelled.
-    if _clicked != IDOK {
-        shared.cancel.store(true, Ordering::SeqCst);
-        if shared.done.load(Ordering::SeqCst) == 0 {
-            shared.done.store(3, Ordering::SeqCst);
-        }
-    }
+    // Dismissal handling lives in `ui::progress`: on Windows that sets
+    // `shared.cancel` when the user closes the window before the worker
+    // finishes. Without it the worker would report `done == 1` for a
+    // download the user explicitly cancelled.
 
     let _ = worker.join();
 
@@ -1268,8 +1341,223 @@ fn run_one_install_attempt(
     AttemptOutcome::Failed(err)
 }
 
+/// The download flow's only contact with the user.
+///
+/// This is the seam that lets the flow be platform-neutral. Windows
+/// delegates to the hand-painted dialogs that already exist; every other
+/// platform uses **the same `dialogs()` strings** through the launcher log
+/// and stderr. Nothing here formats a string of its own, so a
+/// `--localization <tag>` bundle translates the macOS output exactly as it
+/// translates the Windows one — the localisation requirement is satisfied
+/// by construction rather than by a parallel set of strings.
+///
+/// The non-Windows behaviour is deliberately conservative:
+///
+/// - It never *pretends* the user answered a question. `retry` auto-retry
+///   is the one judgement call, and it is bounded by the same
+///   `MAX_DOWNLOAD_ATTEMPTS` the Windows loop uses, with a log line saying
+///   it happened.
+/// - It never opens a browser unprompted, because a `.app` launched from
+///   Finder has no terminal to have agreed to anything in.
+mod ui {
+    use super::*;
+
+    /// A handle to the window the dialogs should be modal to.
+    ///
+    /// On Windows this *is* `HWND`, so every call site and signature in
+    /// this file is unchanged when compiled for Windows — the alias is the
+    /// mechanism, not a wrapper.
+    #[cfg(windows)]
+    pub type ParentWindow = windows_sys::Win32::Foundation::HWND;
+    #[cfg(not(windows))]
+    pub type ParentWindow = ();
+
+    /// Adoptium unreachable. Returns `true` if the user asked for the
+    /// release page to be opened.
+    #[cfg(windows)]
+    pub fn metadata_failed(parent: ParentWindow, min_java: u16, detail: &str) -> i32 {
+        super::show_metadata_failed_dialog(parent, min_java, detail)
+    }
+
+    #[cfg(not(windows))]
+    pub fn metadata_failed(_parent: ParentWindow, min_java: u16, detail: &str) -> i32 {
+        let d = dialogs::dialogs();
+        let content = dialogs::fill(
+            d.jdk_install.metadata_failed.content.as_str(),
+            &[("min_java", &min_java.to_string()), ("error", detail)],
+        );
+        eprintln!("{}: {}", d.jdk_install.metadata_failed.title, content);
+        // `IDYES`-equivalent: no. There is no prompt, so we do not open a
+        // browser in the user's face unasked; the URL is logged instead.
+        0
+    }
+
+    /// Retry / Cancel between failed attempts. `true` means "retry".
+    #[cfg(windows)]
+    pub fn retry(
+        parent: ParentWindow,
+        attempt: u32,
+        max: u32,
+        version: &str,
+        err: &str,
+    ) -> bool {
+        super::show_retry_dialog(parent, attempt, max, version, err)
+    }
+
+    #[cfg(not(windows))]
+    pub fn retry(_parent: ParentWindow, attempt: u32, max: u32, version: &str, err: &str) -> bool {
+        let d = dialogs::dialogs();
+        let content = dialogs::fill(
+            d.jdk_install.retry.content.as_str(),
+            &[
+                ("attempt", &attempt.to_string()),
+                ("max", &max.to_string()),
+                ("version", version),
+                ("error", err),
+            ],
+        );
+        // Auto-retry is the useful reading of a silent retry prompt: a
+        // transient network failure should not end the launch, and the
+        // loop is already bounded at `max`. Saying so is the important
+        // part — a silent retry would look like a hang.
+        log::log(&format!(
+            "no dialog available; retrying automatically ({attempt}/{max}): {content}"
+        ));
+        true
+    }
+
+    /// Terminal failure, after the attempts are exhausted.
+    #[cfg(windows)]
+    pub fn failure(parent: ParentWindow, title: &str, main: &str, content: &str) {
+        super::show_error_dialog(parent, title, main, content)
+    }
+
+    #[cfg(not(windows))]
+    pub fn failure(_parent: ParentWindow, title: &str, _main: &str, content: &str) {
+        eprintln!("{title}: {content}");
+    }
+
+    /// Show progress and block until the download settles.
+    ///
+    /// Returns `true` if the user let it run to completion. The
+    /// cancellation bookkeeping lives *inside* the Windows implementation
+    /// so both platforms share the same post-condition: once this returns,
+    /// `shared.cancel` is already set if the user bailed out.
+    #[cfg(windows)]
+    pub fn progress(
+        parent: ParentWindow,
+        title: &str,
+        main: &str,
+        shared: Arc<ProgressShared>,
+    ) -> bool {
+        let clicked =
+            unsafe { crate::progress_window::show(parent, title, main, shared.clone()) };
+        if clicked != IDOK {
+            shared.cancel.store(true, Ordering::SeqCst);
+            if shared.done.load(Ordering::SeqCst) == 0 {
+                shared.done.store(3, Ordering::SeqCst);
+            }
+        }
+        clicked == IDOK
+    }
+
+    #[cfg(not(windows))]
+    pub fn progress(
+        _parent: ParentWindow,
+        title: &str,
+        main: &str,
+        shared: Arc<ProgressShared>,
+    ) -> bool {
+        log::log(&format!("{title}: {main}"));
+        // No window to close, so this cannot be cancelled by the user.
+        // Poll just often enough to notice the worker finishing, and log
+        // a coarse phase change so a multi-hundred-MB download is not a
+        // silent pause in the log.
+        let mut last_phase = -1i32;
+        while shared.done.load(Ordering::SeqCst) == 0 {
+            let phase = shared.phase.load(Ordering::SeqCst);
+            if phase != last_phase {
+                last_phase = phase;
+                let (done, total) = (
+                    shared.bytes.load(Ordering::SeqCst),
+                    shared.total_bytes.load(Ordering::SeqCst),
+                );
+                let pct = if total == 0 {
+                    0
+                } else {
+                    (done as f64 / total as f64 * 100.0) as u32
+                };
+                log::log(&format!(
+                    "download phase={phase} {done}/{total} bytes ({pct}%)"
+                ));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        true
+    }
+}
+
+/// Adoptium's identifiers for the machine we are running on: `(os, architecture)`.
+///
+/// The JDK is installed on the *user's own* machine — it is never shipped
+/// to somebody else's — so this is always the host. `architecture` is
+/// Adoptium's spelling, which is not the Rust target triple: Apple
+/// Silicon is `aarch64`, not `arm64`. Getting either wrong returns a
+/// perfectly well-formed metadata document for the wrong platform, so
+/// the mistake surfaces much later as an extraction failure rather than
+/// as a bad request.
+#[cfg(windows)]
+fn adoptium_target() -> (&'static str, &'static str) {
+    ("windows", "x64")
+}
+
+#[cfg(target_os = "macos")]
+fn adoptium_target() -> (&'static str, &'static str) {
+    let arch = match std::env::consts::ARCH {
+        "aarch64" => "aarch64",
+        _ => "x64",
+    };
+    ("mac", arch)
+}
+
+/// The `java` launcher inside a JDK home.
+///
+/// Windows appends `.exe`; the macOS build is a bare `bin/java`. Getting
+/// this wrong makes every cached-JDK probe fail, which presents as
+/// "it re-downloads a JDK it already has" rather than as an error.
+#[cfg(windows)]
+fn java_binary(home: &Path) -> PathBuf {
+    home.join("bin").join("java.exe")
+}
+
+#[cfg(target_os = "macos")]
+fn java_binary(home: &Path) -> PathBuf {
+    home.join("bin").join("java")
+}
+
+/// Run `java -version`, capturing both streams.
+///
+/// Windows adds `CREATE_NO_WINDOW`, which keeps the parent (GUI
+/// subsystem) launcher from flashing a console window for this
+/// short-lived probe while scanning cached Temurin installs. macOS has
+/// no equivalent and does not need one.
+#[cfg(windows)]
+fn java_version_probe(java: &Path) -> std::io::Result<std::process::Output> {
+    use std::os::windows::process::CommandExt;
+    std::process::Command::new(java)
+        .arg("-version")
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+}
+
+#[cfg(not(windows))]
+fn java_version_probe(java: &Path) -> std::io::Result<std::process::Output> {
+    std::process::Command::new(java).arg("-version").output()
+}
+
 /// Pop the Retry / Cancel prompt between failed download attempts.
 /// Returns `true` if the user picked Retry.
+#[cfg(windows)]
 pub fn show_retry_dialog(
     parent: HWND,
     attempt: u32,
@@ -1335,6 +1623,7 @@ pub fn show_retry_dialog(
 /// the user to a Temurin release-filtered page so they can still
 /// install manually) and **Cancel**. Returns the button id so the
 /// caller can act on the choice.
+#[cfg(windows)]
 pub fn show_metadata_failed_dialog(parent: HWND, min_java: u16, error_detail: &str) -> i32 {
     let d = dialogs::dialogs();
     let major = min_java.to_string();
@@ -1384,6 +1673,7 @@ pub fn show_metadata_failed_dialog(parent: HWND, min_java: u16, error_detail: &s
     }
 }
 
+#[cfg(windows)]
 pub fn show_error_dialog(parent: HWND, title: &str, _main: &str, content: &str) {
     // `title` is the title-bar text; the dialog body reads
     // `failure.heading` / `failure.subheading` from
@@ -1414,6 +1704,13 @@ pub fn show_error_dialog(parent: HWND, title: &str, _main: &str, content: &str) 
     }
 }
 
+/// Open `url` in the user's default browser.
+///
+/// Windows goes through `ShellExecuteW`; macOS through `/usr/bin/open`,
+/// which is the same "hand it to the OS" arrangement and keeps the
+/// caller platform-agnostic. Only reached when the user has *asked* to
+/// see the release page, so the intrusiveness is already agreed.
+#[cfg(windows)]
 fn open_in_browser(url: &str) -> Result<(), JdkError> {
     let url_w: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
     let result = unsafe {
@@ -1434,6 +1731,21 @@ fn open_in_browser(url: &str) -> Result<(), JdkError> {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn open_in_browser(url: &str) -> Result<(), JdkError> {
+    let status = std::process::Command::new("/usr/bin/open")
+        .arg(url)
+        .status()
+        .map_err(|e| JdkError::Dialog(format!("running /usr/bin/open: {e}")))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(JdkError::Dialog(format!(
+            "/usr/bin/open exited with {status}"
+        )))
+    }
+}
+
 // ===========================================================================
 //  Tests (non-GUI paths)
 // ===========================================================================
@@ -1443,6 +1755,84 @@ mod tests {
     use super::*;
     use std::io::Write;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    // ---- macOS JDK acquisition ----------------------------------------
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn adoptium_target_uses_adoptiums_spelling_not_rusts() {
+        // `arm64`/`x86_64` are Rust's names. Adoptium's are `aarch64`
+        // and `x64`, and a wrong `architecture` returns a well-formed
+        // metadata document for the wrong platform rather than an error.
+        let (os, _arch) = adoptium_target();
+        assert_eq!(os, "mac");
+        let expected = match std::env::consts::ARCH {
+            "aarch64" => "aarch64",
+            _ => "x64",
+        };
+        assert_eq!(adoptium_target().1, expected);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn extracts_a_macos_tarball_and_finds_the_java_home() {
+        // Builds a tarball in the shape Adoptium actually ships: a single
+        // `jdk-<version>.jdk/Contents/Home/` root, with `bin/java` and
+        // `lib/server/libjvm.dylib` inside it. This is the whole point of
+        // the macOS path — the Windows layout has neither the `.jdk`
+        // bundle nor the dylib.
+        let dir = tempdir();
+        let src = dir.join("src").join("jdk-21.0.1.jdk").join("Contents").join("Home");
+        std::fs::create_dir_all(src.join("bin")).unwrap();
+        std::fs::create_dir_all(src.join("lib").join("server")).unwrap();
+        std::fs::create_dir_all(src.join("conf")).unwrap();
+        std::fs::write(src.join("bin").join("java"), b"#!/bin/sh\n").unwrap();
+        std::fs::write(src.join("lib").join("server").join("libjvm.dylib"), b"fake").unwrap();
+        std::fs::write(src.join("release"), "JAVA_VERSION=\"21.0.1\"\n").unwrap();
+
+        let archive = dir.join("21.tar.gz.tmp");
+        {
+            let file = std::fs::File::create(&archive).unwrap();
+            let enc = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+            let mut builder = tar::Builder::new(enc);
+            builder.append_dir_all("jdk-21.0.1.jdk", dir.join("src").join("jdk-21.0.1.jdk"))
+                .unwrap();
+            builder.into_inner().unwrap().finish().unwrap();
+        }
+
+        let dest = dir.join("install");
+        extract_jdk_archive(&archive, &dest).expect("extract");
+
+        let home = find_java_home(&dest).expect("java home should be found");
+        // The home is the `Contents/Home` directory, not the `.jdk` root.
+        assert!(home.ends_with("Contents/Home"), "got {}", home.display());
+        assert!(home.join("bin").join("java").is_file());
+        assert!(home.join("lib").join("server").join("libjvm.dylib").is_file());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn rejects_a_zip_on_macos_and_says_so() {
+        // A Windows-shaped download handed to the macOS extractor should
+        // fail with a message that names the expectation, not with a zip
+        // parser error about a file that was never supposed to be a zip.
+        let dir = tempdir();
+        let archive = dir.join("21.zip.tmp");
+        std::fs::write(&archive, b"PK\x03\x04not really").unwrap();
+        let err = extract_jdk_archive(&archive, &dir.join("install")).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains(".tar.gz"), "unhelpful error: {msg}");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_retry_seam_auto_retries_and_says_it_did() {
+        // The non-Windows `ui::retry` has no user to ask. It retries
+        // (bounded, same as the Windows loop) and must say so, because a
+        // silent retry looks like a hang.
+        let ok = ui::retry((), 1, 3, "21.0.12", "connection reset");
+        assert!(ok, "should auto-retry when there is nobody to ask");
+    }
 
     fn tempdir() -> std::path::PathBuf {
         let unique = format!(
@@ -1486,6 +1876,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // The zip extractor only exists on Windows, because that is the only
+    // platform Adoptium ships a zip for. The macOS equivalent — a
+    // `.tar.gz` with a `*.jdk/Contents/Home` root — has its own test
+    // below.
+    #[cfg(windows)]
     #[test]
     fn extract_zip_preserves_entry_layout() {
         let dir = std::env::temp_dir().join(format!(
@@ -1596,24 +1991,28 @@ mod tests {
 
     #[test]
     fn find_java_home_handles_adoptium_nested_layout() {
-        // Adoptium default: install_root/<version>/jdk-25.0.4.1+1/bin/java.exe
+        // Adoptium default: install_root/<version>/jdk-25.0.4.1+1/bin/<java>.
+        // The leaf name is platform-specific, so it goes through
+        // `java_binary()`; what is being tested here is the recursion and
+        // the depth cap, neither of which is.
         let tmp = tempdir();
         let nested = tmp.join("25.0.4+101.0.LTS").join("jdk-25.0.4.1+1");
         std::fs::create_dir_all(nested.join("bin")).unwrap();
-        std::fs::write(nested.join("bin").join("java.exe"), b"").unwrap();
+        std::fs::write(java_binary(&nested), b"").unwrap();
         let home = find_java_home(&tmp.join("25.0.4+101.0.LTS")).expect("nested home");
         assert!(home.ends_with("jdk-25.0.4.1+1"));
-        assert!(home.join("bin").join("java.exe").is_file());
+        assert!(java_binary(&home).is_file());
     }
 
     #[test]
     fn find_java_home_handles_flat_layout() {
-        // Future-proofing: a zip without the leading directory
-        // should also be picked up.
+        // Future-proofing: an archive without the leading directory
+        // should also be picked up. Leaf name via `java_binary()` so the
+        // test exercises the recursion on either platform.
         let tmp = tempdir();
         let flat = tmp.join("25.0.4+101.0.LTS");
         std::fs::create_dir_all(flat.join("bin")).unwrap();
-        std::fs::write(flat.join("bin").join("java.exe"), b"").unwrap();
+        std::fs::write(java_binary(&flat), b"").unwrap();
         let home = find_java_home(&flat).expect("flat home");
         assert!(home.ends_with("25.0.4+101.0.LTS"));
     }

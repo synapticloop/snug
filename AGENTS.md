@@ -303,6 +303,7 @@ precompiled `launcher-stub.exe` (v2).
 | 10 | Native macOS / Linux `snug` CLI builds    | **done** — `cargo build --workspace` and `cargo test --workspace --lib --bins --tests` pass on macOS (283 tests), and the CLI produces a real `PE32+ executable (GUI) x86-64` end-to-end from a Mac. `scripts/build-macos.sh` stages two thin per-arch binaries into `release/macos-arm64/snug` and `release/macos-x86_64/snug` at a macOS 12.0 deployment floor — same binary name on every platform, platform in the directory, so docs never name two binaries. No universal2: macOS 27 is the last release with Rosetta 2, so arm64 is the future-proof slice and x86_64 only serves the four Intel models that top out at macOS 26. Windows-only surfaces are gated: the six Win32 GUI modules in `snug-launcher` use file-level `#![cfg(windows)]` (joining `jdk_install.rs` / `splash.rs`), while the three Windows-only *binaries* use per-item `#[cfg(windows)]` plus a real non-Windows `main`. `editpe` was made unconditional (pure-Rust PE parsing — `snug-cli` needs it to build EXEs anywhere) and `ureq` Windows-only. Homebrew tap / Developer ID notarization is follow-up; see "Build host". |
 | 11 | macOS launcher runtime (`libjvm.dylib` + JNI) | **done, verified against a real JDK on macOS.** `platform/macos.rs` mirrors `platform/windows.rs` step for step: cache extraction + sweep, log, `Main-Class` resolution, JVM discovery, `libjvm.dylib` load via the same `jni` 0.22 invocation API, and the `main(String[])` / JavaFX `Application.launch` dispatch. `tests/macos_launch_e2e.rs` compiles a real class with `javac`, packages it with `jar`, hands it to the launcher, and asserts the JVM actually runs it — it is skipped rather than failed when no JDK is present. **Not implemented:** splash, the Adoptium download flow, and error dialogs (all Win32); `DownloadJdkMode::Auto`/`Force` degrade to discovery-only and *log* that. |
 | 12 | macOS `.app` bundle emitter | **done, verified by launching a real bundle.** `snug app.jar -o MyApp.app` produces a bundle; `-o MyApp.exe` produces the Windows one. The platform comes from the output extension, so the documented command is identical on both and the docs never name a flag that exists on only one. `macos_bundle.rs` writes `Contents/{Info.plist,MacOS/<App>,Resources/<App>.snugpayload,Resources/App.icns}` and ad-hoc signs it. The launcher is a **byte-copy** — unlike the Windows stub there is nothing to stamp, because a Mach-O has no resource directory and `editpe` is PE-only. `bin/launcher-stub-macos-<arch>` is embedded per `#[cfg(target_arch)]`, so each `snug` binary carries one launcher and can only build a `.app` for its own arch. |
+| 13 | macOS Adoptium JDK download | **the flow works; the dialogs do not exist yet.** `jdk_install.rs` now compiles on macOS. `adoptium_target()` sends this host's `os`/`architecture` in Adoptium's own spelling, macOS assets unpack as `.tar.gz` (via `tar` + `flate2`), `find_java_home` understands the `*.jdk/Contents/Home` bundle and `bin/java`, and `open_in_browser` uses `/usr/bin/open`. Verified live: the query returns the correct `x64_mac_hotspot` asset, and the tarball/extraction path is covered by tests that build a real `.tar.gz` in Adoptium's shape. **Still Win32:** the splash, the download dialogs, and the error dialog — so `Auto` logs that it has nothing to ask with and falls back to discovery, while `Force` downloads and logs its progress. See the Backlog for the AppKit route. |
 
 ## Backlog
 
@@ -329,6 +330,14 @@ commit — useful history, not a live list.
   is a Windows build product.
 
 **macOS**
+- **The AppKit dialogs** — the install prompt, metadata-failed, retry,
+  terminal failure, and above all the **download progress window**. This is
+  the last thing standing between macOS and feature parity, and the only
+  reason `Auto` currently degrades. Reuse the same `dialogs()` strings via
+  `jdk_install::ui`'s non-Windows half; the seam is already there and the
+  strings are already localised.
+- **A macOS splash.** Win32 GDI+ / WIC today; CoreGraphics / CoreText if
+  it is to match, or an `NSImage` view if it is to look native.
 - **Homebrew tap, or Developer ID + notarization.** Until one exists,
   document `xattr -d com.apple.quarantine snug`. See "Build host".
 - **A fully dynamic macOS cache path.** Today the only hardcoded part is
@@ -450,6 +459,29 @@ by accident.
   1.0-era, so nothing is lost). **`platform/windows.rs` still has this
   bug** — same hardcoded `V21`, same failure; it just needs a JVM older
   than 21 to show up, and snug's default is `min_java` 25.
+- **A `ParentWindow` type alias is how a `cfg` split stays invisible.**
+  `jdk_install::ui::ParentWindow` is `HWND` on Windows and `()` elsewhere.
+  Because the alias *is* `HWND` there, every existing signature and call
+  site compiles unchanged — the alias is the mechanism, not a wrapper.
+  Prefer this to threading an `Option<isize>` through the flow.
+- **The JDK download flow talks to the user only through `jdk_install::ui`.**
+  Windows delegates to the hand-painted dialogs that already exist; every
+  other platform uses **the same `dialogs()` strings** via the launcher log
+  and stderr. Nothing in the seam formats a string of its own, so a
+  `--localization <tag>` bundle translates the macOS output exactly as it
+  translates the Windows one. The non-Windows behaviour is deliberately
+  conservative: it never opens a browser unprompted (a `.app` launched
+  from Finder has no terminal to have agreed to anything in), and it says
+  out loud when it auto-retries, because a silent retry looks like a hang.
+- **The Adoptium query is per-platform and the archive format follows.**
+  `adoptium_target()` returns Adoptium's own spellings — `windows`/`x64`
+  and `mac`/`aarch64` — because `arm64` and `x86_64` are Rust's, not
+  theirs. Getting `os` or `architecture` wrong returns a perfectly
+  well-formed metadata document for the *wrong* platform, so the mistake
+  surfaces much later as an extraction failure rather than as a bad
+  request. Windows assets are `.zip`, macOS assets `.tar.gz`, so
+  `extract_jdk_archive` is split per platform and each side asserts the
+  extension it expected.
 - **The per-user cache base is asked of the OS, never hardcoded.**
   `cache::platform_cache_base` is `cfg`-split: `%LOCALAPPDATA%` via the
   Win32 API on Windows, `NSHomeDirectory() + Library/Caches` on macOS,
