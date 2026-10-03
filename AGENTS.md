@@ -132,6 +132,35 @@ scripts/build-macos.sh            # both arches, staged into release/
 scripts/build-macos.sh --clean    # wipe release/macos-* first
 ```
 
+`scripts/build-macos-demo.sh` is the demo half — the macOS counterpart of
+step 4 plus the staging block in `scripts\build-release.cmd`. It calls
+`build-macos.sh` (unless `--skip-cli`), then has the freshly built `snug`
+package `assets/snug-javafx-demo.jar` as a real
+`assets/snug-javafx-demo.app` and stage it alongside the JAR. The demo is
+built by the arch-matched `snug`, so a demo can never be an `.app` for the
+wrong architecture.
+
+It then **verifies** the artefact rather than assuming it is right, and
+the first check is the one that catches the mistake this pipeline
+originally shipped: `[[ -d "$DEMO_APP" ]]`. A `.app` must be a
+*directory*; a flat file with a `.app` name is not a bundle and cannot
+launch. The rest confirms the directories are traversable, the launcher is
+executable and the host's arch, the deployment floor is right, `plutil`
+likes the `Info.plist`, `codesign --verify` passes, and the payload is
+present.
+
+It also pre-flights the *runtime*, which is not the same as the build
+succeeding. The demo classes ship as class file version 69.0 (Java 25) and
+`snug` refuses anything below `--min-java`, so on a machine whose newest
+JDK is older the script warns that the `.app` will not launch — rather
+than leaving you to discover it from a window that never appears.
+
+Two bash notes, because macOS still ships **bash 3.2**: expanding a
+possibly-empty array under `set -u` (`"${arr[@]}"`) is an *unbound
+variable* error there, so use the `${arr[@]+"${arr[@]}"}` form or an
+if/else; and `cp -R` into an existing directory of the same name copies
+*inside* it, quietly producing `x.app/x.app`.
+
 ```bash
 # what it does, if you ever need to do it by hand:
 rustup target add aarch64-apple-darwin
