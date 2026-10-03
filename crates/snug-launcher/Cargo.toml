@@ -64,6 +64,8 @@ ureq = { workspace = true }
 # cache directory is, rather than hardcoding `~/Library/Caches`. Windows
 # reads %LOCALAPPDATA% through the Win32 API and needs none of this.
 [target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = "0.3.2"
 objc2-foundation = { version = "0.3", default-features = false, features = ["alloc", "std", "NSString", "NSPathUtilities"] }
 # `confstr` is how snug asks macOS where the per-user cache directory is,
 # rather than hardcoding `~/Library/Caches`. Windows reads

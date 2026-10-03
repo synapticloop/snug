@@ -330,12 +330,35 @@ commit — useful history, not a live list.
   is a Windows build product.
 
 **macOS**
-- **The AppKit dialogs** — the install prompt, metadata-failed, retry,
-  terminal failure, and above all the **download progress window**. This is
-  the last thing standing between macOS and feature parity, and the only
-  reason `Auto` currently degrades. Reuse the same `dialogs()` strings via
-  `jdk_install::ui`'s non-Windows half; the seam is already there and the
-  strings are already localised.
+- **The macOS dialogs are AppKit `NSAlert`s, and that is the point.**
+  `appkit.rs` is the macOS half of the `jdk_install::ui` seam. The
+  install prompt, metadata-failed, retry and terminal-failure dialogs are
+  done; the **download progress window** and the **launcher error
+  window** (`error_window`, called from `main.rs`) are not. Reuse the
+  same `dialogs()` strings — nothing in the seam formats a string of its
+  own, so a `--localization <tag>` bundle translates the macOS dialogs
+  exactly as it translates the Windows ones.
+  - It looks like a macOS dialog, *not* like the Windows one. That is a
+    deliberate choice, not a compromise: AppKit supplies correct HiDPI,
+    accessibility, keyboard focus and system integration, and a
+    CoreGraphics re-implementation of `modal_window.rs` would have to
+    re-earn each of those by hand. If pixel parity ever becomes the
+    requirement, that is a different and much larger piece of work.
+  - `NSAlert::new` takes a `MainThreadMarker`, so UI must be on the main
+    thread. `run()` runs there and the *download* is on a worker thread,
+    so it lines up — but when the marker is absent, every entry point
+    degrades to logging rather than constructing a window from a thread
+    that must not. That degradation returns **cancel**, not retry: a
+    silent loop through a few hundred megabytes of downloads is exactly
+    what looks like a hang.
+  - A real `NSAlert` blocks until a human answers, so the module carries
+    a test seam: `set_test_response` makes dialogs answer on demand and
+    `last_shown` records what *would* have been displayed. The seam is
+    process-global, so the tests in that module are serialised by a mutex
+    — without that they overwrite each other's recording.
+  - Placeholder keys are the localisation baseline's, not invented:
+    `metadata_failed` fills `{major}`, **not** `{min_java}`, and getting
+    that wrong leaves `{major}` visible in front of the user.
 - **A macOS splash.** Win32 GDI+ / WIC today; CoreGraphics / CoreText if
   it is to match, or an `NSImage` view if it is to look native.
 - **Homebrew tap, or Developer ID + notarization.** Until one exists,

@@ -21,6 +21,7 @@
 // Each unsafe block is wrapped in `unsafe extern "system"` (edition 2024)
 // and confined to `#[cfg(windows)]` modules.
 
+pub mod appkit;
 pub mod cache;
 pub mod dialogs;
 pub mod error;

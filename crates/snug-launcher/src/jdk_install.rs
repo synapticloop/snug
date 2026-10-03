@@ -1379,17 +1379,9 @@ mod ui {
         super::show_metadata_failed_dialog(parent, min_java, detail)
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
     pub fn metadata_failed(_parent: ParentWindow, min_java: u16, detail: &str) -> i32 {
-        let d = dialogs::dialogs();
-        let content = dialogs::fill(
-            d.jdk_install.metadata_failed.content.as_str(),
-            &[("min_java", &min_java.to_string()), ("error", detail)],
-        );
-        eprintln!("{}: {}", d.jdk_install.metadata_failed.title, content);
-        // `IDYES`-equivalent: no. There is no prompt, so we do not open a
-        // browser in the user's face unasked; the URL is logged instead.
-        0
+        crate::appkit::metadata_failed(min_java, detail)
     }
 
     /// Retry / Cancel between failed attempts. `true` means "retry".
@@ -1404,26 +1396,15 @@ mod ui {
         super::show_retry_dialog(parent, attempt, max, version, err)
     }
 
-    #[cfg(not(windows))]
-    pub fn retry(_parent: ParentWindow, attempt: u32, max: u32, version: &str, err: &str) -> bool {
-        let d = dialogs::dialogs();
-        let content = dialogs::fill(
-            d.jdk_install.retry.content.as_str(),
-            &[
-                ("attempt", &attempt.to_string()),
-                ("max", &max.to_string()),
-                ("version", version),
-                ("error", err),
-            ],
-        );
-        // Auto-retry is the useful reading of a silent retry prompt: a
-        // transient network failure should not end the launch, and the
-        // loop is already bounded at `max`. Saying so is the important
-        // part — a silent retry would look like a hang.
-        log::log(&format!(
-            "no dialog available; retrying automatically ({attempt}/{max}): {content}"
-        ));
-        true
+    #[cfg(target_os = "macos")]
+    pub fn retry(
+        _parent: ParentWindow,
+        attempt: u32,
+        max: u32,
+        version: &str,
+        err: &str,
+    ) -> bool {
+        crate::appkit::retry(attempt, max, version, err)
     }
 
     /// Terminal failure, after the attempts are exhausted.
@@ -1432,9 +1413,9 @@ mod ui {
         super::show_error_dialog(parent, title, main, content)
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
     pub fn failure(_parent: ParentWindow, title: &str, _main: &str, content: &str) {
-        eprintln!("{title}: {content}");
+        crate::appkit::failure(title, content);
     }
 
     /// Show progress and block until the download settles.
@@ -1826,12 +1807,17 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn the_retry_seam_auto_retries_and_says_it_did() {
-        // The non-Windows `ui::retry` has no user to ask. It retries
-        // (bounded, same as the Windows loop) and must say so, because a
-        // silent retry looks like a hang.
-        let ok = ui::retry((), 1, 3, "21.0.12", "connection reset");
-        assert!(ok, "should auto-retry when there is nobody to ask");
+    fn the_retry_seam_asks_rather_than_looping_silently() {
+        // A test body does not run on the process main thread, so
+        // `MainThreadMarker` is absent and the AppKit backend degrades to
+        // logging. That degradation must return *cancel*, not retry: a
+        // silent loop through a few hundred megabytes of downloads is
+        // exactly the behaviour that looks like a hang, and the point of
+        // the dialog is that a human is asked.
+        //
+        // (The stderr this produces is the degraded dialog, printed
+        // rather than shown — the heading and the localised body.)
+        assert!(!ui::retry((), 1, 3, "21.0.12", "connection reset"));
     }
 
     fn tempdir() -> std::path::PathBuf {
