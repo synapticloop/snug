@@ -496,6 +496,24 @@ by accident.
   builds a Windows EXE, because the PE stub is embedded
   unconditionally. That is how Windows artefacts get built from a Mac, so
   it should be something you ask for rather than something that happens.
+- **Report download progress on *bytes*, not on phase.** `phase` is `0`
+  for the entire download, so a poller that only watched the phase
+  emitted one line and then went silent for the whole fetch — and a
+  silent 114 MB download is indistinguishable from a hang, which is
+  exactly how it was reported. `should_report` is extracted and tested
+  for this reason: it reports every 5% *and* on any phase change, because
+  a phase change is where "bytes" changes meaning. The 5% step keeps a
+  200 ms poll from burying the log in thousands of identical lines.
+- **`ureq` has no read timeout by default.** `timeout_read: None`
+  means a connection that establishes and then goes quiet blocks
+  forever, with no error, no retry, and nothing in the log. The agent is
+  built in `http_agent()` with connect/read/write timeouts of 30s. A
+  *per-read* timeout is the right shape rather than a total-download
+  budget: each successful read resets it, so a slow-but-progressing
+  185 MB fetch is never killed while a dead socket is caught in 30s and
+  handed to the retry dialog. `timeout_connect` is stated even though it
+  matches ureq's default, so a silent change there cannot silently
+  change our behaviour.
 - **A `ParentWindow` type alias is how a `cfg` split stays invisible.**
   `jdk_install::ui::ParentWindow` is `HWND` on Windows and `()` elsewhere.
   Because the alias *is* `HWND` there, every existing signature and call
