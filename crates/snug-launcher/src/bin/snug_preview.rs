@@ -36,6 +36,10 @@
 #[path = "snug_preview/windows_impl.rs"]
 mod imp;
 
+#[cfg(target_os = "macos")]
+#[path = "snug_preview/macos_impl.rs"]
+mod imp;
+
 /// Windows entry point. Delegates straight through — on Windows this bin
 /// behaves exactly as it did when `windows_impl.rs` was its own crate root.
 #[cfg(windows)]
@@ -43,14 +47,26 @@ fn main() {
     imp::run()
 }
 
-/// Non-Windows entry point, so `cargo build --workspace` and
-/// `cargo test --workspace` succeed on a macOS / Linux dev box.
+/// macOS entry point.
+///
+/// The macOS implementation is a different shape entirely, not a port:
+/// those dialogs are real `NSWindow`s behind ordinary functions, so the
+/// previewer calls them rather than reimplementing them. See the file's
+/// own header for why that is both shorter and more honest than the
+/// Windows one.
+#[cfg(target_os = "macos")]
+fn main() {
+    imp::run()
+}
+
+/// Entry point for platforms with no dialogs to preview, so that
+/// `cargo build --workspace` and `cargo test --workspace` succeed on a
+/// Linux dev box.
 ///
 /// `--help` is answered here rather than refused, because the help text is
 /// the one part of this tool that is genuinely platform-independent — and
-/// on a Mac, "this is a Windows-only preview tool" is a much better answer
-/// than `error[E0601]`.
-#[cfg(not(windows))]
+/// a one-line "not on this platform" beats `error[E0601]`.
+#[cfg(not(any(windows, target_os = "macos")))]
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
@@ -58,22 +74,21 @@ fn main() {
         println!(
             "snug_preview - preview the snug launcher dialogs\n\n\
              USAGE:\n    \
-             snug_preview [--localisation <DIR> | --localization <DIR>] \
-             [--icon <FILE>]\n\n\
-             This is a **Windows-only** development tool: it renders the \
-             launcher's hand-painted Win32 dialogs\n\
-             (JDK install prompt, Adoptium download progress, launcher \
-             error) so localisation copy\n\
-             can be reviewed without rebuilding an application.\n\n\
-             Build and run it on Windows:\n    \
-             cargo run --bin snug_preview -- [--localisation localisations]"
+             snug_preview [--localisation <DIR> | --localization <DIR>] [--mascot <FILE>]\n\n\
+             This is a development tool for the platforms snug has dialogs on: \
+             **Windows** and\n**macOS**. It has no Linux implementation, because \
+             there are no dialogs to preview\nthere yet.\n\n\
+             Windows:\n    \
+             cargo run --bin snug_preview -- [--localisation localisations]\n\n\
+             macOS:\n    \
+             cargo run --bin snug_preview -- --mascot assets/snug-icon.png"
         );
         return;
     }
 
     eprintln!(
-        "snug_preview is a Windows-only development tool (it previews Win32 \
-         dialogs). Build and run it on Windows:\n    \
+        "snug_preview has no implementation for this platform (it previews the\n\
+         Windows and macOS dialogs). Build and run it on one of those:\n    \
          cargo run --bin snug_preview"
     );
     std::process::exit(1);
