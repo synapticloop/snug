@@ -312,6 +312,20 @@ Deferred work, deliberately not done. Kept here rather than in
 commit — useful history, not a live list.
 
 **Windows**
+- **The Windows progress window never substitutes `phase_label`'s
+  `{arch}`.** `progress_window.rs` passes `phase_label` to its `STATIC`
+  control raw, so the initial text is literally
+  `Downloading runtime ({arch})` — the placeholder is shown to the user
+  rather than a platform name. macOS does fill it, from
+  `jdk_install.progress.arch_macos_*`. The fix is to give Windows its own
+  `arch_windows_*` keys and fill the control in `progress_status`'s
+  equivalent, but it needs a real Windows run to confirm, so it is left
+  rather than changed blind from a Mac.
+  - Worth doing with the same care as the macOS half: an earlier version
+    hardcoded `Windows x64` in the *shared* `phase_label`, so macOS
+    announced itself as a Windows download. Splitting the value out fixed
+    that, and left Windows without a value at all — the same bug one step
+    further on.
 - **Refresh `bin/launcher-stub.exe` on a Windows host.** Run
   `scripts\build-release.cmd`. Not urgent: every change since has been a
   `cfg(windows)` no-op, so the committed stub is functionally current.

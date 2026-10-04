@@ -550,6 +550,8 @@ mod tests {
             "jdk_install.progress.info_subtext",
             "jdk_install.progress.info_subtext_2",
             "jdk_install.progress.cancel_button_during_download",
+            "jdk_install.progress.arch_macos_arm64",
+            "jdk_install.progress.arch_macos_x86_64",
             "jdk_install.failure.title",
             "jdk_install.failure.heading",
             "jdk_install.failure.subheading",

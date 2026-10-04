@@ -140,6 +140,14 @@ pub struct ProgressDialog {
     /// `prompt.button_cancel` once the verify / extract phases
     /// start.
     pub cancel_button_during_download: String,
+    /// Platform names for the `{arch}` slot of `phase_label`.
+    ///
+    /// macOS only for now: they are the values the AppKit progress window
+    /// substitutes. See `appkit::adoptium_arch_label` for why a literal
+    /// here was a bug, and the Backlog for the Windows side, which does not
+    /// substitute the slot at all yet.
+    pub arch_macos_arm64: String,
+    pub arch_macos_x86_64: String,
 }
 
 #[derive(Debug, Clone)]
@@ -306,6 +314,8 @@ fn assemble() -> Dialogs {
                     cancel_button_during_download: {
                         lookup("jdk_install.progress.cancel_button_during_download")
                     },
+                    arch_macos_arm64: lookup("jdk_install.progress.arch_macos_arm64"),
+                    arch_macos_x86_64: lookup("jdk_install.progress.arch_macos_x86_64"),
                 },
                 failure: FailureDialog {
                     title: lookup("jdk_install.failure.title"),

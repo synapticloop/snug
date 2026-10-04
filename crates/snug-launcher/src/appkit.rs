@@ -80,6 +80,7 @@ use objc2_app_kit::{
     NSTextField, NSUserInterfaceLayoutOrientation, NSWindow,
     NSWindowDelegate, NSWindowStyleMask,
 };
+use objc2_app_kit::{NSImage, NSImageNameApplicationIcon, NSImageScaling, NSImageView};
 use objc2_foundation::{
     NSDate, NSObject, NSObjectProtocol, NSPoint, NSRect, NSRunLoop, NSSize, NSString,
 };
@@ -252,13 +253,28 @@ impl ProgressResponder {
 //  Progress copy
 // ---------------------------------------------------------------------------
 
-/// Adoptium's own name for this platform, as it appears in the progress
-/// line. The localisation baseline used to hardcode "Windows x64" in a
-/// *shared* key, which printed the wrong architecture on macOS.
-fn adoptium_arch_label() -> &'static str {
-    match std::env::consts::ARCH {
-        "aarch64" => "macOS arm64",
-        _ => "macOS x86_64",
+/// Human-readable platform+architecture for the progress line's `{arch}`
+/// slot.
+///
+/// The localisation baseline used to hardcode "Windows x64" in a *shared*
+/// key, which printed the wrong architecture on macOS. Fixing that moved
+/// the substitution here — and left the value itself hardcoded, which is
+/// the same bug one level down: a literal here means a French or Japanese
+/// progress window reads "Downloading runtime (**macOS x86_64**)" with an
+/// English platform token inside a translated sentence. It shows up in
+/// the user's copy rather than in a compiler error, so it is worth the
+/// extra key.
+///
+/// Only the macOS spellings are keyed. Windows still has the older gap —
+/// it passes `phase_label` to its `STATIC` control raw, so `{arch}` is
+/// never substituted there at all. See the Backlog.
+fn adoptium_arch_label() -> String {
+    let d = dialogs::dialogs();
+    let p = &d.jdk_install.progress;
+    if std::env::consts::ARCH == "aarch64" {
+        p.arch_macos_arm64.clone()
+    } else {
+        p.arch_macos_x86_64.clone()
     }
 }
 
@@ -445,6 +461,15 @@ mod layout {
     /// The progress window.
     pub const PROGRESS_W: f64 = 480.0;
     pub const PROGRESS_H: f64 = 200.0;
+
+    /// Side of the square the mascot occupies, and the gap between it and
+    /// the text column.
+    ///
+    /// 64pt is roughly the size macOS uses for an icon in a sheet, and it
+    /// is big enough for a 32pt bitmap to stay legible in a window that a
+    /// user may be reading from across a desk.
+    pub const DIALOG_MASCOT: f64 = 64.0;
+    pub const DIALOG_MASCOT_GAP: f64 = 16.0;
 }
 
 fn rect(x: f64, y: f64, w: f64, h: f64) -> NSRect {
@@ -490,6 +515,113 @@ fn new_content_view(mtm: MainThreadMarker, w: f64, h: f64) -> Retained<objc2_app
     // `initWithFrame:` only needs an allocated object and a rect; `mtm`
     // asserts the main thread, which the signature already guarantees.
     NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 0.0, w, h))
+}
+
+thread_local! {
+    /// Preview override for the mascot, set by `snug_preview --mascot`.
+    ///
+    /// A thread-local rather than an `AtomicIsize` like the Windows
+    /// `MASCOT_ICON_OVERRIDE`, because an `HICON` is an integer and an
+    /// `NSImage` is a retained Objective-C object with no thread
+    /// guarantees — putting one in an atomic would require lying about
+    /// `Send`/`Sync`. AppKit UI is main-thread-only anyway, so a
+    /// thread-local is both safer and a truer description of the
+    /// constraint.
+    static MASCOT_OVERRIDE: std::cell::RefCell<Option<Retained<NSImage>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Install a specific image as the dialog mascot, or pass `None` to go
+/// back to the bundle's application icon.
+///
+/// This exists because **`snug_preview` cannot rely on the bundle icon at
+/// all**: run as `cargo run --bin snug_preview` it is not inside a `.app`,
+/// so `NSImageNameApplicationIcon` resolves to nothing and every dialog
+/// would preview with no mascot. Without an override the one tool whose
+/// job is judging dialog copy by eye would be unable to show the mascot.
+pub fn set_mascot_image(image: Option<Retained<NSImage>>) {
+    MASCOT_OVERRIDE.with(|m| *m.borrow_mut() = image);
+}
+
+/// Load a mascot from an image file on disk, for the preview. Returns
+/// `None` if the file will not load, which the preview reports rather
+/// than treating as fatal — a dialog with the wrong icon is still worth
+/// looking at.
+///
+/// `mtm` is needed because `NSImage` allocation is main-thread-only, like
+/// everything else in this module.
+#[cfg(target_os = "macos")]
+pub fn mascot_image_from_file(
+    mtm: MainThreadMarker,
+    path: &std::path::Path,
+) -> Option<Retained<NSImage>> {
+    use objc2::AnyThread;
+    let name = NSString::from_str(&path.to_string_lossy());
+    // `NSImage` is an `AnyThread` class in these bindings, so its `alloc`
+    // takes no marker even though `initWithContentsOfFile:` is
+    // main-thread-only. `mtm` is kept as the proof of the thread the init
+    // must run on, which is why it is consumed here rather than dropped.
+    let _ = mtm;
+    // `initWithContentsOfFile:` is safe in these bindings despite being a
+    // main-thread-only AppKit method; `mtm` above is the thread proof.
+    NSImage::initWithContentsOfFile(NSImage::alloc(), &name)
+}
+
+/// The application's own icon, for the dialog mascot.
+///
+/// `NSImageNameApplicationIcon` resolves to the bundle's icon — the one
+/// `macos_bundle.rs` wrote to `Contents/Resources/App.icns` from the same
+/// `--icon` PNG that `editpe` stamps into `MAINICON` on Windows. So the
+/// mascot is whatever icon the user chose, on both platforms, with no
+/// second knob to keep in sync, and `--icon` stays the single control.
+///
+/// Returns `None` for a bundle with no icon. The dialogs are entirely
+/// usable without a mascot, so callers treat that as "draw no image"
+/// rather than as a failure — which is also the right behaviour for the
+/// bare launcher, which ships with no bundle at all.
+fn mascot_image() -> Option<Retained<NSImage>> {
+    // SAFETY: `imageNamed:` is a documented class method that returns
+    // autoreleased-or-retained AppKit state and takes no pointer
+    // arguments. It must run on the main thread, which every caller here
+    // is already on by way of owning a `MainThreadMarker`.
+    let bundled = unsafe { NSImage::imageNamed(NSImageNameApplicationIcon) };
+    MASCOT_OVERRIDE
+        .with(|m| m.borrow().clone())
+        .or(bundled)
+}
+
+/// Add the mascot to `content`, vertically centred in the `height` of
+/// space starting at `y`, and return the horizontal space it consumed.
+///
+/// The return value is what lets the caller keep its text column
+/// correctly placed instead of guessing: `0.0` when there is no icon, so
+/// a bundle without one simply lays out as it always did. Callers inset by
+/// the return value rather than by the constant, because "no mascot" and
+/// "mascot" then need no branch of their own.
+fn add_mascot(
+    mtm: MainThreadMarker,
+    content: &objc2_app_kit::NSView,
+    y: f64,
+    height: f64,
+) -> f64 {
+    let Some(image) = mascot_image() else {
+        return 0.0;
+    };
+    let view = NSImageView::initWithFrame(
+        NSImageView::alloc(mtm),
+        rect(
+            layout::DIALOG_MARGIN,
+            y + (height - layout::DIALOG_MASCOT) / 2.0,
+            layout::DIALOG_MASCOT,
+            layout::DIALOG_MASCOT,
+        ),
+    );
+    // The icon is 1024pt at source and the frame is `DIALOG_MASCOT` pt,
+    // so it must scale or it would be clipped to a corner.
+    view.setImageScaling(NSImageScaling::ScaleProportionallyUpOrDown);
+    view.setImage(Some(&image));
+    content.addSubview(&view);
+    layout::DIALOG_MASCOT + layout::DIALOG_MASCOT_GAP
 }
 
 /// A wrapping, non-editable label.
@@ -574,13 +706,24 @@ fn show_window(
     // positioned separately along the bottom.
     let inner_w = w - 2.0 * layout::DIALOG_MARGIN;
     let text_h = h - layout::DIALOG_BOTTOM - layout::DIALOG_BUTTON_H - 2.0 * layout::DIALOG_MARGIN;
+    let text_bottom = layout::DIALOG_BOTTOM + layout::DIALOG_BUTTON_H + layout::DIALOG_MARGIN;
+
+    // Mascot on the left, text column to its right. Placed by explicit
+    // frame for the same reason the buttons below are: this is a
+    // fixed-size window, and `NSStackView`'s alignment constants describe
+    // gravity rather than distribution, so asking one to lay this out
+    // horizontally is a fight with the wrong tool.
+    //
+    // `inset` is `0.0` when there is no icon, so the geometry below needs
+    // no idea whether a mascot was drawn.
+    let inset = add_mascot(mtm, &content, text_bottom, text_h);
     let stack = NSStackView::new(mtm);
     stack.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
     stack.setSpacing(10.0);
     stack.setFrame(rect(
-        layout::DIALOG_MARGIN,
-        layout::DIALOG_BOTTOM + layout::DIALOG_BUTTON_H + layout::DIALOG_MARGIN,
-        inner_w,
+        layout::DIALOG_MARGIN + inset,
+        text_bottom,
+        inner_w - inset,
         text_h,
     ));
     stack.addArrangedSubview(&label(mtm, heading, true));
@@ -698,6 +841,7 @@ pub(crate) fn progress(
     let d = dialogs::dialogs();
     let p = &d.jdk_install.progress;
     let arch = adoptium_arch_label();
+    let arch = arch.as_str();
 
     let Some(mtm) = activate_app() else {
         // No main thread to put a window on. We must not return early:
@@ -717,11 +861,16 @@ pub(crate) fn progress(
 
     let margin = layout::DIALOG_MARGIN;
     let inner_w = w - 2.0 * margin;
+    let stack_h = h - 66.0 - margin;
+    // Same left-hand mascot as the question windows, for the same reason:
+    // it is the app icon the user chose, and a download that takes a while
+    // is exactly when a window should look like it belongs to something.
+    let inset = add_mascot(mtm, &content, margin, stack_h);
     // subtitle, bar, status — stacked, top to bottom.
     let stack = NSStackView::new(mtm);
     stack.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
     stack.setSpacing(10.0);
-    stack.setFrame(rect(margin, 66.0, inner_w, h - 66.0 - margin));
+    stack.setFrame(rect(margin + inset, margin, inner_w - inset, stack_h));
     stack.addArrangedSubview(&label(mtm, &p.subtitle, false));
     stack.addArrangedSubview(&label(mtm, main, false));
 
@@ -822,11 +971,63 @@ pub(crate) fn progress(
     true
 }
 
+/// Drive the download-progress window against a synthetic download, for
+/// `snug_preview`.
+///
+/// The window itself is real — this only fabricates the `ProgressShared`
+/// values a real worker would be writing, so the copy, the mascot, the
+/// phase labels and the layout can all be judged without downloading
+/// anything. Lives here rather than in the preview binary because the
+/// atomics it has to drive are `pub(crate)`, and widening them to `pub`
+/// just for a dev tool would be a worse trade than one function.
+#[cfg(target_os = "macos")]
+pub fn progress_demo() -> bool {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    // A plausible mid-size Adoptium tarball, so the MB figures and the
+    // derived transfer speed are the magnitudes a user would really see.
+    const TOTAL: u64 = 190 * 1_048_576;
+    let shared = Arc::new(crate::jdk_install::ProgressShared::new(TOTAL));
+
+    // A ticker that walks 0 -> 100% and then reports success, so the
+    // preview exercises every phase label and the completed state rather
+    // than sitting on 0%.
+    let writer = Arc::clone(&shared);
+    let done = std::thread::spawn(move || {
+        const STEPS: u32 = 60;
+        for i in 1..=STEPS {
+            std::thread::sleep(Duration::from_millis(60));
+            let pct = i * 100 / STEPS;
+            writer.pct.store(pct, Ordering::SeqCst);
+            writer.bytes.store(TOTAL * u64::from(pct) / 100, Ordering::SeqCst);
+            // 0 = downloading, then verifying, then extracting.
+            writer
+                .phase
+                .store(match pct {
+                    ..=70 => 0,
+                    71..=90 => 1,
+                    _ => 2,
+                }, Ordering::SeqCst);
+        }
+        writer.phase.store(2, Ordering::SeqCst);
+        writer.pct.store(100, Ordering::SeqCst);
+        writer.bytes.store(TOTAL, Ordering::SeqCst);
+        // 0 = running, 1 = success.
+        writer.done.store(1, Ordering::SeqCst);
+    });
+
+    let ok = progress("Runtime 25.0.4.1+1 (~190 MB)", Arc::clone(&shared));
+    let _ = done.join();
+    ok
+}
+
 /// Progress reporting when there is no main thread to put a window on.
 fn log_only_progress(shared: &std::sync::Arc<crate::jdk_install::ProgressShared>) -> bool {
     use std::time::Instant;
 
     let arch = adoptium_arch_label();
+    let arch = arch.as_str();
     let mut last: Option<(u64, Instant)> = None;
     let mut last_pct = 0u32;
     let mut last_phase = -1i32;
@@ -865,7 +1066,7 @@ fn log_only_progress(shared: &std::sync::Arc<crate::jdk_install::ProgressShared>
 
 /// Adoptium could not be reached. Returns `true` when the user asked for
 /// the release page to be opened.
-pub(crate) fn metadata_failed(min_java: u16, error_detail: &str) -> i32 {
+pub fn metadata_failed(min_java: u16, error_detail: &str) -> i32 {
     let d = dialogs::dialogs();
     let md = &d.jdk_install.metadata_failed;
     let major = min_java.to_string();
@@ -903,7 +1104,7 @@ pub(crate) fn metadata_failed(min_java: u16, error_detail: &str) -> i32 {
 }
 
 /// A download attempt failed. `true` means "retry".
-pub(crate) fn retry(attempt: u32, max_attempts: u32, version: &str, error: &str) -> bool {
+pub fn retry(attempt: u32, max_attempts: u32, version: &str, error: &str) -> bool {
     let d = dialogs::dialogs();
     let r = &d.jdk_install.retry;
     let attempt_str = attempt.to_string();
@@ -940,7 +1141,7 @@ pub(crate) fn retry(attempt: u32, max_attempts: u32, version: &str, error: &str)
 }
 
 /// Terminal failure, after the attempts are exhausted. No answer needed.
-pub(crate) fn failure(title: &str, content: &str) {
+pub fn failure(title: &str, content: &str) {
     let d = dialogs::dialogs();
     let f = &d.jdk_install.failure;
     ask(
@@ -963,7 +1164,7 @@ pub(crate) fn failure(title: &str, content: &str) {
 ///
 /// "Open in browser" is not consent — it hands the page over and stops,
 /// which is what the button says it does.
-pub(crate) fn consent(version: &str, size_mb: u32, url: &str, sha256: &str) -> bool {
+pub fn consent(version: &str, size_mb: u32, url: &str, sha256: &str) -> bool {
     let d = dialogs::dialogs();
     let p = &d.jdk_install.prompt;
 
@@ -1172,7 +1373,7 @@ mod tests {
         // The baseline shipped `Downloading runtime (Windows x64)` as a
         // *shared* key, so a macOS download announced itself as a Windows
         // one. The key now takes `{arch}` and each platform fills it in.
-        let text = progress_status(0, 42, 0, 0, None, adoptium_arch_label());
+        let text = progress_status(0, 42, 0, 0, None, &adoptium_arch_label());
         assert!(
             text.contains(&adoptium_arch_label()),
             "arch missing from: {text}"

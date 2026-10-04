@@ -56,5 +56,6 @@
 # below, which is the precedence every other flag already gets.
 # ---------------------------------------------------------------------------
 
+#--download-jdk=force
 --input assets/snug-javafx-demo-mac.jar
 --output assets/snug-javafx-demo.app
