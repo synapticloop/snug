@@ -400,8 +400,18 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
                 }
                 Err(e) => {
                     // A failure is reported through the normal path so the
-                    // caller can format it; that returns to `run()` and
-                    // exits *without* the event loop having been started.
+                    // caller can format it — which means returning to
+                    // `run()` and having `main` print it. That is only
+                    // reachable if the event loop stops, so ask it to.
+                    //
+                    // This is the one thing the loop cannot do for itself.
+                    // `NSApplication::run` only ends on a main-thread
+                    // `stop:`, and this thread is not allowed to issue one;
+                    // that is why the success path exits the process
+                    // instead. But a polled loop *can* be ended from any
+                    // thread, so an error that happens before the app is
+                    // even up no longer hangs the launcher.
+                    crate::appkit::stop_event_loop();
                     Err(e)
                 }
             }

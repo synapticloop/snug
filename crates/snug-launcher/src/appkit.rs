@@ -331,29 +331,85 @@ fn progress_status(
 /// earlier attempt to call `activate_app()` from `run()` made things
 /// worse; see AGENTS.md.)
 ///
-/// Uses `NSApplication::run()`, not a hand-pumped
-/// `runUntilDate` loop. Pumping the loop manually is the obvious way to
-/// keep a "should I quit?" check on this thread, and it is wrong: without
-/// `run()` having formally started, AppKit keeps treating the process as
-/// still launching and the Dock icon bounces forever. The cost of `run()`
-/// is that only a main-thread `stop:` can end it — and the thread that
-/// learns the app has finished is the VM worker — so termination is
-/// handled by exiting the process instead. See `run()` in
-/// `platform/macos.rs`.
+/// **Does not create `NSApplication` at all, and that is the whole point.**
+///
+/// JavaFX decides whether it is a normal macOS app or a guest inside
+/// somebody else's toolkit purely by asking *which class won the
+/// `+sharedApplication` race*. From `GlassApplication.m`:
+///
+/// ```objc
+/// NSApplication *app = [NSApplicationFX sharedApplication];
+/// isEmbedded = ![app isKindOfClass:[NSApplicationFX class]];
+/// if (!isEmbedded) { ...set delegate, run the loop, set up the app... }
+/// else          { /* just fire willFinishLaunching and get out of the way */ }
+/// ```
+///
+/// Apple's docs are explicit that the first `+sharedApplication` call
+/// decides the class. An earlier version of this function called
+/// `[NSApplication sharedApplication]` and `run()` in order to get a loop
+/// running, and that made snug the winner — so glass concluded it was
+/// **embedded** and skipped its entire macOS integration: no delegate, no
+/// `TransformProcessType`, no activation, and on macOS 14+ no
+/// `activateIgnoringOtherApps:` either. The window still appeared (which is
+/// what made it so confusing) but the app's own `MenuBar` never reached the
+/// system menu bar.
+///
+/// snug cannot win that race legitimately: glass can only run once the
+/// main thread is inside a run loop, so whoever starts the loop necessarily
+/// creates `NSApplication` first. The way out is to start a run loop that
+/// does *not* need `NSApplication` at all — a `CFRunLoop` belongs to the
+/// thread, not to the app object. That is what this now does: a bare
+/// `NSRunLoop` pump, leaving `NSApplicationFX` for glass to create, install
+/// itself as delegate, and drive with its own `[NSApp run]`.
+///
+/// The `Dock icon bounces forever` failure recorded in AGENTS.md was *not* a
+/// consequence of pumping. It was a consequence of pumping **while glass
+/// believed it was embedded** and therefore never called `finishLaunching`
+/// or `[NSApp run]` itself, so AppKit sat in the launching state with
+/// nothing to finish it. With `isEmbedded` now NO, glass completes the
+/// launch and owns the loop; this pump is only the floor it is standing on.
+///
+/// The cost of giving the loop away is that we no longer have a `stop:`
+/// handle, so termination is a flag instead — see [`stop_event_loop`].
+/// A worker that finishes normally still exits the process outright.
 pub(crate) fn run_event_loop() {
-    let Some(mtm) = MainThreadMarker::new() else {
-        // Not the main thread: nothing may run an AppKit loop. The
-        // worker still completes and exits the process, so the launcher
-        // does not depend on this having run.
+    if MainThreadMarker::new().is_none() {
+        // Not the main thread: nothing may run a Cocoa loop. The worker
+        // still completes and exits the process, so the launcher does not
+        // depend on this having run.
         return;
-    };
-    let app = NSApplication::sharedApplication(mtm);
-    // Regular application, so there is a Dock icon and keyboard focus.
-    // Policy only — see above about `finishLaunching`.
-    app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
-    log::debug("appkit: initial thread entering the AppKit event loop");
-    app.run();
-    log::debug("appkit: event loop returned");
+    }
+    // Deliberately `NSApplication`-free. See above.
+    let run_loop = NSRunLoop::currentRunLoop();
+    log::debug("appkit: initial thread pumping a bare run loop (no NSApplication)");
+    while !STOP_EVENT_LOOP.load(Ordering::SeqCst) {
+        // Long enough not to spin, short enough that a stop request is
+        // not noticeable. `runUntilDate` returns as soon as it has handled
+        // a source, so this is an idle wait rather than a fixed delay.
+        let limit = NSDate::dateWithTimeIntervalSinceNow(EVENT_LOOP_TICK_SECS);
+        run_loop.runUntilDate(&limit);
+    }
+    log::debug("appkit: run loop returned");
+}
+
+/// How long one turn of the bare run loop waits before re-checking
+/// [`STOP_EVENT_LOOP`].
+const EVENT_LOOP_TICK_SECS: f64 = 0.05;
+
+/// Set by [`stop_event_loop`] to end [`run_event_loop`].
+///
+/// Exists because the loop is no longer `NSApplication::run`, which could
+/// only be ended by a main-thread `stop:`. The thread that learns the app
+/// has finished is the VM worker, and a polled loop can be ended from any
+/// thread — which is what makes the launcher's *error* paths work at all.
+/// Without it a failure before the loop is reached would leave the main
+/// thread pumping forever and the error would never surface.
+static STOP_EVENT_LOOP: AtomicBool = AtomicBool::new(false);
+
+/// Ask [`run_event_loop`] to return at its next tick. Callable from any
+/// thread. Idempotent.
+pub(crate) fn stop_event_loop() {
+    STOP_EVENT_LOOP.store(true, Ordering::SeqCst);
 }
 
 /// Make this process a foreground GUI app and return the main-thread

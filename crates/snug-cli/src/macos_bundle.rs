@@ -249,7 +249,7 @@ fn info_plist(app_name: &str, payload: &SnugPayload, has_icon: bool) -> String {
         &bundle_identifier(&app.company, &app.name),
     );
     entry(&mut s, "CFBundleInfoDictionaryVersion", "6.0");
-    entry(&mut s, "CFBundleName", app_name);
+    entry(&mut s, "CFBundleName", &bundle_name(&app.name));
     // The user-visible name may be longer or prettier than the
     // executable, so both are set.
     entry(&mut s, "CFBundleDisplayName", &app.name);
@@ -301,6 +301,33 @@ fn xml_escape(s: &str) -> String {
         }
     }
     out
+}
+
+/// The value written to `CFBundleName`, which is the title macOS gives the
+/// **application menu** — the first, always-present menu in the menu bar.
+///
+/// This is a different job from `CFBundleExecutable`, which has to name the
+/// file inside `Contents/MacOS` and therefore must stay the slug. Writing
+/// the slug into both used to make the demo's application menu read
+/// "snug-javafx-demo" while the window and the Finder read "Snug JavaFX
+/// Demo". It is the macOS counterpart of the `ProductName` the Windows
+/// build stamps into `VS_VERSIONINFO`.
+///
+/// Apple caps `CFBundleName` at 16 characters, so a longer `--name` is
+/// truncated rather than emitted whole. `CFBundleDisplayName` carries the
+/// full name for the Finder and the Dock, so nothing is actually lost.
+fn bundle_name(name: &str) -> String {
+    const MAX_CFBUNDLE_NAME: usize = 16;
+    if name.chars().count() <= MAX_CFBUNDLE_NAME {
+        return name.to_string();
+    }
+    // Truncating can leave a trailing space mid-word ("A Very Long App" ->
+    // "A Very Long App " -> "A Very Long App"), so drop it rather than pad.
+    name.chars()
+        .take(MAX_CFBUNDLE_NAME)
+        .collect::<String>()
+        .trim_end()
+        .to_string()
 }
 
 /// Reverse-DNS bundle id from the company and app names.
@@ -569,6 +596,37 @@ mod tests {
         // Nonsense must still yield something Launch Services accepts.
         assert_eq!(short_version(""), "1.0");
         assert_eq!(short_version("beta"), "1.0");
+    }
+
+    #[test]
+    fn bundle_name_is_the_app_menu_title_not_the_slug() {
+        // The whole point: the application menu shows this, so it has to be
+        // the pretty name even though the executable is still the slug.
+        assert_eq!(bundle_name("Snug JavaFX Demo"), "Snug JavaFX Demo");
+        // Exactly at Apple's cap, untouched.
+        assert_eq!(bundle_name("Sixteen Char Nam"), "Sixteen Char Nam");
+        // Over the cap it is cut, and a word broken by the cut does not
+        // leave a trailing space behind.
+        assert_eq!(bundle_name("A Very Long Application Name"), "A Very Long Appl");
+        assert_eq!(bundle_name("Seventeen Char Name"), "Seventeen Char N");
+        // Counted in characters, not bytes, so a multi-byte name is not
+        // cut in the middle of a code point.
+        assert_eq!(bundle_name("Ünïcödé Süper Lóng Näme"), "Ünïcödé Süper Ló");
+    }
+
+    #[test]
+    fn info_plist_names_the_application_menu_with_the_app_name() {
+        let p = payload("SynapticLoop", "Snug JavaFX Demo", "1.0.0");
+        let xml = info_plist("snug-javafx-demo", &p, true);
+        // The executable stays the slug so it matches the file in
+        // Contents/MacOS...
+        assert!(xml.contains(
+            "<key>CFBundleExecutable</key>\n\t<string>snug-javafx-demo</string>"
+        ));
+        // ...while the application menu gets the name a user recognises.
+        assert!(xml.contains(
+            "<key>CFBundleName</key>\n\t<string>Snug JavaFX Demo</string>"
+        ));
     }
 
     #[test]

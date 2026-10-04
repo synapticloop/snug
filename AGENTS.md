@@ -411,6 +411,34 @@ commit — useful history, not a live list.
     that wrong leaves `{major}` visible in front of the user.
 - **A macOS splash.** Win32 GDI+ / WIC today; CoreGraphics / CoreText if
   it is to match, or an `NSImage` view if it is to look native.
+- **`activate_app()` still creates `NSApplication`, so `--download-jdk=force`
+  can still win the `+sharedApplication` race and re-break the menu bar.**
+  `run_event_loop()` is deliberately `NSApplication`-free so glass can create
+  `NSApplicationFX` itself, but `activate_app()` is the surviving caller of
+  `NSApplication::sharedApplication` + `finishLaunching()`, and the Adoptium
+  download dialogs reach it **before the JVM exists**. So a `force` build
+  gets a Dock icon, an app menu, no `MenuBar` hand-over, and no
+  `activateIgnoringOtherApps:` — the exact failure just fixed. `auto` never
+  reaches it (it returns early rather than downloading unasked), which is
+  why the demo looks fine.
+  - There is no way to make this work by being careful about *when* snug
+    creates the app: any pre-JVM AppKit window needs an `NSApplication`, and
+    the first one to call `+sharedApplication` wins permanently.
+  - So this needs a structural answer, not a reordering. The plausible one
+    is to **defer the dialogs until after the toolkit is up** — collect the
+    install decision, launch the app, and put the consent window up from the
+    JavaFX side (or from an `NSApplication` created only *after* glass has
+    made `NSApplicationFX` the shared instance, which is reachable because
+    the launcher holds the initial thread).
+  - How to check it, since `isEmbedded` is not visible from Java: build the
+    demo with `--download-jdk=force`, confirm the log still shows
+    `pumping a bare run loop (no NSApplication)`, and then look for the two
+    things that only exist when glass won the race — the **application menu**
+    (first menu, titled with `CFBundleName`) and the app's own `MenuBar`
+    hand-over. A `force` build that shows a window but neither menu has
+    re-broken it. To be certain rather than plausible, `lldb -p <pid>` and
+    `po [NSApp class]` will name `NSApplicationFX` when it is right and
+    plain `NSApplication` when it is wrong.
 - **Homebrew tap, or Developer ID + notarization.** Until one exists,
   document `xattr -d com.apple.quarantine snug`. See "Build host".
 - **A fully dynamic macOS cache path.** Today the only hardcoded part is
@@ -535,19 +563,65 @@ by accident.
   and is **not always writable** in a sandbox. So the same line can fail
   as a bare `Operation not permitted` from a `.unwrap()`. When a snug
   test panics on a temp path, suspect the environment before the logic.
-- **Do not touch `NSApplication` before the JVM starts. This was tried,
-  it looked plausible, and it broke JavaFX.** A launcher that wants a dock
-  icon and proper activation seems like it should call
-  `setActivationPolicy(Regular)` + `finishLaunching()` early in `run()`.
-  Do not. `finishLaunching()` **consumes the
-  `applicationDidFinishLaunching` notification**, which is exactly the
-  event JavaFX's `MacApplication` is waiting for to finish toolkit
-  startup. Calling it first means JavaFX starts its AppKit run loop,
-  never receives the notification, and waits forever. The symptom is
-  silent and bizarre — no exception, nothing in the log after the JNI
-  handoff, just a dock icon bouncing with no window.
-  - The thread dump that identifies it: the `JavaFX-Launcher` thread is
-    *still inside* `PlatformImpl.startup` → `QuantumToolkit.startup` →
+- **snug must never create `NSApplication`. JavaFX has to win the
+  `+sharedApplication` race, and the launcher used to take it away from it.**
+  This is the single most important macOS rule in the file, and the way to
+  state it is *whoever calls `+sharedApplication` first owns the
+  application*. Apple's docs are explicit: to get an instance of a
+  subclass, the **first** `+sharedApplication` call has to be on that
+  subclass. JavaFX asks which class won, in `GlassApplication.m`:
+  ```objc
+  NSApplication *app = [NSApplicationFX sharedApplication];
+  isEmbedded = ![app isKindOfClass:[NSApplicationFX class]];
+  if (!isEmbedded) { /* set delegate, TransformProcessType, activate, [NSApp run] */ }
+  else            { /* just fire willFinishLaunching and get out of the way */ }
+  ```
+  So if snug calls `[NSApplication sharedApplication]` first — which is
+  exactly what a launcher wanting a dock icon seems like it should do — glass
+  finds a plain `NSApplication`, concludes it is **embedded in another
+  toolkit**, and skips *all* of its macOS integration: no delegate, no
+  `TransformProcessType(kProcessTransformToForegroundApplication)`, no
+  application icon, and on macOS 14+ no `activateIgnoringOtherApps:`
+  either. **The window still appears.** That is what makes it so expensive
+  to diagnose: a snug-hosted JavaFX app looks completely healthy and simply
+  has no working system menu bar, because a JavaFX `MenuBar` with
+  `setUseSystemMenuBar(true)` is installed from
+  `MenuBarSkin.setSystemMenu(stage)`, which is gated on the very
+  integration glass skipped.
+  - snug **cannot** win that race legitimately, and that is what forces the
+    design: glass can only run once the initial thread is inside a run
+    loop, so whoever starts the loop necessarily creates
+    `NSApplication` first. The way out is a run loop that does not *need*
+    an `NSApplication` object at all — a `CFRunLoop` belongs to the thread,
+    not the app. `run_event_loop()` therefore pumps a bare
+    `NSRunLoop::runUntilDate` and touches no `NSApplication`. glass then
+    creates `NSApplicationFX`, sets itself as delegate, and calls its own
+    `[NSApp run]`.
+  - **Consequence worth knowing: the loop is polled, so it has a stop
+    flag.** `NSApplication::run` could only be ended by a main-thread
+    `stop:`, which the VM worker is not allowed to issue, so failure paths
+    hung forever. `stop_event_loop()` is settable from any thread, and that
+    fixed a real latent bug: with the committed stub, a Main-Class that
+    fails to resolve leaves the process **hung with no output at all**; the
+    flag makes it exit in ~150 ms and print the error. Worth keeping a
+    regression test for.
+  - **The Dock-bouncing symptom was never about pumping.** AGENTS.md used to
+    record "do not hand-pump the run loop, the Dock icon bounces forever".
+    That was a misdiagnosis: bouncing meant AppKit was stuck in the
+    launching state because *glass believed it was embedded* and therefore
+    never called `finishLaunching` or `[NSApp run]` to complete the launch.
+    With `isEmbedded` back to NO, glass finishes the launch itself and the
+    bouncing is gone — see the note under the thread split below.
+  - Calling `finishLaunching()` from the launcher is still forbidden, for
+    the original and still-correct reason: it **consumes the
+    `applicationDidFinishLaunching` notification** that JavaFX's
+    `MacApplication` is waiting on to finish toolkit startup. With snug no
+    longer creating `NSApplication` at all, the only surviving caller is
+    `activate_app()`, which the Adoptium download dialogs still use — see
+    the Backlog, because that is a real remaining hole.
+  - The thread dump that identifies the *startup hang* (a separate, older
+    failure): the `JavaFX-Launcher` thread is *still inside*
+    `PlatformImpl.startup` → `QuantumToolkit.startup` →
     `MacApplication._runLoop` in native code, and there is **no "JavaFX
     Application Thread"** in the dump at all. A healthy JavaFX app always
     has one; its absence is the tell, long before any timeout.
@@ -559,7 +633,10 @@ by accident.
     outside snug. `java -cp <jar> <MainClass>` opened a working window,
     which cleared the JDK, the natives, the JavaFX build and the demo's
     own code in one step, and left snug's hosting as the only variable.
-    Reach for that before instrumenting the launcher.
+    Reach for that before instrumenting the launcher. For anything to do
+    with the menu bar, application activation or the Dock, this is *also*
+    the test that isolates snug, because it is precisely the run where
+    glass wins the `+sharedApplication` race.
   - A JavaFX `main` that never returns is **correct** — `Application.launch`
     blocks for the life of the app by design, and `main` sitting on a
     `CountDownLatch` inside `LauncherImpl.launchApplication` is the
@@ -588,11 +665,18 @@ by accident.
     delegate to observe it, and the hang returns with no error to explain
     it. An earlier attempt to reuse `activate_app()` at startup did
     exactly this and made the failure worse.
-  - **Do not hand-pump the run loop** (`runUntilDate` in a poll loop) in
-    order to keep a "should I quit?" check on this thread. Without
-    `run()` having formally started, AppKit keeps treating the process as
-    still launching and **the Dock icon bounces forever**. Tried; it
-    shows a window and then does this.
+  - **The loop is hand-pumped on purpose, and it creates no
+    `NSApplication`.** `run_event_loop()` runs `NSRunLoop::runUntilDate`
+    in a `while !STOP_EVENT_LOOP` loop, which sounds like exactly the thing
+    an earlier note here forbade. It is not the same thing, and the
+    distinction is the whole fix: that earlier attempt hand-pumped *while
+    also holding an `NSApplication` it had created*, so AppKit sat
+    half-launched with nothing to finish it and the Dock icon bounced
+    forever. Now the pump is deliberately `NSApplication`-free, glass owns
+    the application object and calls `finishLaunching` / `[NSApp run]`
+    itself, and the bounce is gone. **If you ever find yourself adding
+    `NSApplication` back into this function, stop** — see the
+    `+sharedApplication` race note above.
   - **The worker exits the process when the app finishes**, rather than
     unwinding. `run()` only returns for a main-thread `stop:`, and the
     worker is not allowed to issue one. Exiting also sidesteps the
@@ -611,6 +695,38 @@ by accident.
     workaround is `JLI_Launch` rather than this split. Both work; this one
     keeps everything in-process and needs no `main` export, no `libjli`,
     and no C shim.
+- **On macOS 14+ JavaFX no longer uses the deactivate/reactivate dance that
+  fixes the menu bar, which changes how you debug it.** The original
+  JDK-8233678 workaround made the app hide itself and reactivate on first
+  activation. `GlassApplication.m` now does:
+  ```objc
+  triggerReactivation = YES;
+  // ... no longer needed (and no longer works anyway) as of macOS 14
+  if (@available(macOS 14.0, *)) { triggerReactivation = NO; requiresActivation = YES; }
+  ```
+  and activation moved into `applicationDidFinishLaunching:` as
+  `if (!NSApp.isActive && requiresActivation) { dispatch_async(… activateIgnoringOtherApps:YES …); }`.
+  So on 14+ the *only* thing that makes the system menu bar work is that
+  `activateIgnoringOtherApps:` — and, before that, the `isEmbedded` race
+  above actually having been won by glass.
+  - **Debugging trap this creates:** the warning
+    `Timeout while waiting for app reactivation` is evidence *only* on
+    macOS below 14. On 14+ `waitForReactivation()` is never called, so the
+    line is absent whether or not activation is broken, and treating its
+    absence as proof that activation happened sends you the wrong way.
+    That misreading cost a whole wrong hypothesis here.
+  - The `"javafx"` logger *does* reach stderr with no configuration at all,
+    so a warning that should have fired and did not is still real
+    evidence — just confirm you are on an OS where it should fire. The
+    giveaway is any other line from the same logger, e.g.
+    `WARNING: Unsupported JavaFX configuration: classes were loaded from
+    'unnamed module …'`.
+  - **`-Dglass.taskbarApplication` is a red herring for this class of bug.**
+    It reads as `!"false".equalsIgnoreCase(prop)`, so it is `true` when
+    unset and is therefore already doing the right thing; setting it to
+    `false` makes things worse, not better. More importantly it is read
+    *inside* the `if (!isEmbedded)` block, so **no system property can
+    rescue the embedded case** — nothing is configurable from outside.
 - **`java -cp <jar> <MainClass>` is the test that ends the guessing.** One
   run of the app outside snug, on the same machine and same JDK, cleared
   the JDK, the JavaFX build, the natives and the app's own code in a
@@ -692,6 +808,25 @@ by accident.
   ad-hoc signature. Resources and `Info.plist` are `0644`. Note also that
   ad-hoc signing is not optional polish — **arm64 refuses to execute a
   binary with no code signature at all.**
+- **`CFBundleName` is the application menu's title, and it is not the
+  executable name.** Three keys in `Info.plist` look interchangeable and are
+  not, and conflating two of them is what puts an internal slug in front of
+  the user:
+  ```text
+  CFBundleExecutable    snug-javafx-demo    must match the file in Contents/MacOS
+  CFBundleName          Snug JavaFX Demo    what macOS titles the application menu
+  CFBundleDisplayName   Snug JavaFX Demo    Finder only, never the menu bar
+  ```
+  snug used to write the slug into `CFBundleName` as well, so the demo's
+  first menu read "snug-javafx-demo" while the window and the Finder read
+  "Snug JavaFX Demo". `bundle_name()` now emits the app's `--name`, capped
+  at Apple's 16-character `CFBundleName` limit (counted in **characters**,
+  not bytes, and `trim_end`ed so a cut mid-word leaves no trailing space).
+  `CFBundleDisplayName` still carries the full name, so nothing is lost —
+  which is also why capping is safe. It is the macOS counterpart of the
+  `ProductName` the Windows build stamps into `VS_VERSIONINFO`, and it only
+  became *visible* once the `isEmbedded` fix above restored the application
+  menu; before that, nothing was reading it.
 - **`JNIVersion` must not be pinned above the JVM you discovered.**
   Requesting a spec version newer than the loaded `libjvm` understands is
   how `JNI_CreateJavaVM` fails with a useless `JNI call failed`: with
