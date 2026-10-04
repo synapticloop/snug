@@ -328,31 +328,6 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
         Vec::new()
     };
 
-    // 4b. Hand the app to the JDK's own launcher, if this JDK has one.
-    //
-    //     This has to happen *instead of* `JNI_CreateJavaVM`, not
-    //     alongside it, because the whole point is which thread runs the
-    //     Java app. AppKit needs the process's initial thread for its
-    //     event loop; `JNI_CreateJavaVM` hands that thread to Java's
-    //     `main`, which then parks on a latch forever. A GUI app never
-    //     gets its `applicationDidFinishLaunching:`, and hangs in
-    //     `PlatformImpl.startup` with no window and nothing in the log.
-    //     `JLI_Launch` — the entry point the `java` binary and jpackage's
-    //     launchers use — reserves that thread for the UI and runs the
-    //     app on a VM-created thread instead.
-    //
-    //     Returns `None` when there is no `libjli`, and the JNI path below
-    //     takes over. That still launches console apps correctly; only GUI
-    //     apps are out of reach there.
-    if let Some(code) = crate::jli::launch(
-        &jvm_dir,
-        &cached_paths,
-        &main_class_name,
-        &config.jvm_args,
-        &argv_strings,
-    ) {
-        return Ok(code as u32);
-    }
 
     // 5. Build the JNI InitArgs. All cached JARs go on the classpath so
     //    `find_class` resolves through the system loader. `join_paths`
