@@ -37,10 +37,31 @@
 --copyright "© SynapticLoop"
 --version 1.0.0
 --min-java 25
---main-class synapticloop.snugjavafxdemo.Launcher
+--main-class synapticloop.snug.demo.javafx.Launcher
 --splash assets/snug-splash.png
 --splash-ms 2000
 --icon assets/snug-icon.png
 --output assets/snug-javafx-demo.exe
---download-jdk=force
---jvm-arg --enable-native-access=javafx.graphics
+#
+# `auto` = "use a compatible JVM if one is already installed, and only
+# offer the Temurin download if discovery comes up empty".
+#
+# It was `force`, which skips discovery entirely. On a machine that already
+# has JDK 25 installed that meant downloading a second 115 MB copy of
+# JDK 25 before the demo could start - and, worse, it meant starting the
+# download flow at all, which on macOS currently hangs forever: the worker
+# thread spins on `shared.started` (jdk_install.rs) until a human clicks
+# Install in the progress window, and when the bundle is exec'd from a
+# terminal rather than launched by Launch Services that NSAlert never
+# appears. See AGENTS.md, "The download flow deadlocks on macOS".
+--download-jdk=auto
+#
+# `ALL-UNNAMED`, not `javafx.graphics`. snug puts the fat JAR on the
+# *classpath*, so JavaFX loads as part of the unnamed module rather than as
+# a named module - which is why the JVM itself warns "Unknown module:
+# javafx.graphics specified to --enable-native-access" and then does
+# nothing. Naming a module that does not exist cannot grant anything.
+# `ALL-UNNAMED` is the correct grant for a classpath-launched JavaFX, and it
+# matters: JavaFX 25 calls `System.load` for its natives, which is a
+# restricted method, and a future JDK will block it outright.
+--jvm-arg --enable-native-access=ALL-UNNAMED

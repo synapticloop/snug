@@ -328,6 +328,32 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
         Vec::new()
     };
 
+    // 4b. Hand the app to the JDK's own launcher, if this JDK has one.
+    //
+    //     This has to happen *instead of* `JNI_CreateJavaVM`, not
+    //     alongside it, because the whole point is which thread runs the
+    //     Java app. AppKit needs the process's initial thread for its
+    //     event loop; `JNI_CreateJavaVM` hands that thread to Java's
+    //     `main`, which then parks on a latch forever. A GUI app never
+    //     gets its `applicationDidFinishLaunching:`, and hangs in
+    //     `PlatformImpl.startup` with no window and nothing in the log.
+    //     `JLI_Launch` — the entry point the `java` binary and jpackage's
+    //     launchers use — reserves that thread for the UI and runs the
+    //     app on a VM-created thread instead.
+    //
+    //     Returns `None` when there is no `libjli`, and the JNI path below
+    //     takes over. That still launches console apps correctly; only GUI
+    //     apps are out of reach there.
+    if let Some(code) = crate::jli::launch(
+        &jvm_dir,
+        &cached_paths,
+        &main_class_name,
+        &config.jvm_args,
+        &argv_strings,
+    ) {
+        return Ok(code as u32);
+    }
+
     // 5. Build the JNI InitArgs. All cached JARs go on the classpath so
     //    `find_class` resolves through the system loader. `join_paths`
     //    supplies the platform's separator — do NOT hand-roll this with
@@ -352,10 +378,12 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
 
     // 6. Create the JVM by loading libjvm.dylib directly.
     let libjvm_path = libjvm.clone();
+    log::debug("jni: creating the VM (this loads libjvm.dylib)");
     let vm = JavaVM::with_libjvm(init_args, || {
         Ok::<_, jni::errors::StartJvmError>(libjvm_path.as_os_str())
     })
     .map_err(|e| LauncherError::JniCreate(e.to_string()))?;
+    log::debug("jni: VM created; attaching the calling thread");
 
     // 7. Attach, resolve Main-Class, build the String[] args, and invoke
     //    Java's entry point synchronously.
@@ -409,6 +437,11 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
             let main_sig = RuntimeMethodSignature::from_str("([Ljava/lang/String;)V")
                 .map_err(|e| LauncherError::JniInvoke(format!("parse main signature: {e}")))?;
 
+            log::debug(&format!(
+                "jni: found class {main_class_jni}; built String[{}]",
+                argv_for_main.len()
+            ));
+            log::debug("jni: resolving static main([Ljava/lang/String;)V");
             let main_method_result = env.get_static_method_id(
                 &class,
                 JNIString::new("main"),
@@ -416,13 +449,24 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
             );
 
             let result = match main_method_result {
-                Ok(_) => env.call_static_method(
+                Ok(_) => {
+                    // The single most useful line in the file. Everything
+                    // above is snug; everything the app does from here on
+                    // is the JVM. If the log stops *after* this and
+                    // nothing returns, the app is blocked inside its own
+                    // `main` (or in a toolkit it initialised) and no
+                    // amount of snug-side logging will say more — that
+                    // wants a JVM thread dump instead.
+                    log::debug("jni: >>> calling main(String[]) — blocks until the app returns <<<");
+                    env.call_static_method(
                     &class,
                     JNIString::new("main"),
                     main_sig.method_signature(),
-                    &[args_value],
-                ),
+                        &[args_value],
+                    )
+                }
                 Err(jni::errors::Error::MethodNotFound { .. }) => {
+                    log::debug("jni: no main method; falling back to javafx Application.launch");
                     // JavaFX fallback: invoke Application.launch(userClass,
                     // args) iff the user's class extends
                     // javafx.application.Application.
@@ -463,7 +507,13 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
             };
 
             match result {
-                Ok(_) => Ok(0),
+                Ok(_) => {
+                    // The other half of the `>>> calling main <<<` bracket:
+                    // seeing this line means the app ran to completion, so
+                    // a hang before it is inside the app, not in snug.
+                    log::debug("jni: <<< main returned cleanly");
+                    Ok(0)
+                }
                 Err(jni::errors::Error::MethodNotFound { .. }) => {
                     Err(LauncherError::NoMainMethod(main_class_name_for_err.clone()))
                 }
@@ -489,7 +539,9 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
 
     // 8. Best-effort teardown. DestroyJavaVM waits for non-daemon threads;
     //    on a clean main() return there shouldn't be any.
+    log::debug("jvm: destroying the VM (waits for non-daemon threads)");
     let _ = unsafe { vm.destroy() };
+    log::debug("jvm: destroyed");
 
     Ok(exit_code as u32)
 }
@@ -549,6 +601,13 @@ fn ensure_cached(dest: &Path, bytes: &[u8]) -> Result<(), LauncherError> {
 /// not read the JVM's version — falls back to the lowest spec
 /// everything understands, which can only ever succeed.
 fn jni_version_for(major: Option<u16>) -> (&'static str, JNIVersion) {
+    // Cap at the highest version the JNI spec actually publishes for
+    // `JNI_CreateJavaVM`. Tried building `(major << 16)` for majors above
+    // 21 so a Java 25 VM would be offered its own level, the way the `java`
+    // executable does — and it fails outright with "JNI_CreateJavaVM
+    // failed: JNI call failed". `JNI_VERSION_21` is the ceiling; there is
+    // no 22/23/24/25 constant, so a larger number is simply not a version
+    // the VM recognises.
     match major {
         Some(m) if m >= 21 => ("21", JNIVersion::V21),
         Some(m) if m >= 20 => ("20", JNIVersion::V20),
@@ -1134,7 +1193,14 @@ mod tests {
         assert_eq!(jni_version_for(Some(17)).1, JNIVersion::V10);
         assert_eq!(jni_version_for(Some(19)).1, JNIVersion::V19);
         assert_eq!(jni_version_for(Some(21)).1, JNIVersion::V21);
+        // Capped at 21 even for a Java 25 VM. A newer major is not a
+        // version `JNI_CreateJavaVM` accepts: building `(25 << 16)` by hand
+        // fails with "JNI_CreateJavaVM failed: JNI call failed". So the
+        // invariant is two-sided - never offer less than the VM's floor,
+        // and never offer a level the spec does not publish.
         assert_eq!(jni_version_for(Some(25)).1, JNIVersion::V21);
+        assert_eq!(jni_version_for(Some(25)).1.major(), 21);
+        assert_eq!(jni_version_for(Some(17)).1.major(), 10);
         // The label is what goes in the log, so it must be the readable
         // spec name rather than the raw `ver` field.
         assert_eq!(jni_version_for(Some(25)).0, "21");

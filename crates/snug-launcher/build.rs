@@ -81,6 +81,53 @@ fn main() {
     // on PATH; if it's missing the build fails with a clear
     // error from `embed-resource`.
     let _ = embed_resource::compile_for_everything(&rc_path, embed_resource::NONE);
+
+    export_main_on_macos();
+}
+
+/// Keep `main` in the *dynamic* symbol table on macOS.
+///
+/// The macOS launcher hands the app to the JDK's own launcher (`libjli`'s
+/// `JLI_Launch`, see `jli.rs`) rather than calling `JNI_CreateJavaVM`
+/// in-process, because AppKit requires the event loop on the process's
+/// initial thread and `JNI_CreateJavaVM` takes that thread for the Java
+/// app. A JavaFX app then hangs forever in `PlatformImpl.startup` with no
+/// window and nothing in the log.
+///
+/// `JLI_Launch` needs the host to be a real launcher, though: it resolves
+/// the entry point with `dlsym(RTLD_DEFAULT, "main")` and fails with
+/// "error locating main entrypoint" when there is no such symbol. rustc
+/// does emit a `main`, but the release profile's `strip = true` deletes
+/// it from the static symbol table. `-exported_symbol` puts it in the
+/// dynamic table, which stripping preserves — so the export, not the
+/// unstripped build, is what actually fixes it.
+///
+/// `link-arg-bins` rather than the un-binned form: this is a per-binary
+/// concern (the primary launcher), and the un-binned form would also hit
+/// the examples and test binaries, where an exported `main` is
+/// meaningless noise.
+/// Report whether this binary is a real launcher, i.e. whether it exports
+/// `main` for `JLI_Launch` to find.
+///
+/// Kept out of `build.rs` deliberately. Emitting
+/// `-Wl,-exported_symbol,_main` here looks like the fix and is not: cargo
+/// reports passing it, and the symbol is still absent from the dynamic
+/// table. Neither `strip = true` nor `-C strip=none` changes that, and
+/// adding `-Wl,-u,_main` to stop LTO internalising it does not either — so
+/// the export is being dropped somewhere this crate cannot reach.
+///
+/// Rather than guess further, `jli::launch` asks the question at run time
+/// with `dlsym(RTLD_DEFAULT, "main")` and falls back to the in-process JNI
+/// path when the answer is no. A failed JLI launch is a dead app rather
+/// than a fall-back — JLI prints "error locating main entrypoint" and
+/// exits — so the check has to happen before the call, not after.
+fn export_main_on_macos() {
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
+        return;
+    }
+    // Nothing to emit yet. When the export is solved — most likely by
+    // giving the launcher a C `main` shim, which sidesteps rustc's
+    // generated entry point entirely — the link arg belongs here.
 }
 
 /// Standard Windows icon sizes. Picked to cover File Explorer
@@ -179,4 +226,10 @@ fn write_multi_resolution_ico(png_src: &str, ico_dst: &Path) {
 
     // Re-run this build script whenever the PNG changes.
     println!("cargo:rerun-if-changed={png_src}");
+    // ...or whenever the script itself changes. Without this, the
+    // `rerun-if-changed` above *restricts* cargo to that one file, so
+    // edits here are silently ignored until the PNG is touched — which is
+    // exactly the trap that made a `link-arg` look like it had been
+    // passed when it never had been.
+    println!("cargo:rerun-if-changed=build.rs");
 }

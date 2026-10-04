@@ -330,25 +330,53 @@ commit — useful history, not a live list.
   is a Windows build product.
 
 **macOS**
-- **The macOS dialogs are AppKit `NSAlert`s, and that is the point.**
+- **The macOS dialogs are real `NSWindow`s — deliberately not `NSAlert`s.**
   `appkit.rs` is the macOS half of the `jdk_install::ui` seam. The
-  metadata-failed, retry, terminal-failure **and the download progress
-  window** are done; only the **launcher error window** (`error_window`,
-  called from `main.rs`) is not. Reuse the same `dialogs()` strings —
-  nothing in the seam formats a string of its own, so a
-  `--localization <tag>` bundle translates the macOS dialogs exactly as
+  metadata-failed, retry, terminal-failure, **install-consent** and
+  download-progress windows are done; only the **launcher error window**
+  (`error_window`, called from `main.rs`) is not. Reuse the same
+  `dialogs()` strings — nothing in the seam formats a string of its own, so
+  a `--localization <tag>` bundle translates the macOS dialogs exactly as
   it translates the Windows ones.
-  - The progress window is an `NSAlert` with an **accessory view** (an
-    `NSProgressIndicator` in a vertical `NSStackView`), not a hand-built
-    `NSWindow`. An alert gets a real window, correct focus and a working
-    close box for free, and needs no `NSWindowDelegate` and no
-    target/action — neither of which is pleasant from Rust. It is not
-    resizable and has no mascot panel, and neither is worth the plumbing.
-    The run loop is pumped by hand with `NSRunLoop::runUntilDate`
-    because `runModal` offers no seam to sample progress between event
-    turns, and `objc2-app-kit` 0.3.2 binds no `NSTimer`. Cancel is
-    "the window is no longer visible", which needs no delegate.
-  - Its Cancel button is labelled `prompt.button_cancel`, **not**
+  - This reversed an earlier decision, and the reason is worth keeping.
+    The progress window was an `NSAlert` because an alert gets a real
+    window, correct focus and a working close box for free and needs no
+    delegate. But `NSAlert` is a **modal**: it runs its own nested event
+    loop, and the download gated the worker thread on a human clicking
+    "Install". So a click in a modal alert was the only thing that could
+    start a download, with no timeout — and a `.app` `execve`'d from a
+    terminal has no GUI session for one. It degraded to logging, and
+    degrading to logging still left the worker spinning. That is the
+    deadlock recorded below; a plain window is what makes the two
+    properties structural instead of accidental.
+  - A plain `NSWindow` gets you no button responses for free, which is the
+    cost: `NSControl::setTarget:`/`setAction:` are `unsafe fn`, so wiring a
+    button to a selector means declaring an Objective-C class with
+    `define_class!`. Hence two tiny stateless responders in the file —
+    `ModalResponder` (button `tag` → `stopModalWithCode`, and
+    `windowShouldClose` → a `DISMISSED` sentinel) and `ProgressResponder`
+    (latches a cancel flag). **This is the one sanctioned departure from
+    "no `unsafe` in any crate"**, and it is why `snug-launcher` carries
+    `#![deny(unsafe_op_in_unsafe_fn)]` rather than `forbid(unsafe_code)`.
+    A defined class has no safe `&AnyObject` conversion in objc2 0.6 (no
+    blanket `AsRef<AnyObject>`), so the target is set through
+    `Retained::as_ptr`.
+  - `NSModalResponse` is an `isize` alias, not a newtype, and AppKit
+    numbers buttons from 1000 — but with a hand-built window the button's
+    `tag` *is* the response, so there is no 1000-offset to remember.
+    `DISMISSED` is `-1` and every real index is `>= 0`, so a close box can
+    never be mistaken for "button 0" — which for `retry` means "download it
+    again".
+  - Layout is explicit frames, not Auto Layout. A handful of constants is
+    easier to reason about than a constraint graph for fixed-size windows.
+    Buttons are placed by hand right-to-left because a horizontal
+    `NSStackView`'s alignment constants describe *gravity*, not
+    distribution, so asking it to right-align is a fight with the wrong
+    tool.
+  - The progress run loop is still pumped by hand with
+    `NSRunLoop::runUntilDate`: it is not a modal session, so progress can be
+    sampled between event turns, and `objc2-app-kit` 0.3.2 binds no
+    `NSTimer`. Its Cancel button is labelled `prompt.button_cancel`, **not**
     `progress.cancel_button_during_download` (which reads "Install",
     because on Windows that label belongs to the *prompt* window where
     pressing it means "go ahead" — here the download is already running,
@@ -405,10 +433,14 @@ commit — useful history, not a live list.
   everywhere.
 
 **Tests**
-- Two `tempdir()` helpers still key uniqueness on `pid` + `as_nanos()`
+- One `tempdir()` helper still keys uniqueness on `pid` + `as_nanos()`
   and will eventually flake the same way the others did:
-  `jdk_install.rs` and `snug_preview/windows_impl.rs`. Both are
-  Windows-gated, so they cannot affect a macOS run.
+  `snug_preview/windows_impl.rs`. That one *is* still Windows-gated, so it
+  cannot affect a macOS run. `jdk_install.rs` looked like a second case
+  for the same reason, but that stopped being true when the Adoptium flow
+  became cross-platform (slice 13) — it now compiles and runs on macOS,
+  and its flake did land. Assume a module is live on macOS unless you
+  have checked its `cfg`, not because a stale note says so.
 
 ## Versioning
 
@@ -482,9 +514,158 @@ by accident.
   rather than a collision. Observed twice before this was understood — as
   `resolve_uses_cwd_when_exe_dir_has_no_default` and
   `build_flags_a_first_jar_with_no_main_class`. Every test `tempdir()`
-  helper therefore folds in a `static COUNTER: AtomicU64`. Remaining
-  sites: `jdk_install.rs` and `snug_preview/windows_impl.rs` (both
-  Windows-gated, so they cannot affect a macOS run).
+  helper therefore folds in a `static COUNTER: AtomicU64`. Only
+  `snug_preview/windows_impl.rs` is left, and it is still Windows-gated.
+  Note the flake this fixes is not only a name collision: these helpers
+  write to `std::env::temp_dir()`, which is `/var/folders/…/T/` on macOS
+  and is **not always writable** in a sandbox. So the same line can fail
+  as a bare `Operation not permitted` from a `.unwrap()`. When a snug
+  test panics on a temp path, suspect the environment before the logic.
+- **Do not touch `NSApplication` before the JVM starts. This was tried,
+  it looked plausible, and it broke JavaFX.** A launcher that wants a dock
+  icon and proper activation seems like it should call
+  `setActivationPolicy(Regular)` + `finishLaunching()` early in `run()`.
+  Do not. `finishLaunching()` **consumes the
+  `applicationDidFinishLaunching` notification**, which is exactly the
+  event JavaFX's `MacApplication` is waiting for to finish toolkit
+  startup. Calling it first means JavaFX starts its AppKit run loop,
+  never receives the notification, and waits forever. The symptom is
+  silent and bizarre — no exception, nothing in the log after the JNI
+  handoff, just a dock icon bouncing with no window.
+  - The thread dump that identifies it: the `JavaFX-Launcher` thread is
+    *still inside* `PlatformImpl.startup` → `QuantumToolkit.startup` →
+    `MacApplication._runLoop` in native code, and there is **no "JavaFX
+    Application Thread"** in the dump at all. A healthy JavaFX app always
+    has one; its absence is the tell, long before any timeout.
+  - `QuantumRenderer-*` parked on `LinkedBlockingQueue.take()` is the
+    same story from the other end: the renderer is idle waiting for a
+    window that was never created. "No suitable pipeline found" and
+    "nothing happens" are the *same* failure at different stages.
+  - What settled it, and the check to run first next time: the same JAR
+    outside snug. `java -cp <jar> <MainClass>` opened a working window,
+    which cleared the JDK, the natives, the JavaFX build and the demo's
+    own code in one step, and left snug's hosting as the only variable.
+    Reach for that before instrumenting the launcher.
+  - A JavaFX `main` that never returns is **correct** — `Application.launch`
+    blocks for the life of the app by design, and `main` sitting on a
+    `CountDownLatch` inside `LauncherImpl.launchApplication` is the
+    healthy case. "snug never returned from `call_static_method`" is not
+    a diagnosis; the question is always what the JVM did next.
+- **`JNI_CreateJavaVM` cannot host a GUI app on macOS. At all.** This is
+  the root cause of a very long hunt, and it is not a snug bug so much as
+  a platform constraint: `JNI_CreateJavaVM` makes the *calling* thread —
+  the process's initial thread — the Java main thread, and AppKit
+  requires that same thread to run the event loop. One thread, two jobs.
+  JavaFX parks its `main` on a `CountDownLatch`, so the initial thread is
+  never free, so `applicationDidFinishLaunching:` never fires, so
+  `MacApplication.runLoop` never returns, so `PlatformImpl.startup` never
+  completes and the `JavaFX Application Thread` is never created. The
+  symptom is a dock icon bouncing with no window, **no exception, and
+  nothing in the log after the JNI handoff.** AWT hangs identically on
+  `JFrame`, so it is not a JavaFX problem.
+  - The proof is the [OpenJFX dev list](https://mail.openjdk.org/pipermail/openjfx-dev/2022-January/033289.html):
+    *"on Mac OS you can't use `JNI_CreateJavaVM()` to launch the JVM if
+    you hope to use any GUI stuff... there's no getting around it. So it
+    blocks and never returns."*
+  - The fix is `JLI_Launch` from `$JAVA_HOME/lib/libjli.dylib` — the entry
+    point the `java` binary and jpackage's launchers use, which reserves
+    the initial thread for the UI and runs the app on a VM-created thread.
+    Verified working: a ~60-line C host that does nothing but call it gets
+    a JavaFX window up on this machine.
+  - `jli.rs` is implemented and wired into `platform/macos.rs::run()`,
+    but it **cannot activate yet**: `JLI_Launch` needs the host to export
+    `main` (`dlsym(RTLD_DEFAULT, "main")`, else "error locating main
+    entrypoint"), and a stripped Rust binary does not. Three link
+    approaches were measured and all failed — `-Wl,-exported_symbol,_main`
+    (cargo passes it, symbol still absent), `-C strip=none` (so it is not
+    the strip step), and `-Wl,-u,_main` (so it is not LTO internalisation).
+    A C shim is the obvious answer but is not a drop-in: **rustc already
+    emits a `main` symbol**, so a C `main` collides and needs either
+    `#![no_main]` (unstable `#[lang = "start"]`) or
+    `-allow_multiple_definition`. Until that is solved, `jli::launch`
+    checks `dlsym` for `main` itself and returns `None`, so the launcher
+    behaves exactly as it did before — **no regression, no fix.**
+  - **A failed JLI launch is a dead app, not a fall-back**, so that `dlsym`
+    guard has to happen *before* the call. Getting this wrong turns a
+    cosmetic limitation into "every app fails to start".
+  - Do not go looking for a GPU problem when the symptom is
+    `QuantumRenderer: no suitable pipeline found`. On this machine ES2
+    genuinely fails (`MacGLFactory could not be initialized`) and the
+    working `java -cp` path falls back to the **software** renderer
+    perfectly well. It is also what a GUI app in-process JNI looks like
+    *before* it hangs, so it cannot diagnose itself.
+- **`java -cp <jar> <MainClass>` is the test that ends the guessing.** One
+  run of the app outside snug, on the same machine and same JDK, cleared
+  the JDK, the JavaFX build, the natives and the app's own code in a
+  single step and left snug's hosting as the only variable. It should
+  have been the *second* thing tried, not the tenth. Instrumenting the
+  launcher four times first produced four plausible theories and one
+  regression, none of them the cause.
+- **`SNUG_DEBUG=1` turns on the fine-grained trace, and the lines worth
+  having are the two that bracket the JNI call.** "Bouncing in the dock" —
+  process alive, registered as a GUI app, no window — is the macOS
+  signature of *blocked*, and the launcher's ordinary log cannot say where,
+  because the last line before the block was `loading libjvm.dylib` and
+  everything after it happens inside the JVM. So `log::debug` emits
+  `jni: >>> calling main(String[]) …` immediately before
+  `call_static_method` and `jni: <<< main returned cleanly` after.
+  Nothing after the opening marker means the app itself is stuck, and no
+  further snug-side logging will help — that wants a JVM thread dump
+  (`jstack <pid>`, or `jcmd <pid> Thread.print`) taken while it hangs.
+  Every debug line also carries `+NNNms` from log init, because the
+  existing `[unix_secs]` prefix orders events but cannot distinguish a
+  900 ms stall from a 0 ms one, and whole-second resolution hides exactly
+  the pauses you are looking for.
+  - The switch is deliberately forgiving — `1`, `true`, `on`, anything
+    non-empty except `0`/`false`/`off` — because a debug switch that needs
+    exact spelling is one nobody sets while chasing a hang.
+  - The log is per-launch and truncated, so each run is a self-contained
+    record; `SNUG_CACHE_DIR` still needs to point somewhere writable for
+    the file to exist at all.
+- **A JavaFX fat JAR must carry the platform's natives, and they belong at
+  the JAR root.** `NativeLibLoader` looks each library up as a classpath
+  *resource by leaf name* — `libglass.dylib`, `glass.dll`, `libglass.so` —
+  so that is where the Maven `-mac` / `-win` / `-linux` classifier
+  artifacts already put them, and where a flattened fat JAR has to leave
+  them. (I "fixed" this into `com/sun/{glass,prism}/natives/<os>/` on the
+  reasoning that the modular layout must be reproduced on the classpath.
+  That was wrong, and the `-Dprism.verbose=true` trace showed it: nested,
+  JavaFX emitted no "Loading library from resource" line at all. Trust the
+  loader's own log over a plausible-looking theory.)
+  - The three platforms cannot collide at the root — the names differ by
+    extension — so one JAR *can* carry all of them, and doing so is fine.
+    What snug's demo does instead is per-platform: `assets/snug-javafx-demo.jar`
+    carries the Windows natives (used by `scripts\build-release.cmd`) and
+    `assets/snug-javafx-demo-mac.jar` the macOS ones (used by
+    `scripts/build-macos-demo.sh`).
+  - Because the names are platform-specific, a JAR missing its own
+    platform's natives fails *only* at startup, with
+    `Graphics Device initialization failed for : es2, sw` /
+    `Error initializing QuantumRenderer: no suitable pipeline found`. That
+    reads like a GPU or driver fault, so it sends you looking at graphics
+    settings while the actual defect is in the packaging. Neither the
+    bundle validator, `codesign`, nor the payload check can see it, which
+    is why `build-macos-demo.sh` greps the JAR for the three required
+    `.dylib`s and aborts before packaging.
+  - **Classes and natives must come from the same OpenJFX build.** Read
+    the build out of the JAR — `javafx.properties` gives
+    `javafx.runtime.version`, `VersionInfo.class` carries the date — and
+    pick the classifier jar to match. They do not line up by version
+    number: `25:mac` is 2025-09-15, `25.0.1:mac` is 2025-10-21,
+    `25.0.2:mac` is 2026-01-20.
+  - Two more diagnostics that mislead:
+    `java -jar demo.jar` can print *"Error: JavaFX runtime components are
+    missing"* — a string that is **not in the JAR at all** — while the same
+    JAR launched by explicit main class gets as far as the pipeline. And
+    with `-Dprism.verbose=true` JavaFX reports a sandbox-style
+    `Error copying library ... to cache ~/.openjfx/cache/... (Operation not
+    permitted)` when the *only* problem is that it could not write its
+    extraction cache. Neither is a JavaFX bug.
+  - `--enable-native-access` must be `ALL-UNNAMED` for a classpath JAR.
+    Naming a module (`javafx.graphics`) is a no-op the JVM reports as
+    "Unknown module" — snug puts the JAR on the classpath, so there is no
+    such module. JavaFX 25 calls the restricted `System.load`, and a future
+    JDK will block it outright.
 - **A `.app` is a *directory*, and its permissions are load-bearing.**
   `macos_bundle.rs` writes `Contents/{Info.plist, MacOS/<App>, Resources/}`
   and signs the result. Directories are `0755` because a directory needs
@@ -1054,6 +1235,117 @@ by accident.
 - Profile `release` is tuned for tiny binaries (`opt-level = "z"`, LTO,
   `panic = "abort"`, stripped). The launcher should be ~hundreds of KB
   not megabytes.
+- **`build-macos.sh` used to never build the launcher at all.** It ran
+  only `cargo build -p snug-cli`, which embeds `bin/launcher-stub-macos-
+  <arch>` via `include_bytes!`. So it shipped the *committed* launcher, and
+  **every change to `snug-launcher` was silently absent from the artefact**
+  while the build stayed green and the bundle still validated. The
+  symptom here was an hour of "why did my `SNUG_CACHE_DIR` do nothing?"
+  against a launcher built at 17:05 from a source file edited at 21:58.
+  The script now builds `-p snug-launcher` and copies it into `bin/`
+  *before* `-p snug-cli`, in that order, and echoes which stub it
+  refreshed. Never reorder those two: the CLI has to compile *after* the
+  bytes it embeds exist. Check the string you just added actually appears
+  in the stub (`strings bin/launcher-stub-macos-x86_64 | grep <NAME>`) —
+  the failure mode is silence, not an error.
+- **`/usr/libexec/java_home` can be non-functional in a sandbox.** It
+  prints "Unable to locate a Java Runtime" and exits non-zero while a
+  perfectly good JDK sits in `~/Library/Java/JavaVirtualMachines` and
+  runs fine. Two consequences, both learned the hard way:
+  `discover_jvm` falls back to scanning those directories, so the
+  *launcher* is unaffected — but any **pre-flight** that trusts the tool
+  alone reports a confident "no JDK found, the demo will not launch" for
+  a machine that launches perfectly well. A check that contradicts the
+  real code path is worse than no check. `build-macos-demo.sh` now walks
+  both sources and reads each home's `release` file, exactly like
+  `read_java_major` does.
+- **`set -euo pipefail` turns a non-zero tool into a dead build script.**
+  `java_home -V | sed …` looks harmless, but `pipefail` propagates
+  `java_home`'s exit status to the pipeline, `set -e` then aborts the
+  whole script at the pre-flight — the one place a missing tool must be
+  survivable, since the fallback below it is the answer to it. A failing
+  probe in a diagnostic needs `|| true`.
+- **The cache root is not always writable, so it has an escape hatch.**
+  `SNUG_CACHE_DIR` redirects the cache *base* (not the root — `snug/
+  <company>/<app>/` is still appended, so two apps cannot collide) and
+  only honours an absolute path, matching how `XDG_CACHE_HOME` is already
+  treated. Without it, a locked-down home or CI runner fails at the very
+  first step — extracting the JAR — with `Operation not permitted`, which
+  is unrecoverable from the user's side. The decision function takes the
+  raw `OsString` rather than reading the environment itself, so the tests
+  are hermetic: `set_var` is process-global and a test that used it would
+  race every other test in the binary and fail somewhere unrelated.
+  Note the Adoptium install root (`jdk_install_root`) is a *different*
+  base and has no equivalent override yet.
+- **A GUI-subsystem `.app` gives you no console**, so a failed launch is a
+  silent no-window. Every runtime fact has to come from the log file in
+  the cache — which means redirect the cache first or there is nowhere to
+  read from, and the launcher's very first act is to fail. On a machine
+  with no GPU/display the run still gets a long way: cache extraction,
+  discovery, `libjvm.dylib`, JNI, and the Java main class all succeed,
+  and the *only* failure is `QuantumRenderer: no suitable pipeline
+  found` from JavaFX. That is the sandbox, not snug — read it as
+  "everything up to the toolkit worked".
+- **The JDK download flow used to deadlock on macOS. Fixed, and the fix is
+  structural.** `worker_thread` opened with
+  `while !shared.started.load(Ordering::SeqCst) { … sleep(50ms) }` and
+  would not open a single connection until a human clicked Install in the
+  progress `NSAlert`; the main thread was meanwhile blocked inside
+  `ui::progress`, which was the thing meant to provide that click. So the
+  *only* way the download started was a click in a modal window. Exec the
+  bundle from a terminal rather than launching it through Launch Services
+  and the `NSAlert` has no GUI session to appear in — it degrades to
+  logging, and degrading to logging still leaves the worker spinning on a
+  click that can never arrive.
+  - The evidence that distinguishes this from "a slow download" is on
+    disk, and it is decisive: `install_root/<major>/` **is** created
+    (`create_dir_all` runs before the worker spawns) while
+    `install_root/<major>.tar.gz.tmp` is **not** — `download_to_disk`
+    does `ureq.call()` and only then `File::create`. No temp file means
+    the worker never left the spin, which means no connection was ever
+    opened, which means the 30 s connect/read timeouts never got a
+    chance to fire. Minutes of silence plus zero bytes is a hang, never
+    bandwidth.
+  - **The fix is `ui::consent` running before the worker is spawned.**
+    The ask is now a step in its own right, taken while the only thing in
+    flight is a human decision, and the spin loop is gone. Windows gets
+    the same treatment for free: `prompt_window::show` already existed,
+    fully written and reviewed, and was **never called by anything** — the
+    `started` gate had quietly replaced it. So wiring `ui::consent` to it
+    revives dead code and removes the gate on both platforms at once.
+    Check for that class of thing before writing a new one: the
+    localisation baseline had seven `jdk_install.prompt.*` keys, also
+    entirely unused.
+  - Generalisable: **never gate a worker thread on the UI.** A UI that
+    fails to appear is not an error path, it is a hang, and it is
+    invisible from the network side because no connection is ever opened.
+    If a question must be asked, ask it before the thread exists.
+  - `DownloadJdkMode::Force` makes this reachable from a *config file*,
+    not just a flag — `snug.options` shipped with `--download-jdk=force`,
+    so the demo downloaded a second 115 MB copy of JDK 25 on a machine
+    that already had one. It is now `auto`.
+- **Two `.app` bundles with the same name and company get the same
+  `CFBundleIdentifier`, and Launch Services keys on that identifier.**
+  So every scratch bundle built to test something can silently hijack
+  the real one: `open` resolves the identifier to whichever record it
+  likes and returns **`_LSOpenURLsWithCompletionHandler() failed with
+  error -1712`**. This is not a property of the bundle — it validates,
+  lints and verifies. Diagnose it with
+  `lsregister -dump | grep -B4 <identifier>` and look at the *paths*,
+  not the identifier.
+  - Anything left in `~/.Trash` counts, because macOS indexes the
+    Trash. So if the environment wraps `rm -rf` in a recoverable delete,
+    every rebuild trashes the old bundle and the Trash copy competes
+    under the same identifier — and it defeats the `lsregister -u`
+    guard in `build-macos-demo.sh`, which unregisters the path *before*
+    the delete and so has already been undone by the time it runs.
+  - `lsregister -u` is a no-op where `lsregister` cannot scan: it
+    reports `-10822` and bails *before* unregistering, so it silently
+    fixes nothing. Check the `-dump` output afterwards instead of
+    trusting the exit status.
+  - The scratch bundles are the real hazard, so build them with a
+    distinct `--name` (hence a distinct identifier), or delete them
+    when done.
 
 ## Testing
 

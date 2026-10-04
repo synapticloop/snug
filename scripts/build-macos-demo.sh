@@ -28,7 +28,6 @@
 set -euo pipefail
 
 readonly DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-12.0}"
-readonly DEMO_JAR="assets/snug-javafx-demo.jar"
 readonly DEMO_APP="assets/snug-javafx-demo.app"
 readonly OPTIONS_FILE="snug.options"
 
@@ -57,7 +56,7 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
     exit 1
 fi
 
-for tool in cargo plutil codesign lipo otool; do
+for tool in cargo plutil codesign lipo otool unzip; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         echo "build-macos-demo: '$tool' not found on PATH." >&2
         exit 1
@@ -94,14 +93,74 @@ fi
 # -------------------------------------------------------------- demo
 
 echo "==> demo input"
-if [[ ! -f "$DEMO_JAR" ]]; then
+
+# Per-platform demo JAR, falling back to the shared one.
+#
+# snug's payload carries one JAR, and JavaFX has to ship its *native*
+# libraries, which are platform-specific binaries with platform-specific
+# names (`libglass.dylib` / `glass.dll` / `libglass.so`). So one JAR cannot
+# serve every platform: the Windows build keeps `snug-javafx-demo.jar` (see
+# scripts\build-release.cmd) and this one takes `snug-javafx-demo-mac.jar`.
+# The names differ by extension, so a JAR that does carry all three is not
+# broken - it is just not what the macOS demo is built from.
+DEMO_JAR_MAC="assets/snug-javafx-demo-mac.jar"
+DEMO_JAR_SHARED="assets/snug-javafx-demo.jar"
+if [[ -f "$DEMO_JAR_MAC" ]]; then
+    DEMO_JAR="$DEMO_JAR_MAC"
+elif [[ -f "$DEMO_JAR_SHARED" ]]; then
+    DEMO_JAR="$DEMO_JAR_SHARED"
+    echo "    note: $DEMO_JAR_MAC not found; falling back to $DEMO_JAR_SHARED."
+    echo "          That one carries the Windows natives, so the demo will not"
+    echo "          open a window on macOS."
+else
     cat >&2 <<EOF
-build-macos-demo: demo JAR not found at $DEMO_JAR.
-                  Build it first, or skip the demo with --skip-cli.
+build-macos-demo: no demo JAR found. Looked for:
+                  $DEMO_JAR_MAC  (carries the macOS natives)
+                  $DEMO_JAR_SHARED
+                  Build one first, or skip the demo with --skip-cli.
 EOF
     exit 1
 fi
 echo "    jar: $DEMO_JAR"
+
+# Fail *here* rather than at the user's desk. Missing natives are invisible
+# to every other check in this script: the bundle is produced, it validates,
+# it lints, it signs, and the payload is present. The demo just refuses to
+# open a window later, on someone else's machine, with
+# `Error initializing QuantumRenderer: no suitable pipeline found` - which
+# reads like a GPU fault and sends people looking at drivers instead of at
+# the packaging. This is the last place the mistake is still visible.
+#
+# `NativeLibLoader` looks each library up as a classpath *resource by leaf
+# name*, so what matters is that a macOS build of each library is in the
+# JAR, not which directory it sits in. Match on the `.dylib` suffix.
+jar_names="$(unzip -Z1 "$DEMO_JAR" 2>/dev/null || true)"
+mac_natives="$(printf '%s\n' "$jar_names" | grep -cE '(^|/)lib[^/]*\.dylib$' || true)"
+missing=""
+for required in libglass libprism_es2 libprism_sw; do
+    if ! printf '%s\n' "$jar_names" | grep -qE "(^|/)${required}\\.dylib$"; then
+        missing="$missing $required.dylib"
+    fi
+done
+if [[ -n "$missing" ]]; then
+    cat >&2 <<EOF
+build-macos-demo: $DEMO_JAR is missing required macOS JavaFX natives:
+$missing
+                  (it has $mac_natives .dylib file(s) in total)
+
+                  JavaFX will fail at startup with "Error initializing
+                  QuantumRenderer: no suitable pipeline found" - which looks
+                  like a GPU fault but is a packaging one.
+
+                  Get them from org.openjfx:javafx-graphics:<ver>:mac, the
+                  same build as the JAR's classes (read it out of
+                  javafx.properties / VersionInfo), and put the .dylib files
+                  in the JAR. build-release.cmd needs the -win artifact's
+                  .dll files instead.
+EOF
+    exit 1
+fi
+echo "    JavaFX natives for macOS: $mac_natives"
 
 # Pass --options explicitly rather than relying on the CWD copy being
 # picked up implicitly. Same file, but now the dependency is visible in
@@ -237,20 +296,75 @@ echo "          likewise discovery-only for now — a compatible JDK must"
 echo "          already be installed."
 echo
 
+# Print one Java version per line for every JDK visible on this machine.
+#
+# This deliberately mirrors the *launcher's* discovery order
+# (`platform/macos.rs` `discover_jvm`) instead of trusting one tool:
+# `/usr/libexec/java_home -v <min>` first, then a walk of the well-known
+# `JavaVirtualMachines` directories and the Homebrew `opt` symlinks.
+#
+# The directory walk is not belt-and-braces. `java_home` is unavailable
+# inside sandboxes and some locked-down environments, where it prints
+# "Unable to locate a Java Runtime" and exits non-zero *even with a working
+# JDK installed and on PATH*. A pre-flight that trusted it alone therefore
+# reported a confident "no JDK found - the demo will not launch" for a
+# machine that launches perfectly well, which is worse than silence: it
+# sends you chasing a Java problem that does not exist. Falling back to the
+# same directories the launcher falls back to is what keeps this check and
+# the real launch path from disagreeing.
+#
+# Versions come from each home's `release` file (`JAVA_VERSION="25.0.4.1"`),
+# which is also where the launcher reads them from - no process is executed
+# and nothing depends on a `java` being on PATH.
+jdk_versions_visible() {
+    local root entry home release
+
+    if [[ -x /usr/libexec/java_home ]]; then
+        # `|| true` is load-bearing under this script's `set -euo pipefail`.
+        # `java_home -V` exits non-zero when it finds nothing, and with
+        # `pipefail` that status becomes the pipeline's, so `set -e` would
+        # abort the whole build script at the pre-flight - the one place a
+        # missing tool must be survivable, since the directory walk below
+        # is exactly the answer to it.
+        /usr/libexec/java_home -V 2>/dev/null |
+            sed -n 's/^ *\([0-9][0-9.]*\).*/\1/p' || true
+    fi
+
+    for root in \
+        "/Library/Java/JavaVirtualMachines" \
+        "${HOME:-}/Library/Java/JavaVirtualMachines"
+    do
+        [[ -d "$root" ]] || continue
+        for entry in "$root"/*/; do
+            release="${entry}Contents/Home/release"
+            [[ -f "$release" ]] || continue
+            sed -n 's/^JAVA_VERSION="\(.*\)"$/\1/p' "$release"
+        done
+    done
+
+    # Homebrew's openjdk lives behind an `opt` symlink rather than in a
+    # JavaVirtualMachines directory. Both prefixes are probed because this
+    # is an Apple Silicon *or* Intel build.
+    for home in \
+        "/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home" \
+        "/usr/local/opt/openjdk/libexec/openjdk.jdk/Contents/Home"
+    do
+        [[ -f "$home/release" ]] || continue
+        sed -n 's/^JAVA_VERSION="\(.*\)"$/\1/p' "$home/release"
+    done
+}
+
 # Pre-flight the *runtime*, not the build. The bundle above is a valid
 # artefact either way, but it will refuse to launch on a machine with no
 # suitable JDK, and the refusal is worth saying now rather than leaving
 # someone to discover it from a window that never appears.
 #
 # The demo classes ship as class file version 69.0 (Java 25) and snug
-# refuses anything below the `--min-java` in snug.options. That produced a
-# perfectly correct but very confusing failure on a machine whose newest
-# JDK was 23, so check it explicitly.
+# refuses anything below the `--min-java` in snug.options.
 min_java="$(grep -oE '^[[:space:]]*--min-java[[:space:]]+[0-9]+' "$OPTIONS_FILE" 2>/dev/null |
     grep -oE '[0-9]+' | head -1)"
 if [[ -n "$min_java" ]]; then
-    newest_home="$(/usr/libexec/java_home -V 2>&1 |
-        sed -n 's/^ *\([0-9][0-9.]*\).*/\1/p' | sort -V | tail -1)"
+    newest_home="$(jdk_versions_visible | sort -V | tail -1)"
     if [[ -n "$newest_home" ]]; then
         newest_major="${newest_home%%.*}"
         if (( newest_major < min_java )); then
@@ -264,8 +378,9 @@ if [[ -n "$min_java" ]]; then
             echo
         fi
     else
-        echo "    WARNING: no JDK found via /usr/libexec/java_home; the demo will"
-        echo "             not launch until one is installed."
+        echo "    WARNING: no JDK found (checked /usr/libexec/java_home and the"
+        echo "             JavaVirtualMachines directories); the demo will not"
+        echo "             launch until one is installed."
         echo
     fi
 else

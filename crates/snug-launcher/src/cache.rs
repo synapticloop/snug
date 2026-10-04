@@ -25,6 +25,7 @@
 //! untouched for [`MAX_UNUSED_AGE`] regardless of rank.
 
 use std::collections::HashSet;
+use std::ffi::OsString;
 use std::fs::{File, FileTimes};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -37,14 +38,35 @@ pub const SNUG_SUBDIR: &str = "snug";
 /// Default JAR filename inside a cache entry.
 pub const CACHED_JAR_NAME: &str = "app.jar";
 
+/// Environment variable that redirects the per-user **cache base**.
+///
+/// A *base*, not a root: `snug/<company>/<app>/` is still appended, exactly
+/// as for `$XDG_CACHE_HOME`. Treating it as the whole root would be the
+/// surprising reading and would let two different apps collide in one
+/// directory.
+///
+/// This exists because the platform answer can be unwritable. A sandboxed
+/// home, a locked-down CI runner, or a container that denies writes to
+/// `~/Library/Caches` otherwise makes the launcher fail at the very first
+/// step — extracting the JAR — with `I/O error: Operation not permitted`
+/// and nothing to suggest a way out. An escape hatch that is part of the
+/// contract beats telling a user to relocate their home directory.
+///
+/// Only an **absolute** path is honoured. A relative value is ignored and
+/// the platform answer wins, which is the same rule the XDG handling below
+/// already uses; resolving a relative path against whatever the launcher's
+/// working directory happens to be would scatter cache entries.
+pub const ENV_CACHE_DIR: &str = "SNUG_CACHE_DIR";
+
 /// Compute the per-user cache root for the given app metadata.
 ///
 /// Resolution order:
 /// 1. Explicit override (passed via `behavior.cache_dir` or `app.cache_dir`).
-/// 2. The platform's own per-user cache root, via [`platform_cache_base`]:
-///    `%LOCALAPPDATA%` on Windows, `_CS_DARWIN_USER_CACHE_DIR` on macOS,
-///    `$XDG_CACHE_HOME` / `~/.cache` elsewhere.
-/// 3. `$HOME/.cache`, then the temp dir, as a last resort.
+/// 2. `$SNUG_CACHE_DIR`, if set to an absolute path. See [`ENV_CACHE_DIR`].
+/// 3. The platform's own per-user cache root, via [`platform_cache_base`]:
+///    `%LOCALAPPDATA%` on Windows, `NSHomeDirectory()/Library/Caches` on
+///    macOS, `$XDG_CACHE_HOME` / `~/.cache` elsewhere.
+/// 4. `$HOME/.cache`, then the temp dir, as a last resort.
 ///
 /// `snug/<company>/<app>/` is appended to whichever base wins.
 pub fn cache_root(app: &AppMetadata, override_root: Option<&Path>) -> PathBuf {
@@ -55,8 +77,26 @@ pub fn cache_root(app: &AppMetadata, override_root: Option<&Path>) -> PathBuf {
     let company = sanitize_component(&app.company);
     let name = sanitize_component(&app.name);
 
-    let base = platform_cache_base().unwrap_or_else(fallback_cache_base);
+    let base = pick_cache_base(std::env::var_os(ENV_CACHE_DIR), platform_cache_base());
     base.join(SNUG_SUBDIR).join(&company).join(&name)
+}
+
+/// Choose the cache base from the two candidates, falling back when neither
+/// is usable.
+///
+/// The `env` value is a raw `OsString` rather than an already-parsed
+/// `PathBuf` so the absolute-path rule is applied *here*, next to the
+/// fallback chain it feeds. That is also what makes this testable without
+/// mutating the process environment: the environment is process-global, so
+/// a test that called `std::env::set_var` to prove the override worked would
+/// race every other test in the same binary, and whichever lost would fail
+/// somewhere unrelated. Passing the value in keeps every assertion here
+/// hermetic.
+fn pick_cache_base(env: Option<OsString>, platform: Option<PathBuf>) -> PathBuf {
+    let from_env = env.map(PathBuf::from).filter(|p| p.is_absolute());
+    from_env
+        .or(platform)
+        .unwrap_or_else(fallback_cache_base)
 }
 
 /// Compute the full path to the cached JAR for a given SHA-256 digest.
@@ -549,6 +589,64 @@ mod tests {
             cache_root(&meta, Some(override_root)),
             override_root.to_path_buf()
         );
+    }
+
+    #[test]
+    fn env_cache_base_wins_over_the_platform_base() {
+        // The whole point of the override: a home whose platform cache
+        // directory is unwritable, pointed somewhere that is not.
+        let env = PathBuf::from("/var/empty/snug-cache");
+        let platform = PathBuf::from("/Users/someone/Library/Caches");
+        assert_eq!(
+            pick_cache_base(Some(env.clone().into_os_string()), Some(platform)),
+            env
+        );
+    }
+
+    #[test]
+    fn env_cache_base_keeps_the_snug_company_app_namespace() {
+        // A *base*, not a root. If this ever stopped appending the
+        // namespace, two apps sharing one SNUG_CACHE_DIR would overwrite
+        // each other's cached JARs.
+        let base = pick_cache_base(
+            Some(OsString::from("/var/empty/snug-cache")),
+            None,
+        );
+        let root = base.join(SNUG_SUBDIR).join("Acme").join("Demo");
+        assert!(root.starts_with("/var/empty/snug-cache"));
+        assert!(root.ends_with("snug/Acme/Demo"), "got {}", root.display());
+    }
+
+    #[test]
+    fn a_relative_env_cache_base_is_ignored() {
+        // A relative path resolved against the launcher's working
+        // directory would scatter cache entries; the platform answer wins
+        // instead, matching how XDG_CACHE_HOME is already treated.
+        let platform = PathBuf::from("/Users/someone/Library/Caches");
+        assert_eq!(
+            pick_cache_base(Some(OsString::from("relative/cache")), Some(platform.clone())),
+            platform
+        );
+    }
+
+    #[test]
+    fn an_empty_env_cache_base_is_ignored() {
+        // `SNUG_CACHE_DIR=` in a shell is an empty string, not an unset
+        // variable. Treating it as a path would silently redirect the
+        // cache to a relative directory named after the CWD.
+        let platform = PathBuf::from("/Users/someone/Library/Caches");
+        assert_eq!(
+            pick_cache_base(Some(OsString::new()), Some(platform.clone())),
+            platform
+        );
+    }
+
+    #[test]
+    fn an_unset_env_cache_base_leaves_the_platform_base_alone() {
+        // The overwhelmingly common case must not move: no variable set
+        // means the same path as before this override existed.
+        let platform = PathBuf::from("/Users/someone/Library/Caches");
+        assert_eq!(pick_cache_base(None, Some(platform.clone())), platform);
     }
 
     fn app(company: &str, name: &str) -> AppMetadata {

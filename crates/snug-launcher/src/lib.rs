@@ -27,6 +27,7 @@ pub mod dialogs;
 pub mod error;
 pub mod error_window;
 pub mod jdk_install;
+pub mod jli;
 pub mod localize;
 pub mod log;
 pub mod manifest;

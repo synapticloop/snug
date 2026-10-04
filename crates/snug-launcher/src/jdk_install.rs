@@ -963,18 +963,21 @@ fn worker_thread(
         }
     };
 
-    // Wait for the user to click "Install" before doing anything.
-    // The progress window pops up in a paused state with the bar at
-    // 0% and an "Install" button â€” only when the user clicks does
-    // the actual download / verify / extract start. We also exit
-    // early if the window is closed (or another reason sets `done`)
-    // before the user opts in.
-    while !shared.started.load(Ordering::SeqCst) {
-        if shared.done.load(Ordering::SeqCst) != 0 {
-            return;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
+    // There is deliberately no wait for a click here any more.
+    //
+    // This used to spin on `shared.started` until the progress window's
+    // "Install" button was pressed, which made that click the *only* thing
+    // that could start a download — with no timeout, so a platform where
+    // the window cannot appear hung forever. The on-disk evidence is
+    // unambiguous: the install directory gets created, but the
+    // `*.tar.gz.tmp` that `download_to_disk` would create never does,
+    // because the worker never got past this loop. Minutes of silence and
+    // zero bytes, with every network timeout in the flow never reached
+    // because no connection was ever opened.
+    //
+    // The ask is `ui::consent`, which runs on the calling thread before
+    // this thread exists. If the user said yes we are here; if they said
+    // no this function was never called. Nothing left to wait for.
 
     // The bar is split monotonically across the three phases so the user
     // never sees it move backwards:
@@ -1128,6 +1131,13 @@ fn worker_thread(
 ///
 /// A phase change always reports, because it is the boundary where the
 /// meaning of "bytes" changes (download -> verify -> extract).
+///
+/// Only `appkit.rs` calls this, so on a Windows build it has no caller and
+/// rustc reports it as dead code. The Windows poller still makes the same
+/// decision inline, which is why this was extracted rather than moved. The
+/// allowance is scoped to Windows deliberately: on any other target the
+/// function really is used, and a future unused call should be a warning.
+#[cfg_attr(windows, allow(dead_code))]
 pub(crate) fn should_report(phase: i32, last_phase: i32, pct: u32, last_pct: u32) -> bool {
     phase != last_phase || pct >= last_pct + 5
 }
@@ -1301,6 +1311,21 @@ fn run_one_install_attempt(
     let _ = std::fs::remove_dir_all(install_dir);
     let _ = std::fs::create_dir_all(install_dir);
 
+    // The ask happens here, with nothing running yet, so that the only
+    // outstanding thing is a human decision — never a worker thread
+    // waiting on a window that may never appear. See `ui::consent`.
+    let size_mb = (metadata.size_bytes as f64 / 1_048_576.0).round() as u32;
+    if !ui::consent(
+        parent,
+        &metadata.version,
+        size_mb,
+        &metadata.package_link,
+        &metadata.sha256,
+    ) {
+        log::log("user declined the install prompt; not downloading");
+        return AttemptOutcome::Cancelled;
+    }
+
     let shared = Arc::new(ProgressShared {
         pct: AtomicU32::new(0),
         done: AtomicI32::new(0),
@@ -1313,6 +1338,12 @@ fn run_one_install_attempt(
         cancel: AtomicBool::new(false),
         mascot: AtomicI32::new(0),
     });
+
+    // Consent is settled by now — `ui::consent` ran before this thread
+    // existed — so the flag is set from the start rather than waited on.
+    // It is still a field because the preview harnesses read and set it,
+    // but nothing in the real flow may block on it again.
+    shared.started.store(true, Ordering::SeqCst);
 
     let worker = thread::spawn({
         let shared = shared.clone();
@@ -1407,13 +1438,70 @@ mod ui {
     #[cfg(not(windows))]
     pub type ParentWindow = ();
 
+    /// Ask "download this JDK?" **before** any work begins. `true` means
+    /// go ahead.
+    ///
+    /// Asked here, on the calling thread, with no worker running — which is
+    /// the whole point. It used to be the progress window's own "Install"
+    /// button, with the worker thread spinning on `shared.started` until
+    /// somebody clicked it. That made a click in a window the *only* way
+    /// to start a download, so any platform where the window cannot appear
+    /// hangs forever: minutes of silence and not one byte. On macOS that
+    /// is not hypothetical — a `.app` exec'd from a terminal has no GUI
+    /// session for a window, and the flow degraded to logging while the
+    /// worker kept waiting for a click nobody could make.
+    ///
+    /// So the ask is now a step in its own right, taken while the answer
+    /// is still the only thing in flight. `OpenBrowser` counts as consent
+    /// *not* given: it hands the page to the user and stops, which is what
+    /// the button says it does.
+    #[cfg(windows)]
+    pub fn consent(
+        parent: ParentWindow,
+        version: &str,
+        size_mb: u32,
+        url: &str,
+        sha256: &str,
+    ) -> bool {
+        let d = dialogs::dialogs();
+        // 256x256 is the load size the other Win32 windows use for the
+        // mascot; the window scales the bitmap itself.
+        const MASCOT_LOAD: i32 = 256;
+        // `prompt_window` takes the mascot as an `isize` handle, which is
+        // the same convention `modal_window::ModalDialog::mascot_hbitmap`
+        // uses, so a null handle is 0 rather than a null pointer.
+        let mascot = super::mascot_icon_override()
+            .or_else(|| super::find_best_icon_hicon(MASCOT_LOAD, MASCOT_LOAD))
+            .map(|h| h as isize)
+            .unwrap_or(0);
+        crate::prompt_window::show(
+            parent,
+            mascot,
+            &d.jdk_install.prompt,
+            version,
+            size_mb,
+            url,
+            sha256,
+        ) == crate::prompt_window::PromptChoice::Download
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn consent(
+        _parent: ParentWindow,
+        version: &str,
+        size_mb: u32,
+        url: &str,
+        sha256: &str,
+    ) -> bool {
+        crate::appkit::consent(version, size_mb, url, sha256)
+    }
+
     /// Adoptium unreachable. Returns `true` if the user asked for the
     /// release page to be opened.
     #[cfg(windows)]
     pub fn metadata_failed(parent: ParentWindow, min_java: u16, detail: &str) -> i32 {
         super::show_metadata_failed_dialog(parent, min_java, detail)
     }
-
     #[cfg(target_os = "macos")]
     pub fn metadata_failed(_parent: ParentWindow, min_java: u16, detail: &str) -> i32 {
         crate::appkit::metadata_failed(min_java, detail)
@@ -1936,9 +2024,19 @@ mod tests {
     }
 
     fn tempdir() -> std::path::PathBuf {
+        // The counter is load-bearing, not decoration. `pid` + `as_nanos`
+        // is not unique under parallel tests on a coarse clock, and this
+        // module is no longer Windows-only: it compiles and runs on macOS
+        // (the Adoptium flow is cross-platform, only the tar.gz/zip split
+        // is per-OS). Two tests that land on the same name share a
+        // directory, and the failure then reads as a logic bug rather than
+        // a collision. This is the same fix as snug-payload's `tempdir`.
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let unique = format!(
-            "snug-jdk-install-test-{}-{}",
+            "snug-jdk-install-test-{}-{}-{}",
             std::process::id(),
+            n,
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
@@ -1957,15 +2055,7 @@ mod tests {
 
     #[test]
     fn hash_file_sha256_matches_known_value() {
-        let dir = std::env::temp_dir().join(format!(
-            "snug-hash-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = tempdir();
         let p = dir.join("a.txt");
         std::fs::File::create(&p).unwrap().write_all(b"hello").unwrap();
 
@@ -1984,15 +2074,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn extract_zip_preserves_entry_layout() {
-        let dir = std::env::temp_dir().join(format!(
-            "snug-jdk-ext-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = tempdir();
         let zip_path = dir.join("tiny.zip");
         let extract_into = dir.join("out");
 

@@ -41,6 +41,7 @@ pub fn init(log_path: &Path) -> std::io::Result<PathBuf> {
         .open(log_path)?;
     *FILE.lock().unwrap() = Some(file);
     *INITIALISED_PATH.lock().unwrap() = Some(log_path.to_path_buf());
+    *STARTED.lock().unwrap() = Some(std::time::Instant::now());
     Ok(log_path.to_path_buf())
 }
 
@@ -49,6 +50,65 @@ pub fn init(log_path: &Path) -> std::io::Result<PathBuf> {
 /// error dialog so the user can attach it to a bug report.
 pub fn path() -> Option<PathBuf> {
     INITIALISED_PATH.lock().unwrap().clone()
+}
+
+/// Set at [`init`] so every line can carry a monotonic offset from it.
+///
+/// Unix seconds in the prefix is fine for *ordering* but useless for the
+/// question a hang actually raises: "how long between these two lines?".
+/// With whole-second resolution a 900 ms stall and a 0 ms one look
+/// identical, and the JNI boundary is precisely where a stall lives. The
+/// elapsed field is what turns the log from a list of events into a
+/// timeline.
+static STARTED: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+/// Milliseconds since [`init`], or `?` if it has not been called.
+///
+/// Returns the bare timestamp-plus-offset with **no** surrounding
+/// brackets, because every caller wraps the result in its own.
+fn elapsed_ms() -> String {
+    match *STARTED.lock().unwrap() {
+        Some(t) => format!("{}+{}ms", unix_secs(), t.elapsed().as_millis()),
+        None => format!("{}+?", unix_secs()),
+    }
+}
+
+/// Is `SNUG_DEBUG` asking for the verbose trace?
+///
+/// Read once per call rather than cached, so a test can flip it. The set
+/// is deliberately forgiving (`SNUG_DEBUG=1`, `true`, `on`, or any
+/// non-empty value) and only `0` / `false` / empty mean off — a debug
+/// switch that needs exact spelling is a debug switch nobody sets.
+pub fn debug_enabled() -> bool {
+    match std::env::var_os("SNUG_DEBUG") {
+        Some(v) => {
+            let s = v.to_string_lossy().trim().to_ascii_lowercase();
+            !matches!(s.as_str(), "" | "0" | "false" | "no" | "off")
+        }
+        None => false,
+    }
+}
+
+/// Append a line only when `SNUG_DEBUG` is set, tagged `DEBUG` and
+/// carrying the elapsed offset.
+///
+/// This is the channel for the narrow questions `log` cannot answer:
+/// which side of a boundary are we on, and how long ago was it. In
+/// particular it brackets `call_static_method`, because "the app started
+/// and then nothing" is indistinguishable from "the app blocked" until
+/// there is a marker on each side of the call.
+pub fn debug(msg: &str) {
+    if !debug_enabled() {
+        return;
+    }
+    let line = format!("[{}] DEBUG {msg}\n", elapsed_ms());
+    let _ = std::io::stderr().write_all(line.as_bytes());
+    if let Ok(mut guard) = FILE.lock() {
+        if let Some(file) = guard.as_mut() {
+            let _ = file.write_all(line.as_bytes());
+            let _ = file.flush();
+        }
+    }
 }
 
 /// Append a timestamped line to the log file (and mirror to stderr).
@@ -93,6 +153,28 @@ fn unix_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The debug switch has to be forgiving, because a switch that needs
+    /// exact spelling is a switch nobody flips while chasing a hang. These
+    /// are the spellings that must read as *on*.
+    #[test]
+    fn debug_switch_accepts_the_obvious_spellings() {
+        // Scoped so the process-global env cannot leak into another test
+        // running on a different thread of the same binary.
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for v in ["1", "true", "TRUE", "on", "yes", "debug", "2"] {
+            // SAFETY: the guard above proves no other thread in this
+            // binary is touching the environment.
+            unsafe { std::env::set_var("SNUG_DEBUG", v) };
+            assert!(debug_enabled(), "{v:?} should enable debug logging");
+        }
+        for v in ["", "0", "false", "off", "no", "FALSE"] {
+            unsafe { std::env::set_var("SNUG_DEBUG", v) };
+            assert!(!debug_enabled(), "{v:?} should NOT enable debug logging");
+        }
+        unsafe { std::env::remove_var("SNUG_DEBUG") };
+        assert!(!debug_enabled(), "unset should mean off, not default-on");
+    }
 
     /// Serialises the tests in this module.
     ///

@@ -106,6 +106,32 @@ for entry in "${TARGETS[@]}"; do
     # Exported rather than passed inline so every cargo/rustc invocation in
     # this process sees it, and so a `#[link]`-style child cannot disagree.
     export MACOSX_DEPLOYMENT_TARGET="$DEPLOYMENT_TARGET"
+
+    # The launcher must be built and copied into bin/ BEFORE snug-cli
+    # compiles, because snug-cli embeds it with `include_bytes!`
+    # (`macos_bundle.rs`, selected by `#[cfg(target_arch)]`).
+    #
+    # Omitting this step is silent, which is what made it worth fixing.
+    # Nothing errors: the build succeeds, the CLI runs, the `.app` is
+    # produced and validates — and it contains the *committed* launcher.
+    # So a change to snug-launcher is quietly absent from the artefact
+    # while every check still passes. That is precisely how a launcher fix
+    # can sit in the working tree, "verified" by a green demo build, and
+    # never reach a release. The committed stub is a bootstrap convenience
+    # for a fresh clone (so `cargo build -p snug-cli` works before you have
+    # built anything), never the source of truth for a release build.
+    cargo build --release -p snug-launcher --target "$triple"
+    launcher_built="$ROOT/target/$triple/release/snug-launcher"
+    if [[ ! -f "$launcher_built" ]]; then
+        echo "build-macos: expected $launcher_built but it was not produced." >&2
+        exit 1
+    fi
+    # $expect_arch is the `lipo` arch, which is also the stub's filename
+    # suffix (arm64 / x86_64) — the same spellings macos_bundle.rs embeds.
+    stub_dest="$ROOT/bin/launcher-stub-macos-$expect_arch"
+    cp "$launcher_built" "$stub_dest"
+    echo "    launcher: refreshed bin/launcher-stub-macos-$expect_arch from $triple"
+
     cargo build --release -p snug-cli --target "$triple"
 
     built="$ROOT/target/$triple/release/snug"
