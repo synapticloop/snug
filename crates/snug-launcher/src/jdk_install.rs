@@ -1492,15 +1492,18 @@ mod ui {
             .or_else(|| super::find_best_icon_hicon(MASCOT_LOAD, MASCOT_LOAD))
             .map(|h| h as isize)
             .unwrap_or(0);
-        crate::prompt_window::show(
-            parent,
-            mascot,
-            &d.jdk_install.prompt,
-            version,
-            size_mb,
-            url,
-            sha256,
-        ) == crate::prompt_window::PromptChoice::Download
+        let choice = unsafe {
+            crate::prompt_window::show(
+                parent,
+                mascot,
+                &d.jdk_install.prompt,
+                version,
+                size_mb,
+                url,
+                sha256,
+            )
+        };
+        choice == crate::prompt_window::PromptChoice::Download
     }
 
     #[cfg(target_os = "macos")]
@@ -1518,7 +1521,7 @@ mod ui {
     /// release page to be opened.
     #[cfg(windows)]
     pub fn metadata_failed(parent: ParentWindow, min_java: u16, detail: &str) -> i32 {
-        super::show_metadata_failed_dialog(parent, min_java, detail)
+        unsafe { super::show_metadata_failed_dialog(parent, min_java, detail) }
     }
     #[cfg(target_os = "macos")]
     pub fn metadata_failed(_parent: ParentWindow, min_java: u16, detail: &str) -> i32 {
@@ -1534,7 +1537,7 @@ mod ui {
         version: &str,
         err: &str,
     ) -> bool {
-        super::show_retry_dialog(parent, attempt, max, version, err)
+        unsafe { super::show_retry_dialog(parent, attempt, max, version, err) }
     }
 
     #[cfg(target_os = "macos")]
@@ -1551,7 +1554,7 @@ mod ui {
     /// Terminal failure, after the attempts are exhausted.
     #[cfg(windows)]
     pub fn failure(parent: ParentWindow, title: &str, main: &str, content: &str) {
-        super::show_error_dialog(parent, title, main, content)
+        unsafe { super::show_error_dialog(parent, title, main, content) }
     }
 
     #[cfg(target_os = "macos")]
@@ -1658,8 +1661,14 @@ fn java_version_probe(java: &Path) -> std::io::Result<std::process::Output> {
 
 /// Pop the Retry / Cancel prompt between failed download attempts.
 /// Returns `true` if the user picked Retry.
+///
+/// # Safety
+///
+/// `parent` must be null or a live window handle. It is handed to Win32
+/// as the dialog's owner HWND; an arbitrary invalid handle is undefined
+/// behaviour at the FFI boundary.
 #[cfg(windows)]
-pub fn show_retry_dialog(
+pub unsafe fn show_retry_dialog(
     parent: HWND,
     attempt: u32,
     max_attempts: u32,
@@ -1724,8 +1733,13 @@ pub fn show_retry_dialog(
 /// the user to a Temurin release-filtered page so they can still
 /// install manually) and **Cancel**. Returns the button id so the
 /// caller can act on the choice.
+///
+/// # Safety
+///
+/// `parent` must be null or a live window handle; it becomes the
+/// dialog's owner HWND in Win32. See [`show_retry_dialog`].
 #[cfg(windows)]
-pub fn show_metadata_failed_dialog(parent: HWND, min_java: u16, error_detail: &str) -> i32 {
+pub unsafe fn show_metadata_failed_dialog(parent: HWND, min_java: u16, error_detail: &str) -> i32 {
     let d = dialogs::dialogs();
     let major = min_java.to_string();
 
@@ -1774,8 +1788,12 @@ pub fn show_metadata_failed_dialog(parent: HWND, min_java: u16, error_detail: &s
     }
 }
 
+/// # Safety
+///
+/// `parent` must be null or a live window handle; it becomes the
+/// dialog's owner HWND in Win32. See [`show_retry_dialog`].
 #[cfg(windows)]
-pub fn show_error_dialog(parent: HWND, title: &str, _main: &str, content: &str) {
+pub unsafe fn show_error_dialog(parent: HWND, title: &str, _main: &str, content: &str) {
     // `title` is the title-bar text; the dialog body reads
     // `failure.heading` / `failure.subheading` from
     // the localization bundle (or the caller-supplied overrides).

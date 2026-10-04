@@ -352,11 +352,13 @@ fn run_metadata_failed() -> Option<i32> {
     // expanded section reads. The production code passes a real
     // `JdkError` Display here.
     let fake_error = "DNS error: no such host is known. (api.adoptium.net:443)";
-    let result = jdk_install::show_metadata_failed_dialog(
-        std::ptr::null_mut(),
-        25,
-        fake_error,
-    );
+    let result = unsafe {
+        jdk_install::show_metadata_failed_dialog(
+            std::ptr::null_mut(),
+            25,
+            fake_error,
+        )
+    };
     eprintln!(
         "dialogs_preview: kind={} button={result}",
         Kind::MetadataFailed.as_str()
@@ -368,13 +370,15 @@ fn run_retry() -> Option<i32> {
     // Sample transient-failure error. The production code passes a
     // real `JdkError` Display here.
     let fake_error = "Connection reset by peer (HTTP 0 after 47.2 MB)";
-    let retry_again = jdk_install::show_retry_dialog(
-        std::ptr::null_mut(),
-        1,
-        3,
-        "25.0.1+8.LTS",
-        fake_error,
-    );
+    let retry_again = unsafe {
+        jdk_install::show_retry_dialog(
+            std::ptr::null_mut(),
+            1,
+            3,
+            "25.0.1+8.LTS",
+            fake_error,
+        )
+    };
     eprintln!(
         "dialogs_preview: kind={} retry_again={retry_again}",
         Kind::Retry.as_str()
@@ -475,15 +479,17 @@ fn run_install_prompt_v5() -> Option<i32> {
     // Snug character without us having to load anything here.
     let d = snug_launcher::dialogs::dialogs();
     let prompt = &d.jdk_install.prompt;
-    let choice = snug_launcher::prompt_window::show(
-        std::ptr::null_mut(),
-        0,
-        prompt,
-        "21.0.2",
-        192,
-        "https://api.adoptium.net/v3/binary/latest/21/ga/windows/x64/jdk/hotspot/normal/eclipse",
-        "9c629caaccc4e64aa0ea58bd0a3f43eaf903a4c1a3e2c2a6e9c5b1a8e8b3f1a0",
-    );
+    let choice = unsafe {
+        snug_launcher::prompt_window::show(
+            std::ptr::null_mut(),
+            0,
+            prompt,
+            "21.0.2",
+            192,
+            "https://api.adoptium.net/v3/binary/latest/21/ga/windows/x64/jdk/hotspot/normal/eclipse",
+            "9c629caaccc4e64aa0ea58bd0a3f43eaf903a4c1a3e2c2a6e9c5b1a8e8b3f1a0",
+        )
+    };
     eprintln!(
         "dialogs_preview: kind={} prompt_window choice = {choice:?}",
         Kind::InstallPromptV5.as_str()

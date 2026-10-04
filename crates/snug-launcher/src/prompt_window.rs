@@ -69,7 +69,13 @@ pub enum PromptChoice {
 /// * `sha256` — replaces `{sha256}` in `expanded`.
 ///
 /// Blocks the calling thread until the user dismisses the dialog.
-pub fn show(
+///
+/// # Safety
+///
+/// `parent` must be null or a live window handle; it becomes the
+/// dialog's owner HWND in Win32. `mascot_hbitmap`, when non-zero, must
+/// be a live HBITMAP, since it is painted into the dialog.
+pub unsafe fn show(
 	parent: HWND,
 	mascot_hbitmap: isize,
 	prompt: &InstallPromptDialog,
