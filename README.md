@@ -177,7 +177,8 @@ snug -o App.exe --name "Different Name"   # --name overrides the file
 # A value that genuinely differs per platform goes in a companion file named
 # after the host, which overrides `snug.options` (CLI flags still win over it).
 # It is a *partial* override: only the differing values belong in it.
-#   # snug.macos.options  —  the usual case is just the output extension
+#   # snug.macos.options  —  the demo's usual case is two lines
+#   --input assets/myapp-mac.jar
 #   --output build/MyApp.app
 #
 # Only the file matching the host is read, so a checked-in

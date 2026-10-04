@@ -30,17 +30,30 @@
 # depend on which machine ran it.
 #
 # ---------------------------------------------------------------------------
-# The one value that differs: the output artefact
+# The two values that differ: the input JAR, and the output artefact
 # ---------------------------------------------------------------------------
 #
-# `snug.options` says `--output assets/snug-javafx-demo.exe`, which is correct
-# on Windows. On macOS the output extension is what selects the artefact:
+# `--output`. On macOS the output extension is what selects the artefact:
 # `-o Foo.app` builds a real `.app` *bundle* (a directory holding a Mach-O
 # launcher plus its payload), while `-o Foo.exe` builds a Windows PE. The
-# extension is the switch, so this one line is the whole override.
+# extension is the switch, so one value cannot serve both platforms.
 #
-# scripts/build-macos-demo.sh reads this same value rather than hardcoding it,
-# so the demo script and snug cannot disagree about where the bundle goes.
+# `--input`. snug's payload carries exactly one JAR, and the JavaFX demo
+# has to ship its *native* libraries, which are platform-specific binaries
+# with platform-specific names (`libglass.dylib` / `glass.dll` /
+# `libprism_es2.so`). So one JAR cannot serve both platforms either: this
+# is the `-mac` build, and snug.windows.options names the other. Same
+# reason as the output, different value.
+#
+# Neither line is in snug.options, which is deliberately platform-neutral.
+# See its "Per-platform overrides" section for the rule and the reasoning.
+#
+# scripts/build-macos-demo.sh reads both of these back out of this file
+# rather than hardcoding either, so the demo script and snug cannot
+# disagree about what gets built. It passes no JAR and no -o at all: a
+# bare `snug` in the repo root builds the demo from exactly what is
+# written here. A JAR on the command line still overrides the `--input`
+# below, which is the precedence every other flag already gets.
 # ---------------------------------------------------------------------------
 
 --input assets/snug-javafx-demo-mac.jar

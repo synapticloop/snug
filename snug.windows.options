@@ -30,14 +30,20 @@
 # depend on which machine ran it.
 #
 # ---------------------------------------------------------------------------
-# The one value that differs: the output artefact
+# The two values that differ: the input JAR, and the output artefact
 # ---------------------------------------------------------------------------
 #
-# The output extension is what selects the artefact snug builds. A `.exe`
-# is a Windows PE, which is what a Windows host must produce. A macOS host
-# needs a `.app` *bundle* instead - a directory holding a Mach-O launcher
-# plus its payload - so the same value cannot serve both, which is why it
-# lives here rather than in the shared snug.options.
+# `--output`. A `.exe` is a Windows PE, which is what a Windows host must
+# produce. A macOS host needs a `.app` *bundle* instead - a directory
+# holding a Mach-O launcher plus its payload - so the same value cannot
+# serve both, which is why it lives here rather than in the shared
+# snug.options.
+#
+# `--input`. The JavaFX demo has to ship its *native* libraries, and those
+# are platform-specific binaries with platform-specific names (`glass.dll`
+# here, `libglass.dylib` there). One JAR cannot carry both, so this names
+# assets\snug-javafx-demo.jar and snug.macos.options names the `-mac`
+# build. Same reason as the output, different value.
 #
 # scripts\build-release.cmd runs
 #
@@ -45,8 +51,19 @@
 #
 # with no -o and no --options, relying on this file being found from the
 # working directory, and then asserts that the EXE landed at exactly the
-# path below. It does not read the value itself, so the two cannot drift:
-# this file is the only place the string exists.
+# path below.
+#
+# Note that the JAR on that command line and the --input here are
+# deliberately the same path. The positional wins - a command-line JAR
+# overrides an --input from a file, as it does for every other flag - so
+# the script stays authoritative over what it builds, while the copy here
+# is what a bare `snug.exe` in this directory uses. The two have to agree,
+# or the script's build and a plain `snug.exe` would produce different
+# things. build-macos-demo.sh resolves its own --input the same way and
+# fails early if the two disagree.
+#
+# It does not read either value itself, so the two cannot drift: this
+# file is the only place each string lives.
 #
 # If this file is ever missing, snug falls back to its own default of
 # <jar-stem>.exe in the working directory - so the file name would be right

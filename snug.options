@@ -29,20 +29,28 @@
 # command line. It is a *partial* override - only the values that differ
 # need to be in it, the rest still come from here.
 #
-# Everything in this file is deliberately platform-neutral, and the
-# `--output` is NOT here for exactly that reason: a macOS build has to
-# name a `.app` bundle while a Windows build has to name a `.exe`, so the
-# value lives in the per-platform file instead. A platform-specific
+# Everything in this file is deliberately platform-neutral, and the two
+# values that cannot be are NOT here for exactly that reason:
+#
+#     --output   a macOS build has to name a `.app` bundle, a Windows build
+#                a `.exe`, and the extension is what selects the artefact.
+#     --input    snug's payload carries one JAR, and the JavaFX demo's
+#                native libraries are per-platform (`glass.dll` vs
+#                `libglass.dylib`), so the demo JAR differs too.
+#
+# So each lives in its per-platform file instead. A platform-specific
 # string sitting in the shared file is what this split exists to fix -
 # it reads as if it applied everywhere, and it does not.
 #
-#     snug.windows.options   --output assets/snug-javafx-demo.exe
-#     snug.macos.options     --output assets/snug-javafx-demo.app
+#     snug.windows.options   --input assets\snug-javafx-demo.jar
+#                             --output assets\snug-javafx-demo.exe
+#     snug.macos.options     --input assets/snug-javafx-demo-mac.jar
+#                             --output assets/snug-javafx-demo.app
 #
 # Nothing writes those files for you; they are deliberate,
 # hand-maintained things. scripts\build-release.cmd produces the Windows
 # EXE and scripts/build-macos-demo.sh the macOS bundle, each reading the
-# value from its own file.
+# values from its own file.
 #
 # You may also pass through a command line option which points to this file
 # location - for example:
@@ -67,10 +75,11 @@
 --splash-ms 2000
 --icon assets/snug-icon.png
 #
-# NOTE: there is no --output here on purpose. The output artefact differs
-# per platform - a Windows PE named `.exe`, a macOS bundle named `.app` -
-# so each value lives in its own snug.<os>.options. See the "Per-platform
-# overrides" section at the top of this file.
+# NOTE: there is no --output, and no --input, here on purpose. Both differ
+# per platform - a Windows PE named `.exe` over one JAR, a macOS bundle
+# named `.app` over another - so each value lives in its own
+# snug.<os>.options. See the "Per-platform overrides" section at the top of
+# this file.
 #
 # `auto` = "use a compatible JVM if one is already installed, and only
 # offer the Temurin download if discovery comes up empty".
@@ -82,7 +91,8 @@
 # thread spins on `shared.started` (jdk_install.rs) until a human clicks
 # Install in the progress window, and when the bundle is exec'd from a
 # terminal rather than launched by Launch Services that NSAlert never
-# appears. See AGENTS.md, "The download flow deadlocks on macOS".
+# appears. See AGENTS.md, "The JDK download flow used to deadlock on
+# macOS".
 --download-jdk=auto
 #
 # `ALL-UNNAMED`, not `javafx.graphics`. snug puts the fat JAR on the
