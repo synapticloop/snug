@@ -249,6 +249,13 @@ impl ProgressResponder {
     );
 }
 
+impl PickerResponder {
+    extern_methods!(
+        #[unsafe(method(new))]
+        fn new(mtm: MainThreadMarker) -> Retained<Self>;
+    );
+}
+
 // ---------------------------------------------------------------------------
 //  Progress copy
 // ---------------------------------------------------------------------------
@@ -969,6 +976,219 @@ pub(crate) fn progress(
     }
 
     true
+}
+
+thread_local! {
+    /// The dialog the previewer picked. `None` means "closed without a
+    /// choice", which is why it cannot also mean "not yet chosen" — see
+    /// `PICKER_RESOLVED`.
+    ///
+    /// Process-global for the same reason `PROGRESS_CANCELLED` is: there is
+    /// one picker on screen at a time, so there is nothing to distinguish.
+    /// Thread-locals rather than atomics because they are only ever
+    /// touched from the main thread that is pumping the window.
+    static PICKER_CHOICE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    /// Whether a click has landed. Separated from `PICKER_CHOICE` so that
+    /// "closed" and "still waiting" are different states rather than both
+    /// being `None`.
+    static PICKER_RESOLVED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    struct PickerResponder;
+
+    #[allow(non_snake_case)]
+    impl PickerResponder {
+        /// A dialog button, or Close. Its `tag` is the index into the list
+        /// the caller passed to [`preview_picker`], and a **negative** tag
+        /// means Close — which is why the sign has to be read here rather
+        /// than clamped: `max(0)` on Close's `-1` would silently open the
+        /// first dialog instead of quitting.
+        #[unsafe(method(dialogClicked:))]
+        fn dialogClicked(&self, sender: &NSButton) {
+            let tag = sender.tag();
+            PICKER_CHOICE.with(|c| c.set(if tag < 0 { None } else { Some(tag as usize) }));
+            PICKER_RESOLVED.with(|r| r.set(true));
+        }
+    }
+
+    unsafe impl NSObjectProtocol for PickerResponder {}
+
+    #[allow(non_snake_case)]
+    unsafe impl NSWindowDelegate for PickerResponder {
+        /// The close box means "no dialog", not "vanish while the caller is
+        /// blocked". Returning `false` keeps the window up so the caller
+        /// closes it deterministically, exactly as `ModalResponder` does.
+        #[unsafe(method(windowShouldClose:))]
+        fn windowShouldClose(&self, _sender: &NSWindow) -> bool {
+            PICKER_CHOICE.with(|c| c.set(None));
+            PICKER_RESOLVED.with(|r| r.set(true));
+            false
+        }
+    }
+);
+
+/// The launcher dialog picker: a language menu, a button per dialog, and
+/// Close. Returns `(language_index, dialog_index)`, or `None` if closed.
+///
+/// Mirrors the Windows preview's harness window, which is the reason this
+/// exists at all: changing dialog copy is the thing snug changes most, and
+/// a previewer that shows all five in sequence with no way to choose one
+/// cannot be used to compare a translation, or to re-check a single
+/// window after touching it.
+///
+/// The language choice comes back with the dialog rather than being
+/// applied live, which is one round trip instead of a callback into the
+/// previewer's own state. Same net effect for the reviewer: pick a
+/// language, click a dialog, read it in that language.
+#[cfg(target_os = "macos")]
+pub fn preview_picker(
+    dialogs: &[&str],
+    languages: &[&str],
+) -> Option<(usize, usize)> {
+
+    let Some(mtm) = MainThreadMarker::new() else {
+        return None;
+    };
+    if dialogs.is_empty() {
+        return None;
+    }
+
+    // Row geometry, laid out from the top down because the origin is
+    // bottom-left. Expressed once here rather than as a scatter of
+    // constants, so changing the button height cannot desynchronise the
+    // per-button Y and the window height below.
+    const ROW_H: f64 = layout::DIALOG_BUTTON_H;
+    const ROW_GAP: f64 = 8.0;
+    const TOP: f64 = 20.0;
+    const TITLE_H: f64 = 18.0;
+    const SUB_H: f64 = 16.0;
+    const GAP: f64 = 14.0;
+    const POPUP_H: f64 = 26.0;
+    const CLOSE_GAP: f64 = 18.0;
+    const BOTTOM: f64 = 20.0;
+
+    let buttons_h = dialogs.len() as f64 * ROW_H + (dialogs.len() as f64 - 1.0) * ROW_GAP;
+    let w = 360.0;
+    let h = TOP + TITLE_H + GAP + SUB_H + GAP + POPUP_H + GAP + buttons_h + CLOSE_GAP + ROW_H
+        + BOTTOM;
+
+    let window = new_window(mtm, w, h);
+    window.setTitle(&NSString::from_str("snug — dialog preview"));
+    let Some(content) = window.contentView() else {
+        return None;
+    };
+
+    let margin = 20.0;
+    // Y of the top edge of the next row, walking down.
+    let mut y = h - TOP;
+
+    // Walk down the window one row at a time, returning the top edge of the
+    // row just placed. Row heights and gaps live here rather than as
+    // scattered constants so that changing `ROW_H` cannot desynchronise the
+    // per-button Y and the computed window height below.
+    let put = |y: &mut f64, row_h: f64, gap: f64| {
+        *y -= row_h;
+        let top = *y;
+        *y -= gap;
+        top
+    };
+
+    y = put(&mut y, TITLE_H, GAP);
+    let title = label(mtm, "snug — dialog preview", true);
+    title.setFrame(rect(margin, y, w - 2.0 * margin, TITLE_H));
+    content.addSubview(&title);
+
+    y = put(&mut y, SUB_H, GAP);
+    let sub = label(
+        mtm,
+        "Choose a language, then click a dialog. Close quits the preview.",
+        false,
+    );
+    sub.setFrame(rect(margin, y, w - 2.0 * margin, SUB_H));
+    content.addSubview(&sub);
+
+    y = put(&mut y, POPUP_H, GAP);
+    let lang_label = label(mtm, "Language:", false);
+    lang_label.setFrame(rect(margin, y, 70.0, POPUP_H));
+    content.addSubview(&lang_label);
+
+    // Safe in these bindings: `initWithFrame_pullsDown:` takes a rect and a
+    // BOOL and imposes no further requirements, and `mtm` is proof of the
+    // main thread it runs on.
+    let popup = objc2_app_kit::NSPopUpButton::initWithFrame_pullsDown(
+        objc2_app_kit::NSPopUpButton::alloc(mtm),
+        rect(margin + 76.0, y, w - margin - 76.0 - margin, POPUP_H),
+        false,
+    );
+    for tag in languages {
+        popup.addItemWithTitle(&NSString::from_str(tag));
+    }
+    content.addSubview(&popup);
+
+    let responder = PickerResponder::new(mtm);
+    PICKER_CHOICE.with(|c| c.set(None));
+    PICKER_RESOLVED.with(|r| r.set(false));
+
+    for (i, name) in dialogs.iter().enumerate() {
+        y = put(&mut y, ROW_H, ROW_GAP);
+        // SAFETY: the responder outlives the window (it is a local that
+        // lives until after the loop below returns) and the selector is
+        // the one `PickerResponder` implements.
+        let b = unsafe {
+            button(
+                mtm,
+                name,
+                i as isize,
+                &responder,
+                objc2::sel!(dialogClicked:),
+            )
+        };
+        let bw = b.frame().size.width;
+        b.setFrame(rect(margin, y, bw, ROW_H));
+        content.addSubview(&b);
+    }
+
+    y = put(&mut y, ROW_H, 0.0);
+    // SAFETY: as above, with the responder still alive.
+    let close = unsafe {
+        button(
+            mtm,
+            "Close",
+            -1,
+            &responder,
+            objc2::sel!(dialogClicked:),
+        )
+    };
+    let cw = close.frame().size.width;
+    close.setFrame(rect(w - margin - cw, y, cw, ROW_H));
+    content.addSubview(&close);
+
+    window.setDelegate(Some(ProtocolObject::from_ref(&*responder)));
+    window.center();
+    window.makeKeyAndOrderFront(None);
+
+    // Pump until a choice lands, the same hand-driven run loop the progress
+    // window uses. `NSApp::stop:` would need an `NSStopInfo`, and polling a
+    // flag costs nothing here — the picker is idle most of its life.
+    loop {
+        if PICKER_RESOLVED.with(|r| r.get()) {
+            break;
+        }
+        let limit = NSDate::dateWithTimeIntervalSinceNow(0.05);
+        NSRunLoop::currentRunLoop().runUntilDate(&limit);
+    }
+
+    let chosen = PICKER_CHOICE.with(|c| c.get());
+    let language = popup.indexOfSelectedItem().max(0) as usize;
+
+    window.setDelegate(None::<&ProtocolObject<dyn NSWindowDelegate>>);
+    window.orderOut(None);
+    window.close();
+
+    chosen.map(|dialog| (language, dialog))
 }
 
 /// Drive the download-progress window against a synthetic download, for

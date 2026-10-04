@@ -100,8 +100,86 @@ const DEMO_SHA: &str = "3f1a9c7e2b8d4056af19c2e7b0d4a8135ce6f9021b7da4e58c0a3f19
 const DEMO_ERROR: &str =
     "the connection was reset while reading the archive (curl error 56)";
 
-/// Show every dialog once, in the order the install flow reaches them.
-fn show_all(mascot: Option<&Path>) {
+/// The dialogs the picker offers, in the order the install flow reaches
+/// them. The label is what the button says, so it doubles as the map from
+/// the picker's index back to the function that shows it.
+const DIALOGS: &[&str] = &[
+    "1. JDK metadata failure",
+    "2. Download failed — retry",
+    "3. All attempts exhausted",
+    "4. Install consent",
+    "5. Download progress",
+];
+
+/// Show one dialog by index, as listed in [`DIALOGS`].
+fn show(index: usize) {
+    match index {
+        0 => {
+            log("— JDK metadata failure —");
+            let choice = appkit::metadata_failed(25, DEMO_ERROR);
+            log(&format!(
+                "  button index {choice} (0 = open in browser, 1 = cancel)"
+            ));
+        }
+        1 => {
+            log("— download attempt failed, retrying —");
+            let retry = appkit::retry(2, 3, DEMO_VERSION, DEMO_ERROR);
+            log(&format!("  retry = {retry}"));
+        }
+        2 => {
+            log("— all attempts exhausted —");
+            let d = snug_launcher::dialogs::dialogs();
+            let content = snug_launcher::dialogs::fill(
+                d.jdk_install.failure.content.as_str(),
+                &[("version", DEMO_VERSION), ("error", DEMO_ERROR)],
+            );
+            appkit::failure(&d.jdk_install.failure.title, &content);
+            log("  dismissed");
+        }
+        3 => {
+            log("— install consent —");
+            let consent = appkit::consent(DEMO_VERSION, DEMO_SIZE_MB, DEMO_URL, DEMO_SHA);
+            log(&format!("  consent = {consent}"));
+        }
+        4 => {
+            log("— download progress (synthetic, no network) —");
+            let ok = appkit::progress_demo();
+            log(&format!("  completed = {ok}"));
+        }
+        other => log(&format!("no dialog at index {other}")),
+    }
+}
+
+/// Run the picker until a dialog has been shown and dismissed, or the
+/// picker is closed.
+///
+/// The picker comes back after every dialog rather than the sequence
+/// running once through, because the point of a previewer is to re-check
+/// one window after touching it — and because comparing a translation
+/// means opening the same dialog in two languages, which is two passes
+/// through the picker.
+
+/// Point the launcher's bundle chain at one tag, so the next dialog opens
+/// in that language.
+///
+/// Only the requested bundle is handed to `set_bundles`; the built-in
+/// English baseline is appended behind it automatically, so keys the
+/// translation does not cover fall back exactly as they would in a shipped
+/// build.
+fn select_language(bundles: &[Localization], index: usize) {
+    let Some(chosen) = bundles.get(index) else {
+        return;
+    };
+    log(&format!(
+        "localisation: tag `{}` ({} key/value lines)",
+        chosen.tag,
+        chosen.entries.len()
+    ));
+    localize::set_bundles(std::slice::from_ref(chosen));
+}
+
+/// Install the mascot, then hand control to the picker.
+fn show_all(mascot: Option<&Path>, bundles: &[Localization]) {
     let Some(mtm) = objc2::MainThreadMarker::new() else {
         log("must be run on the main thread");
         std::process::exit(1);
@@ -135,36 +213,34 @@ fn show_all(mascot: Option<&Path>) {
         log("mascot: none given, and there is no bundle here, so the mascot slot is empty");
     }
 
-    // Metadata failure: Adoptium could not be reached at all.
-    log("— JDK metadata failure —");
-    let choice = appkit::metadata_failed(25, DEMO_ERROR);
-    log(&format!("  button index {choice} (0 = open in browser, 1 = cancel)"));
+    // The picker's own language menu, with `en` last so the fallback is the
+    // baseline the launcher itself ships. An empty list would render a
+    // popup with nothing in it, so the baseline is always offered.
+    let mut tags: Vec<String> = bundles.iter().map(|b| b.tag.clone()).collect();
+    let mut offered = bundles.to_vec();
+    if !tags.iter().any(|t| t == "en") {
+        // No user-supplied `en`: hand `set_bundles` an empty chain, which
+        // leaves the built-in baseline in place.
+        tags.push("en".to_string());
+        offered.push(Localization {
+            tag: "en".to_string(),
+            entries: Vec::new(),
+        });
+    }
+    let tag_refs: Vec<&str> = tags.iter().map(String::as_str).collect();
 
-    // Retry: one download attempt failed, another is available.
-    log("— download attempt failed, retrying —");
-    let retry = appkit::retry(2, 3, DEMO_VERSION, DEMO_ERROR);
-    log(&format!("  retry = {retry}"));
-
-    // Terminal failure: out of attempts.
-    log("— all attempts exhausted —");
-    let d = snug_launcher::dialogs::dialogs();
-    let content = snug_launcher::dialogs::fill(
-        d.jdk_install.failure.content.as_str(),
-        &[("version", DEMO_VERSION), ("error", DEMO_ERROR)],
-    );
-    appkit::failure(&d.jdk_install.failure.title, &content);
-    log("  dismissed");
-
-    // Consent: the actual ask.
-    log("— install consent —");
-    let consent = appkit::consent(DEMO_VERSION, DEMO_SIZE_MB, DEMO_URL, DEMO_SHA);
-    log(&format!("  consent = {consent}"));
-
-    // Progress: a synthetic 0-100% walk so every phase label is seen.
-    log("— download progress (synthetic, no network) —");
-    let ok = appkit::progress_demo();
-    log(&format!("  completed = {ok}"));
-
+    loop {
+        let Some((language_index, dialog_index)) = appkit::preview_picker(DIALOGS, &tag_refs)
+        else {
+            break;
+        };
+        select_language(&offered, language_index);
+        if let Some(tag) = tags.get(language_index) {
+            log(&format!("showing dialog {} in `{tag}`", dialog_index + 1));
+        }
+        show(dialog_index);
+    }
+    log("picker closed");
     log("the launcher error window has no macOS implementation yet, so there is nothing to show");
 }
 
@@ -204,7 +280,7 @@ pub fn run() {
         i += 1;
     }
 
-    match build_localisations(&localisations) {
+    let bundles = match build_localisations(&localisations) {
         Ok(bundles) => {
             // An empty chain leaves the built-in baseline in place, which
             // is exactly what an unflagged preview should show.
@@ -212,13 +288,14 @@ pub fn run() {
             if bundles.is_empty() {
                 log("localisation: built-in English baseline");
             }
+            bundles
         }
         Err(e) => {
             log(&format!("localisation: {e}"));
             std::process::exit(2);
         }
-    }
+    };
 
-    show_all(mascot.as_deref());
+    show_all(mascot.as_deref(), &bundles);
     log("done");
 }
