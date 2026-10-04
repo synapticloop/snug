@@ -168,6 +168,10 @@ snug app.jar --emit-payload
 #   --company "SynapticLoop"
 #   --min-java 25
 #   --download-jdk=force
+# A bare `snug` then builds the file's `--input`. Passing a JAR positionally
+# overrides it — `snug other.jar` builds *other* jar — which is the same
+# "command line wins" rule every other flag follows. (The two are only
+# mutually exclusive when both appear on one command line.)
 snug -o App.exe --name "Different Name"   # --name overrides the file
 
 # A value that genuinely differs per platform goes in a companion file named

@@ -43,4 +43,5 @@
 # so the demo script and snug cannot disagree about where the bundle goes.
 # ---------------------------------------------------------------------------
 
+--input assets/snug-javafx-demo-mac.jar
 --output assets/snug-javafx-demo.app

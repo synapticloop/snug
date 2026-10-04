@@ -433,14 +433,28 @@ commit — useful history, not a live list.
   everywhere.
 
 **Tests**
-- One `tempdir()` helper still keys uniqueness on `pid` + `as_nanos()`
-  and will eventually flake the same way the others did:
-  `snug_preview/windows_impl.rs`. That one *is* still Windows-gated, so it
-  cannot affect a macOS run. `jdk_install.rs` looked like a second case
-  for the same reason, but that stopped being true when the Adoptium flow
-  became cross-platform (slice 13) — it now compiles and runs on macOS,
-  and its flake did land. Assume a module is live on macOS unless you
-  have checked its `cfg`, not because a stale note says so.
+- **`pid` + `as_nanos()` is not a unique test-directory key.** The
+  macOS clock is coarse enough that two tests running in parallel can
+  read the same tick, they share a directory, and the failure surfaces
+  as a *wrong value* rather than a collision. Every `tempdir()` helper
+  now carries a per-process `AtomicU64` counter for this reason; the
+  remaining Windows-gated one is `snug_preview/windows_impl.rs`, which
+  cannot affect a macOS run. When adding a helper, copy the counter
+  form from `crates/snug-cli/src/options_file.rs`, whose comment
+  records the whole mechanism. `jdk_install.rs` looked like a second
+  case for the same reason, but that stopped being true when the
+  Adoptium flow became cross-platform (slice 13) — it now compiles and
+  runs on macOS, and its flake did land. Assume a module is live on
+  macOS unless you have checked its `cfg`, not because a stale note
+  says so.
+- **An options file's `--input` is a default, not a lock.** The
+  positional `[JAR|DIR]` and `--input` are declared `conflicts_with`
+  each other, which is about a single command line; across sources the
+  merge resolves it as precedence, because "the command line always
+  wins" has to mean that too. So `snug.options` can carry `--input`
+  for a bare `snug`, and `snug other.jar` still builds the other one.
+  Two spellings of one slot, one `FlagSpec` rule — see
+  `FlagSpec::cli_has_positional`.
 
 ## Versioning
 

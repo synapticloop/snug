@@ -12,9 +12,20 @@ fn snug_bin() -> std::path::PathBuf {
 
 fn tempdir() -> PathBuf {
     let base = std::env::temp_dir();
+    // The counter is load-bearing, not belt-and-braces. pid + nanos is
+    // not unique enough: these tests share a pid, and macOS clock
+    // resolution is coarse enough that two running in parallel can read
+    // the same nanosecond and land in the same directory. One test's
+    // `snug.macos.options` then shows up inside another test's dir, and
+    // because the OS file outranks the generic one that test's expected
+    // value silently changes — observed as an intermittent failure of
+    // `another_platforms_options_file_is_ignored`, which passes alone
+    // and under `--test-threads=1`.
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let unique = format!(
-        "snug-options-e2e-{}-{}",
+        "snug-options-e2e-{}-{}-{}",
         std::process::id(),
+        COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -110,6 +121,86 @@ fn cli_options_override_file_options() {
     assert!(
         !stdout.contains("min-java:    21"),
         "file's --min-java 21 should not appear when CLI overrides: {stdout}"
+    );
+}
+
+#[test]
+fn options_file_without_input_names_the_file_in_the_error() {
+    // The case that motivated reporting instead of printing help: a
+    // `snug.options` that sets everything *except* the input. The user
+    // has made a build request, so a help dump reads as "my file was
+    // ignored" rather than "one value is missing" — and the error has
+    // to name the file, because that file is where the fix goes.
+    let tmp = tempdir();
+    fs::write(
+        tmp.join("snug.options"),
+        "--name \"File Default\"\n--company \"File Co\"\n--min-java 21\n",
+    )
+    .unwrap();
+
+    let output = Command::new(snug_bin())
+        .current_dir(&tmp)
+        .output()
+        .expect("spawn snug");
+
+    assert!(
+        !output.status.success(),
+        "missing --input is an error, not a silent help dump"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("no input JAR"),
+        "stderr should say the input is missing, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("snug.options"),
+        "stderr should name the file that was read, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("--input"),
+        "stderr should point at the flag that fixes it, got: {stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("Wrap a Java fat JAR"),
+        "a missing input must not print the help text, got: {stdout}"
+    );
+}
+
+#[test]
+fn options_file_with_input_builds_without_a_positional() {
+    // The other half of the same rule: once the file carries `--input`,
+    // a bare `snug` has everything it needs and must build rather than
+    // complaining. Guards against "fixing" the error by also requiring
+    // a positional.
+    let tmp = tempdir();
+    let jar = tmp.join("demo.jar");
+    write_jar(&jar);
+    fs::write(
+        tmp.join("snug.options"),
+        format!(
+            "--input {}\n--output {}\n--name \"File Default\"\n--min-java 21\n",
+            jar.display(),
+            tmp.join("out.exe").display()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(snug_bin())
+        .current_dir(&tmp)
+        .arg("--dry-run")
+        .output()
+        .expect("spawn snug");
+
+    assert!(
+        output.status.success(),
+        "a file-supplied --input should build; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("min-java:    21"),
+        "stdout should reflect the file's values: {stdout}"
     );
 }
 

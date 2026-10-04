@@ -263,7 +263,12 @@ fn init_localizations_directory_is_a_usable_localization_input() {
 
 #[test]
 fn init_modes_are_documented_in_help() {
-    let out = Command::new(snug_bin()).output().expect("spawn snug");
+    // `--help` is explicit: a bare `snug` now reports the missing input
+    // instead of printing usage.
+    let out = Command::new(snug_bin())
+        .arg("--help")
+        .output()
+        .expect("spawn snug");
     let stdout = stdout_of(&out);
     for needle in [
         "--init-options",

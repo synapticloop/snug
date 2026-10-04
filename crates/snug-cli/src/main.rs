@@ -6,15 +6,13 @@
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
-use clap::{CommandFactory, Parser};
+use clap::Parser;
 
 use snug_cli::build::{build_exe, build_payload, output_path, wants_app_bundle};
 use snug_cli::cli::Cli;
 use snug_cli::{init_localizations, init_options};
 use snug_cli::options_file;
 use snug_format::SnugEmbedded;
-
-const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() -> ExitCode {
     if let Err(err) = run() {
@@ -109,11 +107,15 @@ fn run() -> Result<()> {
     }
 
     // No input source supplied (positional `[JAR]` or `--input`):
-    // print help + snug's own version, exit 0.
-    // (clap's own `--help` is handled automatically by ArgAction::Help.)
+    // say so, and exit non-zero. This used to print the help text and
+    // exit 0, which is the wrong answer for a user whose `snug.options`
+    // already sets every *other* value: they have made a build request,
+    // and a help dump replies "here are some flags" instead of "you
+    // left out the one value a file cannot know for me" — which reads
+    // as the file having been ignored. `--help` remains one flag away
+    // for anyone who does want the full usage.
     if cli.jar.is_none() && cli.input.is_none() {
-        print_help_with_version();
-        return Ok(());
+        anyhow::bail!("no input JAR{}", missing_input_detail(&options_paths));
     }
 
     let payload = build_payload(&cli).context("building snug payload")?;
@@ -238,16 +240,22 @@ fn dry_run(cli: &Cli, embedded: &SnugEmbedded) -> Result<()> {
     Ok(())
 }
 
-/// Render clap's help text followed by snug's version. Used when no
-/// positional `<JAR>` was supplied so the user gets a useful intro
-/// instead of a `MissingRequiredArgument` error.
-fn print_help_with_version() {
-    let mut cmd = Cli::command();
-    let name = cmd.get_name().to_string();
-    let help = cmd.render_help();
-    print!("{help}");
-    println!();
-    println!("{name} {VERSION}");
+/// The tail of the missing-input error, which depends on whether any
+/// options file was actually read. Naming those files is the useful
+/// part: it turns "snug ignored my `snug.options`" into a one-line
+/// fix, and the paths are exactly the ones already announced on the
+/// `loaded options from` lines above.
+fn missing_input_detail(loaded: &[std::path::PathBuf]) -> String {
+    const HINT: &str = "hint: snug <jar> -o <exe>, or set --input in snug.options \
+                        (--help for the full list of options)";
+    if loaded.is_empty() {
+        return format!(" given\n{HINT}");
+    }
+    let names: Vec<String> = loaded.iter().map(|p| p.display().to_string()).collect();
+    format!(
+        ": {} loaded, but no --input in any of them\n{HINT}",
+        names.join(", ")
+    )
 }
 
 fn hex_lower(bytes: &[u8]) -> String {

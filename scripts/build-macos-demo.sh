@@ -104,36 +104,73 @@ fi
 
 # -------------------------------------------------------------- demo
 
+# The effective value of a scalar flag, resolved the way snug resolves it:
+# the OS-specific file first, then the generic one.
+#
+# Read back out of the files rather than hardcoded here because the point of
+# the split is a single source of truth per value. This script already
+# hardcoded the bundle path once (as `-o`), and the options file now has to
+# hold the same string — two copies of one path is precisely the drift the
+# split exists to remove.
+#
+# Handles `--flag value` and one layer of double quotes, which is what
+# options_file::load effectively hands clap. It does not reimplement
+# shell_words: a value with a backslash escape or an inline `#` is out of
+# scope for a demo script, and a wrong answer here is caught by the checks
+# below rather than silently producing a bad bundle.
+effective_flag() {
+    local name="$1"; shift
+    local file value
+    for file in "$@"; do
+        [[ -f "$file" ]] || continue
+        value="$(grep -oE "^[[:space:]]*${name}[[:space:]]+.*$" "$file" 2>/dev/null |
+            head -1 |
+            sed -e "s/^[[:space:]]*${name}[[:space:]]*//" -e 's/^"//' -e 's/"$//')"
+        if [[ -n "$value" ]]; then
+            printf '%s\n' "$value"
+            return 0
+        fi
+    done
+    return 1
+}
+
 echo "==> demo input"
 
-# Per-platform demo JAR, falling back to the shared one.
+# Which JAR gets embedded, per the options files — snug reads `--input`
+# from the same place this script does, and the build below passes no JAR
+# at all. Resolving it here (rather than trusting the build to find it)
+# is what lets the natives check below examine the JAR that is really
+# going into the bundle.
 #
-# snug's payload carries one JAR, and JavaFX has to ship its *native*
-# libraries, which are platform-specific binaries with platform-specific
-# names (`libglass.dylib` / `glass.dll` / `libglass.so`). So one JAR cannot
-# serve every platform: the Windows build keeps `snug-javafx-demo.jar` (see
+# The two demo JARs exist because snug's payload carries exactly one JAR,
+# and JavaFX has to ship its *native* libraries, which are
+# platform-specific binaries with platform-specific names
+# (`libglass.dylib` / `glass.dll` / `libglass.so`). So one JAR cannot serve
+# every platform: the Windows build keeps `snug-javafx-demo.jar` (see
 # scripts\build-release.cmd) and this one takes `snug-javafx-demo-mac.jar`.
-# The names differ by extension, so a JAR that does carry all three is not
-# broken - it is just not what the macOS demo is built from.
-DEMO_JAR_MAC="assets/snug-javafx-demo-mac.jar"
-DEMO_JAR_SHARED="assets/snug-javafx-demo.jar"
-if [[ -f "$DEMO_JAR_MAC" ]]; then
-    DEMO_JAR="$DEMO_JAR_MAC"
-elif [[ -f "$DEMO_JAR_SHARED" ]]; then
-    DEMO_JAR="$DEMO_JAR_SHARED"
-    echo "    note: $DEMO_JAR_MAC not found; falling back to $DEMO_JAR_SHARED."
-    echo "          That one carries the Windows natives, so the demo will not"
-    echo "          open a window on macOS."
-else
+# Both are committed, and both platform files name their own, so a missing
+# one is a broken checkout rather than something to work around — the
+# previous fallback to the shared JAR built a bundle that validates,
+# lints, signs, and then cannot open a window.
+if ! DEMO_INPUT="$(effective_flag --input "$OS_OPTIONS_FILE" "$OPTIONS_FILE")"; then
     cat >&2 <<EOF
-build-macos-demo: no demo JAR found. Looked for:
-                  $DEMO_JAR_MAC  (carries the macOS natives)
-                  $DEMO_JAR_SHARED
-                  Build one first, or skip the demo with --skip-cli.
+build-macos-demo: no --input in $OS_OPTIONS_FILE or $OPTIONS_FILE.
+                  snug needs an input source, and this script no longer
+                  passes one on the command line.
 EOF
     exit 1
 fi
-echo "    jar: $DEMO_JAR"
+if [[ ! -f "$DEMO_INPUT" ]]; then
+    cat >&2 <<EOF
+build-macos-demo: --input names '$DEMO_INPUT', which does not exist.
+                  On macOS that should be assets/snug-javafx-demo-mac.jar
+                  (it carries the .dylib natives); the Windows build uses
+                  assets/snug-javafx-demo.jar. Check the --input in
+                  $OS_OPTIONS_FILE.
+EOF
+    exit 1
+fi
+echo "    jar: $DEMO_INPUT"
 
 # Fail *here* rather than at the user's desk. Missing natives are invisible
 # to every other check in this script: the bundle is produced, it validates,
@@ -146,7 +183,7 @@ echo "    jar: $DEMO_JAR"
 # `NativeLibLoader` looks each library up as a classpath *resource by leaf
 # name*, so what matters is that a macOS build of each library is in the
 # JAR, not which directory it sits in. Match on the `.dylib` suffix.
-jar_names="$(unzip -Z1 "$DEMO_JAR" 2>/dev/null || true)"
+jar_names="$(unzip -Z1 "$DEMO_INPUT" 2>/dev/null || true)"
 mac_natives="$(printf '%s\n' "$jar_names" | grep -cE '(^|/)lib[^/]*\.dylib$' || true)"
 missing=""
 for required in libglass libprism_es2 libprism_sw; do
@@ -156,7 +193,7 @@ for required in libglass libprism_es2 libprism_sw; do
 done
 if [[ -n "$missing" ]]; then
     cat >&2 <<EOF
-build-macos-demo: $DEMO_JAR is missing required macOS JavaFX natives:
+build-macos-demo: $DEMO_INPUT is missing required macOS JavaFX natives:
 $missing
                   (it has $mac_natives .dylib file(s) in total)
 
@@ -199,36 +236,6 @@ for options_file in "$OPTIONS_FILE" "$OS_OPTIONS_FILE"; do
     fi
     echo "    options: $options_file"
 done
-
-# The effective value of a scalar flag, resolved the way snug resolves it:
-# the OS-specific file first, then the generic one.
-#
-# Read back out of the files rather than hardcoded here because the point of
-# the split is a single source of truth per value. This script already
-# hardcoded the bundle path once (as `-o`), and the options file now has to
-# hold the same string — two copies of one path is precisely the drift the
-# split exists to remove.
-#
-# Handles `--flag value` and one layer of double quotes, which is what
-# options_file::load effectively hands clap. It does not reimplement
-# shell_words: a value with a backslash escape or an inline `#` is out of
-# scope for a demo script, and a wrong answer here is caught by the checks
-# below rather than silently producing a bad bundle.
-effective_flag() {
-    local name="$1"; shift
-    local file value
-    for file in "$@"; do
-        [[ -f "$file" ]] || continue
-        value="$(grep -oE "^[[:space:]]*${name}[[:space:]]+.*$" "$file" 2>/dev/null |
-            head -1 |
-            sed -e "s/^[[:space:]]*${name}[[:space:]]*//" -e 's/^"//' -e 's/"$//')"
-        if [[ -n "$value" ]]; then
-            printf '%s\n' "$value"
-            return 0
-        fi
-    done
-    return 1
-}
 
 # Where the bundle goes, per the options files. This is the value that used
 # to be passed as `-o "$DEMO_APP"`.
@@ -286,7 +293,7 @@ fi
 
 echo
 echo "==> packaging the demo as a .app"
-"$STAGED_CLI" "$DEMO_JAR"
+"$STAGED_CLI"
 echo
 
 # ------------------------------------------------------------ verify
@@ -425,7 +432,7 @@ if [[ -d "$STAGED_APP" ]]; then
     rm -rf "$STAGED_APP"
 fi
 cp -R "$DEMO_APP" "$PLATFORM_DIR/"
-cp "$DEMO_JAR" "$PLATFORM_DIR/"
+cp "$DEMO_INPUT" "$PLATFORM_DIR/"
 
 echo
 echo "==> done. Release tree for $DEMO_SUBDIR:"

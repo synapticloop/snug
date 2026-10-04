@@ -142,8 +142,12 @@ pub struct Cli {
     /// override the manifest's `Main-Class` for multi-JAR builds.
     ///
     /// `--input` and the positional `[JAR|DIR]` argument are mutually
-    /// exclusive; supply one or the other. Suitable for `snug.options`
-    /// so the JAR location doesn't need to live on the command line.
+    /// exclusive *on one command line* — supplying both is an error.
+    /// Across sources it is a precedence question instead, and it
+    /// resolves like every other option: a JAR given on the command line
+    /// overrides an `--input` from an options file. So an options file
+    /// can carry a default input for a bare `snug`, while
+    /// `snug some-other.jar` still builds that one.
     #[arg(
         long = "input",
         value_name = "JAR|DIR",

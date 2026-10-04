@@ -235,6 +235,11 @@ pub fn load(path: &Path) -> Result<Vec<String>, OptionsFileError> {
     Ok(tokens)
 }
 
+/// The flag a positional JAR supersedes. `--input <JAR|DIR>` and the
+/// positional `[JAR|DIR]` are two spellings of the same slot, so the
+/// merge has to be able to reason about them as one thing.
+const INPUT_FLAG: &str = "input";
+
 /// Build the merged argv that clap should parse.
 ///
 /// The merged layout is
@@ -271,6 +276,17 @@ pub fn load(path: &Path) -> Result<Vec<String>, OptionsFileError> {
 /// The `--options <path>` flag and its value are stripped from the CLI
 /// portion so clap doesn't see them twice (the file it named has
 /// already been loaded and merged).
+///
+/// ## The positional JAR and `--input`
+///
+/// Those two are declared `conflicts_with` each other, which is a
+/// statement about one command line: `snug app.jar --input other.jar`
+/// is a genuine mistake and clap still rejects it. Across sources it is
+/// not a conflict but a precedence question, and it resolves the same way
+/// every other option does — the command line wins. A file's `--input`
+/// is therefore dropped when the command line carries a positional JAR,
+/// which is what lets an options file carry a default input for `snug`
+/// on its own while `snug some-other.jar` still builds that one instead.
 pub fn merge(raw_args: &[String], file_layers: Vec<Vec<String>>) -> Vec<String> {
     let spec = FlagSpec::from_cli();
     let cli_args = strip_options_flag(&raw_args[1..]);
@@ -278,11 +294,34 @@ pub fn merge(raw_args: &[String], file_layers: Vec<Vec<String>>) -> Vec<String> 
     // Flags already spoken for by a higher-priority source, starting
     // with the command line.
     let mut seen = spec.collect_cli_flags(&raw_args[1..]);
+
+    // A positional JAR supersedes an `--input` from a file. They are two
+    // spellings of one slot — "mutually exclusive" is a statement about a
+    // single command line, not about the command line versus a config
+    // file — so "the command line always wins" has to cover this pair too.
+    // Seeding `seen` with the flag's name reuses the existing strip path,
+    // which drops the file's `--input` *and* its value exactly as it
+    // would any other overridden flag. A command line carrying both is
+    // left alone: clap reports that conflict, which is right.
+    if spec.cli_has_positional(&raw_args[1..]) {
+        seen.insert(INPUT_FLAG.to_string());
+    }
+
     let mut layers: Vec<Vec<String>> = vec![Vec::new(); file_layers.len()];
 
     for (idx, tokens) in file_layers.iter().enumerate().rev() {
         let surviving = spec.strip_overridden(tokens, &seen);
         seen.extend(spec.collect_cli_flags(&surviving));
+        // Same precedence one tier down: a JAR in a higher-priority file
+        // beats an `--input` in a lower one. (The reverse — a higher
+        // `--input` against a lower file's bare JAR — still conflicts,
+        // because stripping a positional is not something the flag-driven
+        // walk does. No options file in the wild carries one; it would be
+        // a strange thing to write, since a file's whole purpose is to
+        // be a set of flags.)
+        if spec.cli_has_positional(&surviving) {
+            seen.insert(INPUT_FLAG.to_string());
+        }
         layers[idx] = surviving;
     }
 
@@ -475,6 +514,51 @@ impl FlagSpec {
         }
 
         names
+    }
+
+    /// Whether this token list carries a positional argument — a bare
+    /// token that is neither a flag nor some flag's value.
+    ///
+    /// The walk mirrors [`Self::collect_cli_flags`] exactly, so the two
+    /// never disagree about what a token is: same `--` handling, same
+    /// `--options` skip, same value-skipping. The one deliberate
+    /// difference is the unknown-flag case: a token starting with `-` is
+    /// never counted as a positional, even one [`Self::token_flag`]
+    /// doesn't recognise. Such a command line is going to fail parsing
+    /// regardless, and reporting "no input" for it would be a worse
+    /// message than the parse error that is already coming.
+    fn cli_has_positional(&self, args: &[String]) -> bool {
+        let mut skip_next = false;
+
+        for (idx, arg) in args.iter().enumerate() {
+            if skip_next {
+                skip_next = false;
+                continue;
+            }
+            if arg == "--" {
+                // Everything after the separator is positional, so the
+                // one thing that matters is whether anything follows it.
+                return args.len() > idx + 1;
+            }
+            if arg == "--options" {
+                skip_next = true;
+                continue;
+            }
+            if arg.starts_with("--options=") {
+                continue;
+            }
+            if let Some((canonical, attached)) = self.token_flag(arg) {
+                if !attached && self.takes_value.contains(&canonical) {
+                    skip_next = true;
+                }
+                continue;
+            }
+            if !arg.starts_with('-') {
+                return true;
+            }
+        }
+
+        false
     }
 
     /// Drop file tokens for any flag a higher-priority source also set.
@@ -1099,6 +1183,156 @@ mod tests {
                 "app.jar".to_string(),
                 "--output".to_string(),
                 "CLI.exe".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn cli_positional_jar_overrides_a_files_input() {
+        // The reason `seen` is seeded with `input`. `--input` and the
+        // positional are two spellings of one slot, and the command line
+        // has to beat the file for it the same way it beats every other
+        // flag. Left in, the file's `--input` would collide with the
+        // positional and clap would refuse the whole build.
+        let raw = args(&["snug", "other.jar", "--output", "App.exe"]);
+        let merged = merge(
+            &raw,
+            layer(vec!["--input".into(), "default.jar".into(), "--company".into(), "Co".into()]),
+        );
+        assert_eq!(
+            merged,
+            vec![
+                "snug".to_string(),
+                "--company".to_string(),
+                "Co".to_string(),
+                "other.jar".to_string(),
+                "--output".to_string(),
+                "App.exe".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn cli_positional_jar_overrides_a_files_attached_input() {
+        // Same rule, `--input=path` spelling: the flag and its value are
+        // one token, so there is no value token to leak if the strip is
+        // done by name alone.
+        let raw = args(&["snug", "other.jar"]);
+        let merged = merge(
+            &raw,
+            layer(vec!["--input=default.jar".into(), "--name".into(), "File".into()]),
+        );
+        assert_eq!(
+            merged,
+            vec![
+                "snug".to_string(),
+                "--name".to_string(),
+                "File".to_string(),
+                "other.jar".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_files_input_survives_when_the_command_line_has_no_jar() {
+        // The other direction, and the reason the feature is worth having:
+        // with no positional on the command line, the file's `--input`
+        // stands, so a bare `snug` still has something to build.
+        let raw = args(&["snug", "--output", "App.exe"]);
+        let merged = merge(&raw, layer(vec!["--input".into(), "default.jar".into()]));
+        assert_eq!(
+            merged,
+            vec![
+                "snug".to_string(),
+                "--input".to_string(),
+                "default.jar".to_string(),
+                "--output".to_string(),
+                "App.exe".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_cli_value_is_never_mistaken_for_a_positional() {
+        // The walk has to skip a flag's value, or `--input File.jar` on
+        // the command line would look like a bare positional and strip
+        // the file's own `--input` — replacing one argument with an
+        // identical one and, worse, doing it for a line whose real input
+        // came from the command line.
+        let raw = args(&["snug", "--input", "cli.jar"]);
+        let merged = merge(&raw, layer(vec!["--input".into(), "file.jar".into()]));
+        assert_eq!(merged.last().map(String::as_str), Some("cli.jar"));
+        assert_eq!(
+            merged.iter().filter(|t| t.as_str() == "file.jar").count(),
+            0,
+            "the file's --input should be gone: {merged:?}"
+        );
+    }
+
+    #[test]
+    fn a_positional_after_a_double_dash_still_counts() {
+        // `--` ends flag parsing, so a JAR after it is a JAR.
+        let raw = args(&["snug", "--", "app.jar"]);
+        let merged = merge(&raw, layer(vec!["--input".into(), "default.jar".into()]));
+        assert_eq!(
+            merged,
+            vec!["snug".to_string(), "--".to_string(), "app.jar".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_bare_double_dash_is_not_a_positional() {
+        // ...but a trailing `--` names nothing, so the file's `--input`
+        // must survive for clap to report the real problem: a missing
+        // JAR rather than a spurious conflict. (File layers precede the
+        // command line in the merged argv, so the `--` lands last.)
+        let raw = args(&["snug", "--"]);
+        let merged = merge(&raw, layer(vec!["--input".into(), "default.jar".into()]));
+        assert_eq!(
+            merged,
+            vec![
+                "snug".to_string(),
+                "--input".to_string(),
+                "default.jar".to_string(),
+                "--".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unknown_flag_does_not_suppress_a_files_input() {
+        // An unrecognised flag fails parsing regardless. It must not also
+        // be read as a bare positional, or the build would first lose the
+        // file's `--input` and *then* fail — two problems where the parse
+        // error was the only real one.
+        let raw = args(&["snug", "--nonsense"]);
+        let merged = merge(&raw, layer(vec!["--input".into(), "default.jar".into()]));
+        assert!(
+            merged.windows(2).any(|w| w == ["--input", "default.jar"]),
+            "the file's --input should survive: {merged:?}"
+        );
+    }
+
+    #[test]
+    fn a_positional_in_a_higher_file_beats_a_lower_files_input() {
+        // Precedence applies between tiers too, not only at the command
+        // line: the OS-specific file outranks the generic one, so its JAR
+        // wins and the generic `--input` goes.
+        let raw = args(&["snug", "--output", "App.exe"]);
+        let merged = merge(
+            &raw,
+            vec![
+                vec!["--input".into(), "generic.jar".into()],
+                vec!["app.jar".into()],
+            ],
+        );
+        assert_eq!(
+            merged,
+            vec![
+                "snug".to_string(),
+                "app.jar".to_string(),
+                "--output".to_string(),
+                "App.exe".to_string(),
             ]
         );
     }

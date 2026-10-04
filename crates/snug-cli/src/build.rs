@@ -692,9 +692,14 @@ mod tests {
 
     fn tempdir() -> std::path::PathBuf {
         let base = std::env::temp_dir();
+        // The counter is load-bearing, not belt-and-braces — see the note
+        // on the same helper in `options_file.rs`. pid + nanos collides
+        // when parallel tests read the same (coarse) macOS clock tick.
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let unique = format!(
-            "snug-test-{}-{}",
+            "snug-test-{}-{}-{}",
             std::process::id(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()

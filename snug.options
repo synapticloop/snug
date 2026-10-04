@@ -93,4 +93,5 @@
 # `ALL-UNNAMED` is the correct grant for a classpath-launched JavaFX, and it
 # matters: JavaFX 25 calls `System.load` for its natives, which is a
 # restricted method, and a future JDK will block it outright.
+
 --jvm-arg --enable-native-access=ALL-UNNAMED
