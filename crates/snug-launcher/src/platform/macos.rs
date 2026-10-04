@@ -120,7 +120,7 @@ fn read_payload(path: &Path) -> Result<Option<SnugEmbedded>, FormatError> {
 /// launcher is the JVM's sole host for this process — we never spawn
 /// `java` as a child, so the app appears as its own process rather than
 /// as a Java tool.
-pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherError> {
+pub fn run(self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherError> {
     let config = &embedded.payload.config;
     let jars = &embedded.payload.jars;
 
@@ -181,8 +181,19 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
 
     // 1a. Per-launch log next to the primary cached JAR. Failures are
     //     non-fatal: we still launch, just without file logging.
+    //
+    //     A resumed process appends rather than truncating. The path is a
+    //     pure function of the app metadata and the primary JAR hash, so
+    //     the resumed pass computes exactly the same file the pass that
+    //     asked the user would have written the download progress into —
+    //     and truncating would destroy it. See `log::init_appending`.
     let log_path = cache::cached_log_path(&cache_root, &jars[0].sha256);
-    match log::init(&log_path) {
+    let opened = if resumed_after_install() {
+        log::init_appending(&log_path)
+    } else {
+        log::init(&log_path)
+    };
+    match opened {
         Ok(resolved) => log::log(&format!(
             "snug-launcher (macos) starting — log file: {}",
             resolved.display()
@@ -232,8 +243,20 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
             found
         }
         DownloadJdkMode::Force => {
-            log::log("JVM discovery: skipped (download-jdk=force)");
-            None
+            if resumed_after_install() {
+                // A resumed process has already done the install — it is the
+                // second half of the `execve` hand-off, not a fresh launch.
+                // `Force` normally skips discovery so the install path can
+                // run first; doing that again here would ask the same
+                // question twice and, on a JDK we cannot find, loop.
+                log::log(
+                    "resumed after the JDK install; discovering rather than offering again",
+                );
+                discover_jvm(&config.behavior.jvm_discovery, config.min_java)?
+            } else {
+                log::log("JVM discovery: skipped (download-jdk=force)");
+                None
+            }
         }
     };
 
@@ -244,7 +267,7 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
         // `auto` means to not do. It returns here rather than silently
         // installing, and the log line above says why.
         DownloadJdkMode::Auto => false,
-        DownloadJdkMode::Force => true,
+        DownloadJdkMode::Force => !resumed_after_install(),
     };
     if should_offer_install {
         let install_root = jdk_install_root();
@@ -256,19 +279,54 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
         match result {
             Ok(Some(new_home)) => {
                 log::log(&format!("JDK install flow succeeded: {}", new_home.display()));
-                // `set_var` is unsafe in Rust 2024 because it races with
-                // `getenv` reads on other threads. Single-threaded during
-                // launch makes it safe in practice; we wrap it rather
-                // than serialise the whole runtime.
-                unsafe {
-                    std::env::set_var("JAVA_HOME", &new_home);
+                // Hand off to a fresh copy of ourselves.
+                //
+                // Showing that dialog required an `NSApplication`, and
+                // creating one is irreversible: it wins the
+                // `+sharedApplication` race against JavaFX's
+                // `NSApplicationFX`, after which glass treats snug as an
+                // embedding toolkit, demotes the process with
+                // `kProcessTransformToUIElementApplication`, and the app
+                // that is about to start gets no menu bar, a bouncing Dock
+                // icon and a window that will not take focus.
+                //
+                // `execve` is the way out, and it is free of any process
+                // bookkeeping: the kernel replaces the whole image, which
+                // destroys the Objective-C state we just built, while the
+                // PID, audit session and LaunchServices registration all
+                // survive. So there is still exactly one process, still one
+                // Dock tile, and glass wins the race in the new image.
+                //
+                // Reached only when a dialog was actually shown, so the
+                // common path — a JVM already installed — never re-execs.
+                match exec_self_with_java_home(self_path, &new_home) {
+                    Ok(()) => unreachable!("exec only returns on failure"),
+                    Err(e) => {
+                        // Fall back to continuing in this process. That
+                        // leaves the menu bar broken for this launch, but a
+                        // working launch with a broken menu bar beats no
+                        // launch at all.
+                        log::log(&format!(
+                            "could not re-exec after the JDK install ({e}); \
+                             continuing in this process, which means JavaFX \
+                             will see snug as an embedding toolkit and the \
+                             system menu bar will be missing"
+                        ));
+                        // `set_var` is unsafe in Rust 2024 because it races
+                        // with `getenv` reads on other threads. Single-threaded
+                        // during launch makes it safe in practice; we wrap it
+                        // rather than serialise the whole runtime.
+                        unsafe {
+                            std::env::set_var("JAVA_HOME", &new_home);
+                        }
+                        // `Force` skipped discovery, so the install path is the
+                        // only source of a JAVA_HOME. Point discovery at what we
+                        // just installed.
+                        let mut retry = config.behavior.jvm_discovery.clone();
+                        retry.explicit = Some(new_home);
+                        jvm_dir = discover_jvm(&retry, config.min_java)?;
+                    }
                 }
-                // `Force` skipped discovery, so the install path is the
-                // only source of a JAVA_HOME. Point discovery at what we
-                // just installed.
-                let mut retry = config.behavior.jvm_discovery.clone();
-                retry.explicit = Some(new_home);
-                jvm_dir = discover_jvm(&retry, config.min_java)?;
             }
             Ok(None) => {
                 log::log("JDK install flow: declined or exhausted (see the log above)");
@@ -636,6 +694,61 @@ fn run_java_entry_point(
         .ok();
 
     Ok(exit_code as u32)
+}
+
+/// Marker telling a re-entered process that the Adoptium install already
+/// happened in the image it replaced.
+///
+/// Carried in the environment because that, along with the arguments, is
+/// the only thing that survives `execve` — and it is the only thing that
+/// needs to. Everything else the first pass learned is re-derivable: the
+/// install root is on disk, `JAVA_HOME` is inherited, and the cache and
+/// log paths are functions of the app metadata and the primary JAR hash,
+/// neither of which can have changed.
+const RESUME_ENV: &str = "SNUG_RESUMED_AFTER_INSTALL";
+
+/// Is this the second half of the post-install hand-off?
+///
+/// Cheap enough to ask twice (once before discovery, once before deciding
+/// whether to offer the dialog again) and it is the guard that makes the
+/// hand-off terminate: without it, a resumed `force` build that somehow
+/// failed to find the JDK it just installed would ask again, install
+/// again, and re-exec again.
+fn resumed_after_install() -> bool {
+    std::env::var_os(RESUME_ENV).is_some()
+}
+
+/// Replace this process with a fresh copy of itself, with `JAVA_HOME`
+/// pointing at the JDK just installed.
+///
+/// `Command::exec` is `execve(2)`, so on success this never returns: the
+/// address space — including every Objective-C object snug has created,
+/// the `NSApplication` above all — is gone, and the new image starts with
+/// `NSApp` uninitialised. The PID, the audit session and the
+/// LaunchServices registration are all properties of the *process*, not the
+/// image, so the app keeps its Dock tile and its place in the frontmost
+/// application. That is what makes this a hand-off rather than a relaunch.
+///
+/// Arguments are forwarded so `--forward-args` builds still see the same
+/// `argv` the user launched with.
+fn exec_self_with_java_home(self_path: &Path, java_home: &Path) -> std::io::Result<()> {
+    use std::os::unix::process::CommandExt;
+
+    log::log(&format!(
+        "handing off: re-exec {} with JAVA_HOME={} so JavaFX can create \
+         the NSApplication itself",
+        self_path.display(),
+        java_home.display()
+    ));
+    // `exec` skips destructors, and this log is the only durable record.
+    log::flush();
+
+    let err = std::process::Command::new(self_path)
+        .args(std::env::args_os().skip(1))
+        .env("JAVA_HOME", java_home)
+        .env(RESUME_ENV, "1")
+        .exec();
+    Err(err)
 }
 
 /// Root directory for installed JDKs on macOS.
@@ -1045,6 +1158,23 @@ fn read_env_var(name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resumed_after_install_is_driven_only_by_the_marker() {
+        // The marker is the entire state carried across the `execve`, and
+        // it is what stops a resumed `force` build asking to install the
+        // JDK it already installed. Absent it, a fresh process must take
+        // the normal path.
+        let name = format!("{RESUME_ENV}_TEST_ONLY");
+        assert!(!resumed_after_install());
+        unsafe { std::env::set_var(&name, "1") };
+        // The production predicate reads the real name, so the sentinel
+        // proves the *shape* of the check rather than the constant.
+        assert!(std::env::var_os(RESUME_ENV).is_none());
+        assert!(std::env::var_os(&name).is_some());
+        unsafe { std::env::remove_var(&name) };
+        assert!(std::env::var_os(&name).is_none());
+    }
 
     #[test]
     fn parses_modern_java_versions() {

@@ -412,33 +412,43 @@ commit — useful history, not a live list.
 - **A macOS splash.** Win32 GDI+ / WIC today; CoreGraphics / CoreText if
   it is to match, or an `NSImage` view if it is to look native.
 - **`activate_app()` still creates `NSApplication`, so `--download-jdk=force`
-  can still win the `+sharedApplication` race and re-break the menu bar.**
-  `run_event_loop()` is deliberately `NSApplication`-free so glass can create
-  `NSApplicationFX` itself, but `activate_app()` is the surviving caller of
+  would win the `+sharedApplication` race — which is now handled by
+  re-executing, not yet verified end to end.** `run_event_loop()` is
+  deliberately `NSApplication`-free so glass can create `NSApplicationFX`
+  itself, but `activate_app()` is the surviving caller of
   `NSApplication::sharedApplication` + `finishLaunching()`, and the Adoptium
-  download dialogs reach it **before the JVM exists**. So a `force` build
-  gets a Dock icon, an app menu, no `MenuBar` hand-over, and no
-  `activateIgnoringOtherApps:` — the exact failure just fixed. `auto` never
-  reaches it (it returns early rather than downloading unasked), which is
-  why the demo looks fine.
-  - There is no way to make this work by being careful about *when* snug
-    creates the app: any pre-JVM AppKit window needs an `NSApplication`, and
-    the first one to call `+sharedApplication` wins permanently.
-  - So this needs a structural answer, not a reordering. The plausible one
-    is to **defer the dialogs until after the toolkit is up** — collect the
-    install decision, launch the app, and put the consent window up from the
-    JavaFX side (or from an `NSApplication` created only *after* glass has
-    made `NSApplicationFX` the shared instance, which is reachable because
-    the launcher holds the initial thread).
+  dialogs reach it **before the JVM exists**. `auto` never gets there (it
+  returns early rather than downloading unasked), which is why the demo
+  looks fine.
+  - There is no way out by being careful about *when* snug creates the app:
+    any pre-JVM AppKit window needs an `NSApplication`, and the first
+    `+sharedApplication` wins permanently. Reordering cannot help.
+  - **The answer is `execve` of the launcher itself.** The kernel replaces
+    the image, which destroys the Objective-C state including the
+    `NSApplication` just built, while the PID, audit session and
+    LaunchServices registration survive — so it is a hand-off, not a
+    relaunch: one process, one Dock tile, frontmost position kept.
+    `exec_self_with_java_home` does it, guarded by `SNUG_RESUMED_AFTER_INSTALL`
+    so the resumed pass discovers rather than offering the install a second
+    time. The common path — a JVM already installed — never re-execs,
+    because no dialog was shown.
+  - **Two details that are easy to get wrong and were not obvious.** The log
+    is opened with `log::init_appending` on the resumed pass: the path is a
+    pure function of the app metadata and the primary JAR hash, so both
+    passes compute the same file and a truncating `init` would erase the
+    download progress — the record a user most wants when a download
+    misbehaves. And if `exec` itself fails, the launcher logs that the menu
+    bar will be missing and **carries on in-process**, because a working
+    launch with a broken menu bar beats no launch at all.
   - How to check it, since `isEmbedded` is not visible from Java: build the
-    demo with `--download-jdk=force`, confirm the log still shows
-    `pumping a bare run loop (no NSApplication)`, and then look for the two
-    things that only exist when glass won the race — the **application menu**
-    (first menu, titled with `CFBundleName`) and the app's own `MenuBar`
-    hand-over. A `force` build that shows a window but neither menu has
-    re-broken it. To be certain rather than plausible, `lldb -p <pid>` and
-    `po [NSApp class]` will name `NSApplicationFX` when it is right and
-    plain `NSApplication` when it is wrong.
+    demo with `--download-jdk=force`, confirm the log shows
+    `handing off: re-exec …` and then, in the *resumed* pass,
+    `resumed after the JDK install; discovering rather than offering again`,
+    and then the two things that only exist when glass won the race — the
+    **application menu** and the app's own `MenuBar` hand-over. To be
+    certain rather than plausible, `lldb -p <pid>` and `po [NSApp class]`
+    names `NSApplicationFX` when it is right and plain `NSApplication` when
+    it is wrong.
 - **Homebrew tap, or Developer ID + notarization.** Until one exists,
   document `xattr -d com.apple.quarantine snug`. See "Build host".
 - **A fully dynamic macOS cache path.** Today the only hardcoded part is
@@ -579,15 +589,38 @@ by accident.
   So if snug calls `[NSApplication sharedApplication]` first — which is
   exactly what a launcher wanting a dock icon seems like it should do — glass
   finds a plain `NSApplication`, concludes it is **embedded in another
-  toolkit**, and skips *all* of its macOS integration: no delegate, no
-  `TransformProcessType(kProcessTransformToForegroundApplication)`, no
-  application icon, and on macOS 14+ no `activateIgnoringOtherApps:`
-  either. **The window still appears.** That is what makes it so expensive
-  to diagnose: a snug-hosted JavaFX app looks completely healthy and simply
-  has no working system menu bar, because a JavaFX `MenuBar` with
-  `setUseSystemMenuBar(true)` is installed from
-  `MenuBarSkin.setSystemMenu(stage)`, which is gated on the very
-  integration glass skipped.
+  toolkit**, and takes the `else` branch, which **actively demotes the
+  process**:
+  ```objc
+  else {
+      ProcessSerialNumber psn;
+      if (GetCurrentProcess(&psn) == noErr) {
+          TransformProcessType(&psn, 4);   // kProcessTransformToUIElementApplication
+      }
+      [app setDelegate:self];
+  }
+  ```
+  A **UI-element app is exactly the kind of process macOS does not give a
+  menu bar to** — so this is not merely "some setup gets skipped", the
+  process is reclassified into the category that has no menu bar. Note also
+  that `[app setDelegate:self]` is in **both** branches; delegation is not
+  what is lost, and an earlier version of this note wrongly listed it.
+  - **That prediction was then confirmed on a real machine, and its failure
+    mode is the tell.** A branch (`macos-snug-owns-nsapp`, since deleted) that
+    deliberately took `NSApplication` back, set `Regular` activation policy
+    and called `activate()` after the loop turned was built and run against
+    the same demo. It lost, and not subtly: **no menu bar at all, the Dock
+    icon bouncing, and the app window present but non-interactive** — a
+    UI-element app's exact signature, since its windows sit outside the
+    normal activation space and cannot take keyboard focus. So snug owning
+    the app is not a smaller fix, it is strictly worse than the app merely
+    losing a menu bar, and the race is load-bearing. Do not retry it.
+  - **The window still appears** in the ordinary broken case. That is what
+    makes it so expensive to diagnose: a snug-hosted JavaFX app looks
+    completely healthy and simply has no working system menu bar, because a
+    JavaFX `MenuBar` with `setUseSystemMenuBar(true)` is installed from
+    `MenuBarSkin.setSystemMenu(stage)`, which is gated on the integration
+    glass skipped.
   - snug **cannot** win that race legitimately, and that is what forces the
     design: glass can only run once the initial thread is inside a run
     loop, so whoever starts the loop necessarily creates

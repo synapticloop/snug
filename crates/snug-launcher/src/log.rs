@@ -31,13 +31,30 @@ static INITIALISED_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
 /// fresh file). Creates the parent directory if missing. Returns the
 /// resolved path on success.
 pub fn init(log_path: &Path) -> std::io::Result<PathBuf> {
+    open(log_path, true)
+}
+
+/// Open `log_path` for write, **appending** to whatever is already there.
+///
+/// For the macOS post-install re-entry only, where the launcher `execve`s
+/// *itself* after the Adoptium dialogs. That is a continuation of one
+/// user action rather than a second launch, and it re-derives the very
+/// same path (same cache root, same primary JAR hash) — so a truncating
+/// `init` would erase the download progress recorded by the pass that did
+/// the asking. That is precisely the record a user wants when a download
+/// misbehaves, so it must survive the hand-off.
+pub fn init_appending(log_path: &Path) -> std::io::Result<PathBuf> {
+    open(log_path, false)
+}
+
+fn open(log_path: &Path, truncate: bool) -> std::io::Result<PathBuf> {
     if let Some(parent) = log_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
-        .truncate(true)
+        .truncate(truncate)
         .open(log_path)?;
     *FILE.lock().unwrap() = Some(file);
     *INITIALISED_PATH.lock().unwrap() = Some(log_path.to_path_buf());
