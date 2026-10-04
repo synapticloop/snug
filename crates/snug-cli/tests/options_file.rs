@@ -592,3 +592,120 @@ fn explicit_options_flag_ignores_the_os_file() {
         "the OS file must not be consulted alongside --options: {stderr}"
     );
 }
+
+// ---- The repository's own options files -------------------------------
+//
+// snug.options plus one file per platform is what this project's own
+// demo builds run on, and both release scripts depend on it working:
+// scripts\build-release.cmd passes no -o and no --options, so on Windows
+// the `.exe` path has to arrive from snug.windows.options, and
+// scripts/build-macos-demo.sh likewise relies on snug.macos.options.
+//
+// Neither can be exercised from the wrong host, so this resolves the real
+// files in the repo for *both* platform tokens and parses the result. That
+// is the property that actually matters: the merged argv must be valid for
+// every platform, not just the one running the test.
+
+fn repo_root() -> PathBuf {
+    // <root>/crates/snug-cli -> <root>
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("crates/snug-cli lives two levels below the repo root")
+        .to_path_buf()
+}
+
+/// Resolve the repo's real options files for `os` and return the output
+/// path snug would build, or `None` when no `--output` is configured.
+///
+/// The returned `Result` is clap's: a merged argv that does not parse is
+/// itself the failure this is looking for, so it is not flattened away.
+fn effective_repo_output(os: &str) -> Result<Option<PathBuf>, clap::Error> {
+    use clap::Parser;
+    use snug_cli::cli::Cli;
+
+    let root = repo_root();
+    let raw: Vec<String> = ["snug", "demo.jar"].iter().map(|s| s.to_string()).collect();
+
+    let paths = options_file::resolve_all(&raw, &root, None, os);
+    let mut layers = Vec::with_capacity(paths.len());
+    for p in &paths {
+        layers.push(options_file::load(p).expect("repo options files must parse"));
+    }
+
+    let merged = options_file::merge(&raw, layers);
+    let cli = Cli::try_parse_from(merged)?;
+    Ok(cli.output.map(|o| if o.is_absolute() { o } else { root.join(o) }))
+}
+
+#[test]
+fn repo_options_files_merge_to_a_valid_argv_for_every_platform() {
+    // The core guarantee behind both release scripts. A duplicated or
+    // conflicting flag across the two files lands here as a clap error
+    // ("cannot be used multiple times") rather than at the user's desk.
+    for os in ["macos", "windows", "linux"] {
+        effective_repo_output(os)
+            .unwrap_or_else(|e| panic!("merged argv for `{os}` did not parse: {e}"));
+    }
+}
+
+#[test]
+fn each_platform_gets_the_output_for_its_own_artefact() {
+    let root = repo_root();
+
+    let macos = effective_repo_output("macos").unwrap().expect("macos sets --output");
+    assert_eq!(
+        macos,
+        root.join("assets/snug-javafx-demo.app"),
+        "a macOS build must name a .app bundle, or snug writes a Windows PE"
+    );
+
+    let windows = effective_repo_output("windows").unwrap().expect("windows sets --output");
+    assert_eq!(
+        windows,
+        root.join("assets/snug-javafx-demo.exe"),
+        "a Windows build must name the .exe build-release.cmd asserts on"
+    );
+}
+
+#[test]
+fn the_shared_file_carries_no_output() {
+    // A platform-specific value in the shared file is precisely the
+    // problem the per-OS tier exists to fix: it reads as though it applies
+    // everywhere, and it does not. This also keeps the two spellings of the
+    // demo's output from drifting apart in one file while the other
+    // silently keeps the old one.
+    let shared = std::fs::read_to_string(repo_root().join("snug.options")).expect("snug.options");
+    let offenders: Vec<&str> = shared
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#') && l.starts_with("--output"))
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "snug.options should hold no --output; it belongs in snug.<os>.options. Found: {offenders:?}"
+    );
+}
+
+#[test]
+fn the_platform_files_agree_on_which_value_differs() {
+    // Guard the two files against drifting apart: they should set the same
+    // set of flags, differing only in the value. If a future edit adds
+    // `--min-java 21` to one of them and not the other, that asymmetry is
+    // either a bug or a decision worth making deliberately.
+    let root = repo_root();
+    let read = |name: &str| -> Vec<String> {
+        options_file::load(&root.join(name))
+            .unwrap_or_else(|e| panic!("{name} must parse: {e}"))
+            .into_iter()
+            .filter(|t| t.starts_with("--"))
+            .map(|t| t.split('=').next().unwrap_or(&t).to_string())
+            .collect()
+    };
+    let macos = read("snug.macos.options");
+    let windows = read("snug.windows.options");
+    assert_eq!(
+        macos, windows,
+        "snug.macos.options and snug.windows.options should declare the same flags"
+    );
+}

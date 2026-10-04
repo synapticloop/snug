@@ -892,6 +892,23 @@ by accident.
     for `--jvm-arg` would *duplicate* a JVM argument rather than
     deduplicate it. Candidates are matched with `is_file()`, so a
     directory that happens to share a file's name is skipped.
+  - **This repo's own demo builds use the tier, and `snug.options`
+    deliberately carries no `--output`.** The value lives in
+    `snug.windows.options` (`.exe`) and `snug.macos.options` (`.app`),
+    because a platform-specific string in the shared file reads as though
+    it applied everywhere and does not — which is the exact problem the
+    split exists to fix. Both release scripts pass **no `-o` and no
+    `--options`** and rely on the implicit CWD lookup:
+    `scripts\build-release.cmd` runs `snug.exe assets\snug-javafx-demo.jar`
+    and then asserts `assets\snug-javafx-demo.exe` exists;
+    `build-macos-demo.sh` reads the path back out of the files via its own
+    `effective_flag` helper rather than hardcoding it. So the string lives
+    in exactly one place, and each script fails loudly if its file is
+    missing. `crates/snug-cli/tests/options_file.rs` locks this down by
+    resolving the repo's real files for `macos`, `windows` *and* `linux`
+    and parsing the merged argv for each — the Windows half cannot be
+    exercised from a macOS host, which is why it is a test rather than a
+    manual check.
   - `resolve_all` returns a **`Vec<PathBuf>` ordered lowest priority
     first** (`snug.options`, then the OS file), and `main.rs` layers them
     in that order. One option per line, parsed as shell-like tokens (so

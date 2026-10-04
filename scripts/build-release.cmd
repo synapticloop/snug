@@ -13,8 +13,10 @@ REM      The CLI embed_bytes!()s this exact file; cargo tracks it by content,
 REM      so step 3 picks up the change automatically.
 REM   3. (cargo | cargo zig)build --release -p snug-cli
 REM   4. target\...\snug.exe assets\snug-javafx-demo.jar
-REM      Reads snug.options (exe dir first, then CWD), writes
-REM      assets\snug-javafx-demo.exe.
+REM      Reads snug.options for the shared metadata, then snug.windows.options
+REM      for the platform-specific --output, and writes
+REM      assets\snug-javafx-demo.exe. The exe dir (target\release\) holds no
+REM      options file, so the CWD copies are the ones read.
 REM   5. Verify snug.exe contains the stub bytes we just produced
 REM      (scripts\verify-embedded-stub.ps1; sha256 substring check).
 REM   6. (cargo | cargo zig)build --release -p snug-launcher --bin snug_preview --bin stamp_preview_icon
