@@ -860,6 +860,16 @@ pub(crate) fn progress(
 
     let w = layout::PROGRESS_W;
     let h = layout::PROGRESS_H;
+    // NOTE: deliberately does **not** create an `NSApplication`, unlike
+    // `show_window` and `preview_picker`.
+    //
+    // On the launch path this window always follows a dialog, which has
+    // already created one — so reaching here without one means the caller
+    // is a preview, and the preview has its own activation. Creating an
+    // `NSApplication` from here would be the one thing guaranteed to win
+    // the `+sharedApplication` race against `NSApplicationFX` and cost the
+    // launched app its menu bar. If a future flow can reach this window
+    // with no prior dialog, fix that flow, not this function.
     let window = new_window(mtm, w, h);
     window.setTitle(&NSString::from_str(&p.heading));
     let Some(content) = window.contentView() else {
@@ -1049,11 +1059,52 @@ pub fn preview_picker(
     languages: &[&str],
 ) -> Option<(usize, usize)> {
 
-    let Some(mtm) = MainThreadMarker::new() else {
-        return None;
-    };
     if dialogs.is_empty() {
         return None;
+    }
+
+    // Become a real application before making a window.
+    //
+    // Without this the window is ordered front but never becomes key or
+    // active, so it takes no clicks — it is visible and completely inert,
+    // which is the worst possible failure mode for a tool whose whole job
+    // is to be clicked.
+    //
+    // This is the one place in the crate that may own an `NSApplication`,
+    // and it is safe here *precisely because* nothing else is competing:
+    // no JavaFX in the process means no `NSApplicationFX` in the
+    // `+sharedApplication` race, no `kProcessTransformToUIElementApplication`
+    // demotion, and no menu bar to lose. The mirror image of the problem
+    // the launcher's own event loop goes to great lengths to avoid.
+    let Some(mtm) = activate_app() else {
+        return None;
+    };
+    let app = NSApplication::sharedApplication(mtm);
+    // `activate_app` did the launch half; a process started from a
+    // terminal is still not the frontmost application, so ask to be.
+    app.activate();
+    // Put the mascot in the Dock as well, so a previewer started from a
+    // terminal shows something better than the generic application tile.
+    //
+    // This has to be `setApplicationIconImage:` rather than a resource:
+    // macOS does not read an icon out of a bare Mach-O the way Windows
+    // reads `MAINICON`, so a non-bundled executable has no other way to
+    // get a custom Dock icon. Which also means this is the one place the
+    // mascot appears in three roles at once — Dock tile, picker header
+    // and every dialog body.
+    if let Some(image) = mascot_image() {
+        let mut dock_icon = image.clone();
+        // The Dock draws its tile at roughly 128pt. Handing it the
+        // 1024pt original makes AppKit resample on every repaint for no
+        // visible gain.
+        dock_icon.setSize(NSSize {
+            width: 128.0,
+            height: 128.0,
+        });
+        // SAFETY: `setApplicationIconImage:` is a documented method taking
+        // an optional image and requiring the main thread, which `mtm` is
+        // proof of.
+        unsafe { app.setApplicationIconImage(Some(&dock_icon)) };
     }
 
     // Row geometry, laid out from the top down because the origin is
@@ -1097,9 +1148,27 @@ pub fn preview_picker(
     };
 
     y = put(&mut y, TITLE_H, GAP);
+    // The mascot goes beside the title, the way the Windows picker's
+    // header icon sits above its subtitle. A smaller square than the
+    // dialogs use: this is a header, not a dialog body.
+    const PICKER_MASCOT: f64 = 48.0;
     let title = label(mtm, "snug — dialog preview", true);
     title.setFrame(rect(margin, y, w - 2.0 * margin, TITLE_H));
     content.addSubview(&title);
+    if let Some(image) = mascot_image() {
+        let view = NSImageView::initWithFrame(
+            NSImageView::alloc(mtm),
+            rect(
+                w - margin - PICKER_MASCOT,
+                y - (TITLE_H - PICKER_MASCOT) / 2.0,
+                PICKER_MASCOT,
+                PICKER_MASCOT,
+            ),
+        );
+        view.setImageScaling(NSImageScaling::ScaleProportionallyUpOrDown);
+        view.setImage(Some(&image));
+        content.addSubview(&view);
+    }
 
     y = put(&mut y, SUB_H, GAP);
     let sub = label(
