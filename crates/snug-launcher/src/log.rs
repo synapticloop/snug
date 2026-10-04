@@ -111,6 +111,21 @@ pub fn debug(msg: &str) {
     }
 }
 
+/// Flush the log file to disk.
+///
+/// Called before the process exits, because the launcher ends with
+/// `std::process::exit` when the app it wrapped has finished, which skips
+/// every destructor. Individual writes already flush, so this is belt and
+/// braces — but the one line that explains why the process exited is the
+/// one you will not want to lose.
+pub fn flush() {
+    if let Ok(mut guard) = FILE.lock() {
+        if let Some(file) = guard.as_mut() {
+            let _ = file.flush();
+        }
+    }
+}
+
 /// Append a timestamped line to the log file (and mirror to stderr).
 /// If `init` has not been called, the call still echoes to stderr so
 /// nothing is lost.

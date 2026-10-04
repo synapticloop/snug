@@ -367,23 +367,114 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
     log::log(&format!(
         "requesting JNI {jni_label} from the discovered JVM (Java {discovered_major:?})"
     ));
+    // 5. Collect the VM options. `InitArgs` is built later, on the worker
+    //    thread, because it holds raw pointers into the C strings and so is
+    //    not `Send` — only plain owned strings cross the boundary.
+    let mut jvm_options: Vec<String> = config.jvm_args.clone();
+    jvm_options.push(format!("-Djava.class.path={}", classpath.display()));
+
+    // 6. Create the VM on a worker thread, and give the process's
+    //    *initial* thread back to AppKit.
+    //
+    //    This split is the whole reason a GUI app works here. AppKit
+    //    requires the process's initial thread to run the event loop,
+    //    but `JNI_CreateJavaVM` makes its caller the Java main thread —
+    //    and Java's `main` parks on a latch for the life of the app, so
+    //    the initial thread is never free. AppKit then never delivers
+    //    `applicationDidFinishLaunching:`, `PlatformImpl.startup` never
+    //    returns, the `JavaFX Application Thread` is never created and no
+    //    window appears. No exception, nothing in the log. It is not
+    //    JavaFX-specific either: AWT hangs the same way on `JFrame`.
+    //
+    //    So the worker owns the VM — creating it, running `main`, and
+    //    destroying it, which JNI requires to be the same thread that
+    //    created it — while this thread runs the AppKit loop, exactly as
+    //    a Cocoa app does. The worker stops the loop on every exit path,
+    //    including failures, or this thread would block forever.
+    let libjvm_path = libjvm.clone();
+    let main_class_for_worker = main_class_name.clone();
+    let worker = std::thread::Builder::new()
+        .name("snug-jvm".to_string())
+        .spawn(move || {
+            match run_java_entry_point(
+                jni_version,
+                jvm_options,
+                libjvm_path,
+                main_class_for_worker,
+                argv_strings,
+            ) {
+                Ok(code) => {
+                    // The app finished, so the launcher is done. Exit the
+                    // process rather than unwinding: the main thread is
+                    // inside `NSApplication::run()`, and the only clean
+                    // way out of that is a main-thread `stop:` that this
+                    // thread is not allowed to issue. `exit` sidesteps
+                    // the thread affinity entirely and is what a launcher
+                    // wants anyway — the app it wrapped has already run
+                    // its course.
+                    //
+                    // It also settles the teardown: `DestroyJavaVM` waits
+                    // for non-daemon threads that a GUI toolkit keeps
+                    // alive (an AppKit run loop, a keep-alive thread), so
+                    // waiting for it before exiting is how "close the
+                    // window and the process never goes away" happens.
+                    // The log is flushed on every line, so nothing is lost.
+                    log::debug("jvm: app finished; exiting the process");
+                    crate::log::flush();
+                    std::process::exit(code as i32);
+                }
+                Err(e) => {
+                    // A failure is reported through the normal path so the
+                    // caller can format it; that returns to `run()` and
+                    // exits *without* the event loop having been started.
+                    Err(e)
+                }
+            }
+        })
+        .map_err(|e| LauncherError::LibraryLoad {
+            library: "worker thread".to_string(),
+            message: e.to_string(),
+        })?;
+
+    crate::appkit::run_event_loop();
+
+    worker
+        .join()
+        .map_err(|_| LauncherError::LibraryLoad {
+            library: "jvm worker".to_string(),
+            message: "worker thread panicked".to_string(),
+        })?
+}
+
+/// Create the VM, run the app's entry point, and tear the VM down.
+///
+/// Runs on a worker thread, **not** the process's main thread — see the
+/// call site in `run` for why that matters. `DestroyJavaVM` has to happen
+/// on the thread that created the VM, so both ends live here together.
+fn run_java_entry_point(
+    jni_version: JNIVersion,
+    jvm_options: Vec<String>,
+    libjvm_path: PathBuf,
+    main_class_name: String,
+    argv_strings: Vec<String>,
+) -> Result<u32, LauncherError> {
+    // Built here rather than on the caller: `InitArgs` holds raw pointers
+    // into its C strings and is not `Send`, so it cannot cross the thread
+    // boundary. Only the owned `Vec<String>` does.
     let mut builder = InitArgsBuilder::new().version(jni_version);
-    for arg in &config.jvm_args {
+    for arg in &jvm_options {
         builder = builder.option(arg.clone());
     }
-    builder = builder.option(format!("-Djava.class.path={}", classpath.display()));
     let init_args = builder
         .build()
         .map_err(|e| LauncherError::JniInit(e.to_string()))?;
 
-    // 6. Create the JVM by loading libjvm.dylib directly.
-    let libjvm_path = libjvm.clone();
-    log::debug("jni: creating the VM (this loads libjvm.dylib)");
+    log::debug("jni: creating the VM on the worker thread (loads libjvm.dylib)");
     let vm = JavaVM::with_libjvm(init_args, || {
         Ok::<_, jni::errors::StartJvmError>(libjvm_path.as_os_str())
     })
     .map_err(|e| LauncherError::JniCreate(e.to_string()))?;
-    log::debug("jni: VM created; attaching the calling thread");
+    log::debug("jni: VM created; attaching the worker thread");
 
     // 7. Attach, resolve Main-Class, build the String[] args, and invoke
     //    Java's entry point synchronously.
@@ -537,11 +628,27 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
             }
         })?;
 
-    // 8. Best-effort teardown. DestroyJavaVM waits for non-daemon threads;
-    //    on a clean main() return there shouldn't be any.
-    log::debug("jvm: destroying the VM (waits for non-daemon threads)");
-    let _ = unsafe { vm.destroy() };
-    log::debug("jvm: destroyed");
+    // 8. Best-effort teardown, on a *detached* thread.
+    //
+    //    `DestroyJavaVM` waits for every non-daemon thread. JavaFX owns an
+    //    AppKit run loop and a keep-alive thread that are still live at
+    //    this point, so a synchronous destroy does not return — and while
+    //    it is blocked, the worker never reaches `stop_event_loop()`, so
+    //    the main thread stays in `run()` and the process never exits.
+    //    The window closes and the app appears to hang, with nothing in
+    //    the log after `main returned`.
+    //
+    //    Detaching it makes the wait someone else's problem: the process
+    //    is on its way out and will tear everything down anyway, so the
+    //    destroy is only worth *attempting*.
+    log::debug("jvm: attempting DestroyJavaVM on a detached thread");
+    std::thread::Builder::new()
+        .name("snug-vm-teardown".to_string())
+        .spawn(move || {
+            let _ = unsafe { vm.destroy() };
+            log::debug("jvm: destroyed");
+        })
+        .ok();
 
     Ok(exit_code as u32)
 }

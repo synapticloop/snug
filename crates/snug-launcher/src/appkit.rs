@@ -85,6 +85,7 @@ use objc2_foundation::{
 };
 
 use crate::dialogs;
+use crate::log;
 
 // ---------------------------------------------------------------------------
 //  Test seam
@@ -305,6 +306,55 @@ fn progress_status(
 // ---------------------------------------------------------------------------
 //  AppKit plumbing
 // ---------------------------------------------------------------------------
+
+/// Put the process's initial thread to work as the AppKit event loop.
+///
+/// This is the half of the fix for "a GUI app launched by snug never
+/// opens a window" that lives on this side of the FFI. `JNI_CreateJavaVM`
+/// claims the calling thread for Java's `main`, and `main` parks on a
+/// latch for the life of the app, so the initial thread is never free —
+/// and AppKit requires *that* thread to run the event loop. Without it
+/// `applicationDidFinishLaunching:` is never delivered, so
+/// `PlatformImpl.startup` never returns and no window appears.
+///
+/// So the launcher runs the loop here, on the process's initial thread,
+/// while a worker thread owns the VM. That is the structure every Cocoa
+/// app has.
+///
+/// **Deliberately does not call `finishLaunching`.** That call is what
+/// *delivers* `applicationDidFinishLaunching:`, and the app this launcher
+/// starts is waiting to receive it. Calling it here would consume the
+/// notification before JavaFX had installed a delegate to observe it, and
+/// the hang would return with no error to explain it. The app stays in
+/// the not-yet-finished-launching state until the launched app decides it
+/// is ready — which is exactly the handshake. (This is also why the
+/// earlier attempt to call `activate_app()` from `run()` made things
+/// worse; see AGENTS.md.)
+///
+/// Uses `NSApplication::run()`, not a hand-pumped
+/// `runUntilDate` loop. Pumping the loop manually is the obvious way to
+/// keep a "should I quit?" check on this thread, and it is wrong: without
+/// `run()` having formally started, AppKit keeps treating the process as
+/// still launching and the Dock icon bounces forever. The cost of `run()`
+/// is that only a main-thread `stop:` can end it — and the thread that
+/// learns the app has finished is the VM worker — so termination is
+/// handled by exiting the process instead. See `run()` in
+/// `platform/macos.rs`.
+pub(crate) fn run_event_loop() {
+    let Some(mtm) = MainThreadMarker::new() else {
+        // Not the main thread: nothing may run an AppKit loop. The
+        // worker still completes and exits the process, so the launcher
+        // does not depend on this having run.
+        return;
+    };
+    let app = NSApplication::sharedApplication(mtm);
+    // Regular application, so there is a Dock icon and keyboard focus.
+    // Policy only — see above about `finishLaunching`.
+    app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+    log::debug("appkit: initial thread entering the AppKit event loop");
+    app.run();
+    log::debug("appkit: event loop returned");
+}
 
 /// Make this process a foreground GUI app and return the main-thread
 /// marker, or `None` if we are not on the main thread.

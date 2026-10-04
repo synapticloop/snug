@@ -551,56 +551,59 @@ by accident.
     `CountDownLatch` inside `LauncherImpl.launchApplication` is the
     healthy case. "snug never returned from `call_static_method`" is not
     a diagnosis; the question is always what the JVM did next.
-- **`JNI_CreateJavaVM` cannot host a GUI app on macOS. At all.** This is
-  the root cause of a very long hunt, and it is not a snug bug so much as
-  a platform constraint: `JNI_CreateJavaVM` makes the *calling* thread —
-  the process's initial thread — the Java main thread, and AppKit
-  requires that same thread to run the event loop. One thread, two jobs.
-  JavaFX parks its `main` on a `CountDownLatch`, so the initial thread is
-  never free, so `applicationDidFinishLaunching:` never fires, so
+- **A GUI app needs the process's *initial* thread for the AppKit event
+  loop, and `JNI_CreateJavaVM` takes it away.** This is the whole reason a
+  snug-hosted JavaFX app used to hang: `JNI_CreateJavaVM` makes its caller
+  the Java main thread, and Java's `main` parks on a `CountDownLatch` for
+  the life of the app, so the initial thread is never free. AppKit then
+  never delivers `applicationDidFinishLaunching:`, so
   `MacApplication.runLoop` never returns, so `PlatformImpl.startup` never
   completes and the `JavaFX Application Thread` is never created. The
   symptom is a dock icon bouncing with no window, **no exception, and
   nothing in the log after the JNI handoff.** AWT hangs identically on
   `JFrame`, so it is not a JavaFX problem.
-  - The proof is the [OpenJFX dev list](https://mail.openjdk.org/pipermail/openjfx-dev/2022-January/033289.html):
-    *"on Mac OS you can't use `JNI_CreateJavaVM()` to launch the JVM if
-    you hope to use any GUI stuff... there's no getting around it. So it
-    blocks and never returns."*
-  - The fix is `JLI_Launch` from `$JAVA_HOME/lib/libjli.dylib` — the entry
-    point the `java` binary and jpackage's launchers use, which reserves
-    the initial thread for the UI and runs the app on a VM-created thread.
-    Verified working: a ~60-line C host that does nothing but call it gets
-    a JavaFX window up on this machine.
-  - `jli.rs` is implemented and wired into `platform/macos.rs::run()`,
-    but it **cannot activate yet**: `JLI_Launch` needs the host to export
-    `main` (`dlsym(RTLD_DEFAULT, "main")`, else "error locating main
-    entrypoint"), and a stripped Rust binary does not. Three link
-    approaches were measured and all failed — `-Wl,-exported_symbol,_main`
-    (cargo passes it, symbol still absent), `-C strip=none` (so it is not
-    the strip step), and `-Wl,-u,_main` (so it is not LTO internalisation).
-    A C shim is the obvious answer but is not a drop-in: **rustc already
-    emits a `main` symbol**, so a C `main` collides and needs either
-    `#![no_main]` (unstable `#[lang = "start"]`) or
-    `-allow_multiple_definition`. Until that is solved, `jli::launch`
-    checks `dlsym` for `main` itself and returns `None`, so the launcher
-    behaves exactly as it did before — **no regression, no fix.**
-  - **A failed JLI launch is a dead app, not a fall-back**, so that `dlsym`
-    guard has to happen *before* the call. Getting this wrong turns a
-    cosmetic limitation into "every app fails to start".
-  - Do not go looking for a GPU problem when the symptom is
-    `QuantumRenderer: no suitable pipeline found`. On this machine ES2
-    genuinely fails (`MacGLFactory could not be initialized`) and the
-    working `java -cp` path falls back to the **software** renderer
-    perfectly well. It is also what a GUI app in-process JNI looks like
-    *before* it hangs, so it cannot diagnose itself.
+  - **The fix is the thread split.** The VM lives on a worker thread; the
+    process's initial thread runs `appkit::run_event_loop()`. That is the
+    structure every Cocoa app has. `InitArgs` has to be built on the
+    worker because it holds raw pointers and is not `Send`, and
+    `DestroyJavaVM` has to be on the creating thread, so both ends of the
+    VM stay on the worker together.
+  - **The event loop must not call `finishLaunching`.** That call is what
+    *delivers* `applicationDidFinishLaunching:`; calling it from the
+    launcher consumes the notification before JavaFX has installed a
+    delegate to observe it, and the hang returns with no error to explain
+    it. An earlier attempt to reuse `activate_app()` at startup did
+    exactly this and made the failure worse.
+  - **Do not hand-pump the run loop** (`runUntilDate` in a poll loop) in
+    order to keep a "should I quit?" check on this thread. Without
+    `run()` having formally started, AppKit keeps treating the process as
+    still launching and **the Dock icon bounces forever**. Tried; it
+    shows a window and then does this.
+  - **The worker exits the process when the app finishes**, rather than
+    unwinding. `run()` only returns for a main-thread `stop:`, and the
+    worker is not allowed to issue one. Exiting also sidesteps the
+    teardown trap: `DestroyJavaVM` waits on non-daemon threads a GUI
+    toolkit keeps alive (an AppKit run loop, a keep-alive thread), so
+    waiting for it is how "close the window and the process never goes
+    away" happens. The log is flushed first, because `exit` skips
+    destructors.
+  - **The failure this was found via is worth keeping.** The tell was a
+    `jstack` of the *hanging* case with no "JavaFX Application Thread" in
+    it, against a `jstack` of the *working* `java -cp` case that has one.
+    The thread list settled in a minute what four wrong hypotheses could
+    not. See also the `java -cp` note below.
+  - The [OpenJFX dev list](https://mail.openjdk.org/pipermail/openjfx-dev/2022-January/033289.html)
+    describes the same constraint from the other side, and its suggested
+    workaround is `JLI_Launch` rather than this split. Both work; this one
+    keeps everything in-process and needs no `main` export, no `libjli`,
+    and no C shim.
 - **`java -cp <jar> <MainClass>` is the test that ends the guessing.** One
   run of the app outside snug, on the same machine and same JDK, cleared
   the JDK, the JavaFX build, the natives and the app's own code in a
   single step and left snug's hosting as the only variable. It should
   have been the *second* thing tried, not the tenth. Instrumenting the
-  launcher four times first produced four plausible theories and one
-  regression, none of them the cause.
+  launcher four times first produced four plausible theories, one
+  regression that made a symptom worse, and none of them the cause.
 - **`SNUG_DEBUG=1` turns on the fine-grained trace, and the lines worth
   having are the two that bracket the JNI call.** "Bouncing in the dock" —
   process alive, registered as a GUI app, no window — is the macOS
