@@ -410,14 +410,26 @@ pub struct Cli {
     #[arg(long = "snug-version", action = clap::ArgAction::Version, help_heading = "CLI tooling")]
     pub snug_version: (),
 
-    /// Path to a snug options file. Default: `snug.options` next to the
-    /// snug executable, then `snug.options` in the current working
-    /// directory, if present.
+    /// Path to a snug options file, used **instead of** the default
+    /// lookup. Naming a file means that file only: the OS-specific
+    /// `snug.<os>.options` is not consulted as well, so a build's
+    /// result never depends on which machine ran it.
+    ///
+    /// With no flag, snug reads up to two files — `snug.options` for
+    /// every platform, then `snug.<os>.options` for this host
+    /// (`snug.macos.options`, `snug.windows.options`,
+    /// `snug.linux.options`) — looking in the snug executable's own
+    /// directory first, then the current working directory, for each
+    /// name in turn. A missing file is not an error.
+    ///
+    /// Precedence, highest first: command line, then
+    /// `snug.<os>.options`, then `snug.options`. An OS file is a partial
+    /// override — it carries only the values that differ, and the rest
+    /// still come from `snug.options`.
     ///
     /// Format: one option per line, parsed as if it were supplied on
     /// the command line (so `--name "My App"` works, quoting and
     /// escaping included). Lines starting with `#` are comments.
-    /// Command-line options override file options.
     #[arg(long = "options", value_name = "PATH", help_heading = "CLI tooling")]
     pub options: Option<PathBuf>,
 

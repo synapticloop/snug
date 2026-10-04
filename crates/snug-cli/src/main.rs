@@ -59,24 +59,30 @@ fn run() -> Result<()> {
         return Ok(());
     }
 
-    // Resolve the options file (explicit `--options <path>`, else
-    // `snug.options` next to the snug executable, else
-    // `snug.options` in the CWD) before clap sees anything. Tokens
-    // from the file are prepended to the real CLI args so command-line
-    // values win on conflict (clap's "last wins" semantics).
+    // Resolve the options files before clap sees anything: an explicit
+    // `--options <path>` (which stands alone), else `snug.options` and
+    // the host's `snug.<os>.options`, lowest priority first. Tokens are
+    // layered into the real CLI args so that a value on the command line
+    // wins over an OS-specific file, which in turn wins over the generic
+    // one. A missing file is not an error and not a warning — the OS
+    // file is opt-in, so looking for one and finding nothing must stay
+    // silent.
     let cwd = std::env::current_dir().context("reading current working directory")?;
     let exe_dir = options_file::current_exe_dir();
-    let options_path = options_file::resolve(&raw_args, &cwd, exe_dir.as_deref());
-    let file_tokens = match &options_path {
-        Some(p) => options_file::load(p)
-            .with_context(|| format!("loading options file {}", p.display()))?,
-        None => Vec::new(),
-    };
+    let options_paths =
+        options_file::resolve_all(&raw_args, &cwd, exe_dir.as_deref(), std::env::consts::OS);
+    let mut file_layers = Vec::with_capacity(options_paths.len());
+    for p in &options_paths {
+        file_layers.push(
+            options_file::load(p)
+                .with_context(|| format!("loading options file {}", p.display()))?,
+        );
+    }
 
-    let merged = options_file::merge(&raw_args, file_tokens);
+    let merged = options_file::merge(&raw_args, file_layers);
     let cli = Cli::parse_from(merged);
 
-    if let Some(p) = &options_path {
+    for p in &options_paths {
         eprintln!("snug: loaded options from {}", p.display());
     }
 

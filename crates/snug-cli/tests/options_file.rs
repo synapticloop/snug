@@ -205,10 +205,10 @@ fn options_file_load_skips_comments() {
 }
 
 #[test]
-fn resolve_returns_none_when_no_default_and_no_explicit() {
+fn resolve_returns_nothing_when_no_default_and_no_explicit() {
     let tmp = tempdir();
     let args: Vec<String> = ["snug", "app.jar"].iter().map(|s| s.to_string()).collect();
-    assert_eq!(options_file::resolve(&args, &tmp, None), None);
+    assert!(options_file::resolve_all(&args, &tmp, None, "macos").is_empty());
 }
 
 #[test]
@@ -217,8 +217,8 @@ fn resolve_finds_default_in_cwd() {
     fs::write(tmp.join("snug.options"), "--name X\n").unwrap();
     let args: Vec<String> = ["snug", "app.jar"].iter().map(|s| s.to_string()).collect();
     assert_eq!(
-        options_file::resolve(&args, &tmp, None),
-        Some(tmp.join("snug.options"))
+        options_file::resolve_all(&args, &tmp, None, "macos"),
+        vec![tmp.join("snug.options")]
     );
 }
 
@@ -230,8 +230,21 @@ fn resolve_prefers_exe_dir_over_cwd() {
     fs::write(cwd.join("snug.options"), "--name Cwd\n").unwrap();
     let args: Vec<String> = ["snug", "app.jar"].iter().map(|s| s.to_string()).collect();
     assert_eq!(
-        options_file::resolve(&args, &cwd, Some(&exe_dir)),
-        Some(exe_dir.join("snug.options"))
+        options_file::resolve_all(&args, &cwd, Some(&exe_dir), "macos"),
+        vec![exe_dir.join("snug.options")]
+    );
+}
+
+#[test]
+fn resolve_returns_both_files_lowest_priority_first() {
+    // The layering order `merge` depends on, asserted end to end.
+    let tmp = tempdir();
+    fs::write(tmp.join("snug.options"), "--name X\n").unwrap();
+    fs::write(tmp.join("snug.macos.options"), "--name Y\n").unwrap();
+    let args: Vec<String> = ["snug", "app.jar"].iter().map(|s| s.to_string()).collect();
+    assert_eq!(
+        options_file::resolve_all(&args, &tmp, None, "macos"),
+        vec![tmp.join("snug.options"), tmp.join("snug.macos.options")]
     );
 }
 
@@ -327,7 +340,7 @@ fn merge_dedups_overridden_flags_but_keeps_repeatable() {
         "--company=Co".to_string(),
         "--jvm-arg=-Xms256m".to_string(),
     ];
-    let merged = options_file::merge(&args, file);
+    let merged = options_file::merge(&args, vec![file]);
     // --name appears once (CLI version only).
     let name_count = merged.iter().filter(|s| s.starts_with("--name")).count();
     assert_eq!(name_count, 1, "--name should be deduped: {merged:?}");
@@ -343,4 +356,239 @@ fn merge_dedups_overridden_flags_but_keeps_repeatable() {
     // --jvm-arg appears twice (repeatable flag — both kept).
     let jvm_count = merged.iter().filter(|s| s.starts_with("--jvm-arg")).count();
     assert_eq!(jvm_count, 2, "--jvm-arg should be kept from both: {merged:?}");
+}
+
+// ---- The OS-specific options file, end to end ----------------------
+//
+// These drive the real binary, so they prove the whole chain — resolve,
+// load, layer, clap — rather than just the resolver. The filename is
+// built from `std::env::consts::OS` so the test is meaningful on every
+// host, and it only ever names *this* host's file, which is also the
+// check that a foreign platform's file is ignored.
+
+fn host_os_file(dir: &std::path::Path) -> PathBuf {
+    dir.join(options_file::os_options_file_name(std::env::consts::OS))
+}
+
+/// Values the dry-run output exposes, as (label, value) pairs.
+fn dry_run_fields(stdout: &str) -> Vec<(String, String)> {
+    stdout
+        .lines()
+        .filter_map(|l| {
+            let (k, v) = l.split_once(':')?;
+            Some((k.trim().to_string(), v.trim().to_string()))
+        })
+        .collect()
+}
+
+fn field(stdout: &str, key: &str) -> Option<String> {
+    dry_run_fields(stdout)
+        .into_iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v)
+}
+
+#[test]
+fn os_options_file_overrides_the_generic_one() {
+    let tmp = tempdir();
+    let jar = tmp.join("demo.jar");
+    write_jar(&jar);
+    fs::write(
+        tmp.join("snug.options"),
+        "--min-java 21\n--name \"From Generic\"\n",
+    )
+    .unwrap();
+    fs::write(
+        host_os_file(&tmp),
+        "--name \"From OS File\"\n",
+    )
+    .unwrap();
+
+    let output = Command::new(snug_bin())
+        .current_dir(&tmp)
+        .arg(&jar)
+        .arg("--dry-run")
+        .output()
+        .expect("spawn snug");
+
+    assert!(
+        output.status.success(),
+        "snug should exit 0; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // The dry run does not print `--name`, so assert on what it does
+    // print plus the two loaded-file lines, which together prove the
+    // OS file was both read and ranked above the generic one.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&host_os_file(&tmp).display().to_string()),
+        "both files should be reported as loaded: {stderr}"
+    );
+    assert!(
+        stderr.contains(&tmp.join("snug.options").display().to_string()),
+        "both files should be reported as loaded: {stderr}"
+    );
+    // Inherited from the generic file, proving this is a partial
+    // override rather than a replacement.
+    assert_eq!(field(&stdout, "min-java").as_deref(), Some("21"));
+}
+
+#[test]
+fn a_conflicting_flag_in_both_files_does_not_break_the_build() {
+    // Without stripping the lower layer, two `--min-java` occurrences
+    // reach clap and it aborts with "cannot be used multiple times".
+    // This is the regression test for the whole layered-merge design:
+    // the *build succeeding* is the assertion.
+    let tmp = tempdir();
+    let jar = tmp.join("demo.jar");
+    write_jar(&jar);
+    fs::write(tmp.join("snug.options"), "--min-java 21\n--name A\n").unwrap();
+    fs::write(host_os_file(&tmp), "--min-java 25\n--name B\n").unwrap();
+
+    let output = Command::new(snug_bin())
+        .current_dir(&tmp)
+        .arg(&jar)
+        .arg("--dry-run")
+        .output()
+        .expect("spawn snug");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "two files setting the same flag must not abort the build; stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("cannot be used multiple times"),
+        "clap rejected the layered argv: {stderr}"
+    );
+    // The OS file's value is the one that lands.
+    assert_eq!(
+        field(&String::from_utf8_lossy(&output.stdout), "min-java").as_deref(),
+        Some("25")
+    );
+}
+
+#[test]
+fn cli_still_beats_the_os_options_file() {
+    let tmp = tempdir();
+    let jar = tmp.join("demo.jar");
+    write_jar(&jar);
+    fs::write(tmp.join("snug.options"), "--min-java 21\n").unwrap();
+    fs::write(host_os_file(&tmp), "--min-java 25\n").unwrap();
+
+    let output = Command::new(snug_bin())
+        .current_dir(&tmp)
+        .arg(&jar)
+        .arg("--dry-run")
+        .arg("--min-java")
+        .arg("17")
+        .output()
+        .expect("spawn snug");
+
+    assert!(output.status.success());
+    assert_eq!(
+        field(&String::from_utf8_lossy(&output.stdout), "min-java").as_deref(),
+        Some("17"),
+        "the command line must beat both files"
+    );
+}
+
+#[test]
+fn another_platforms_options_file_is_ignored() {
+    let tmp = tempdir();
+    let jar = tmp.join("demo.jar");
+    write_jar(&jar);
+    fs::write(tmp.join("snug.options"), "--min-java 21\n").unwrap();
+
+    // Name a file this host can never match.
+    let mut foreign = "snug.".to_string();
+    foreign.push_str(if std::env::consts::OS == "windows" { "linux" } else { "windows" });
+    foreign.push_str(".options");
+    fs::write(tmp.join(&foreign), "--min-java 99\n").unwrap();
+
+    let output = Command::new(snug_bin())
+        .current_dir(&tmp)
+        .arg(&jar)
+        .arg("--dry-run")
+        .output()
+        .expect("spawn snug");
+
+    assert!(output.status.success());
+    assert_eq!(
+        field(&String::from_utf8_lossy(&output.stdout), "min-java").as_deref(),
+        Some("21"),
+        "a file for another platform must not be loaded"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains(&foreign),
+        "the foreign options file should never be reported as loaded: {stderr}"
+    );
+}
+
+#[test]
+fn missing_os_options_file_is_silent() {
+    // No OS file present: the build proceeds, and there is no warning
+    // about the one that wasn't found.
+    let tmp = tempdir();
+    let jar = tmp.join("demo.jar");
+    write_jar(&jar);
+    fs::write(tmp.join("snug.options"), "--min-java 21\n").unwrap();
+
+    let output = Command::new(snug_bin())
+        .current_dir(&tmp)
+        .arg(&jar)
+        .arg("--dry-run")
+        .output()
+        .expect("spawn snug");
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        stderr.lines().filter(|l| l.contains("loaded options from")).count(),
+        1,
+        "only the generic file should be reported: {stderr}"
+    );
+    for noise in ["not found", "missing", "warn"] {
+        assert!(
+            !stderr.to_lowercase().contains(noise),
+            "an absent OS file must be silent, but stderr mentioned `{noise}`: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn explicit_options_flag_ignores_the_os_file() {
+    // The documented escape hatch, end to end: naming a file means that
+    // file only, so an ambient OS file cannot change the result.
+    let tmp = tempdir();
+    let jar = tmp.join("demo.jar");
+    write_jar(&jar);
+    fs::write(host_os_file(&tmp), "--min-java 25\n").unwrap();
+
+    let custom = tmp.join("custom.opts");
+    fs::write(&custom, "--min-java 30\n").unwrap();
+
+    let output = Command::new(snug_bin())
+        .current_dir(&tmp)
+        .arg(&jar)
+        .arg("--dry-run")
+        .arg("--options")
+        .arg(&custom)
+        .output()
+        .expect("spawn snug");
+
+    assert!(output.status.success());
+    assert_eq!(
+        field(&String::from_utf8_lossy(&output.stdout), "min-java").as_deref(),
+        Some("30"),
+        "--options should mean that file only"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains(&host_os_file(&tmp).display().to_string()),
+        "the OS file must not be consulted alongside --options: {stderr}"
+    );
 }

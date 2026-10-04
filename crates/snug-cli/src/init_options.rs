@@ -25,12 +25,20 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
-/// Path-snug provides when `--init-options` is given with no
+/// Path snug provides when `--init-options` is given with no
 /// explicit value. Matches the file name looked up by
-/// `options_file::resolve`, which searches the snug executable's
+/// `options_file::resolve_all`, which searches the snug executable's
 /// directory first and the current working directory second — the
 /// same string on both sides, so `snug --init-options` writes a file
 /// the next `snug` invocation will read.
+///
+/// Deliberately *only* the generic name. The lookup also honours a
+/// host-specific `snug.<os>.options`, but scaffolding one of those
+/// automatically would be wrong: it is a partial override whose whole
+/// purpose is to hold the few values that differ on one platform, and a
+/// freshly generated copy of the entire flag surface would defeat that.
+/// Someone building for several platforms is better served by the
+/// documented example than by a file they then have to trim.
 pub const DEFAULT_PATH: &str = "snug.options";
 
 /// The example template text, embedded at compile time.

@@ -863,24 +863,56 @@ by accident.
   conflict). The survey lives in
   `manifest::survey_main_classes`, over in-memory bytes via
   `manifest::read_main_class_from_bytes` — never a temp file.
-- **`snug.options` files** are supported. The CLI resolves an options
-  file via `--options <path>` (explicit) or, with no flag,
-  `snug.options` **next to the snug executable first, then**
-  `snug.options` in the current working directory. So a
-  `snug.exe` shipped alongside its `snug.options` carries its
-  defaults wherever it is invoked from; the CWD copy is the
-  fallback, not the primary. One option per line, parsed as
-  shell-like tokens (so `--name "My App"` works with quotes and
-  escapes); `#`-prefixed lines are comments. CLI flags always
-  override file values (the file's matching flag is stripped at
-  merge time). Repeatable flags (`--jvm-arg`) accumulate from both
-  sources. Resolution lives in `options_file::resolve`, which takes
-  the CWD and the exe dir (`options_file::current_exe_dir()`) so the
-  precedence order is testable without spawning the binary.
+- **`snug.options` files** are supported, in two layers. Precedence,
+  highest first: **command line → `snug.<os>.options` → `snug.options`.**
+  The OS token is Rust's own `std::env::consts::OS` spelling —
+  `snug.macos.options`, `snug.windows.options`, `snug.linux.options` —
+  *not* `mac` / `win`, because the project already spells these
+  `macos` / `windows` in its cfg gates, script names and release layout.
+  `os_options_file_name(os)` takes the token as a **parameter** so every
+  platform's rules are testable from one host.
+  - **An OS file is a partial override, not a second full file.** It
+    carries only the values that differ, and the rest still fall through
+    to `snug.options`. The motivating case is `--output`, whose extension
+    *must* differ (`.exe` vs `.app`) — duplicating the whole file to
+    change one line is how two copies drift apart. A file for another
+    platform is never read, and a missing one is **silent**: it is
+    opt-in, so reporting "not found" would make every build on a machine
+    without one print noise. Only loaded files are listed, on stderr.
+  - **`--options <path>` means that file *only*.** The OS tier is not
+    consulted alongside it. That is deliberate: it is the escape hatch
+    for a build whose options must not depend on which machine ran it,
+    and it is what `scripts/build-macos-demo.sh` relies on to pin the
+    shared `snug.options` while overriding `-o` on the command line.
+  - **Location search is per-tier.** For each of the two names in turn:
+    the snug executable's own directory first, then the CWD. So an
+    exe-dir `snug.options` and a CWD `snug.<os>.options` both load and
+    the OS file still wins. First-hit-per-name is also what makes
+    `exe_dir == cwd` safe: it cannot yield the same file twice, which
+    for `--jvm-arg` would *duplicate* a JVM argument rather than
+    deduplicate it. Candidates are matched with `is_file()`, so a
+    directory that happens to share a file's name is skipped.
+  - `resolve_all` returns a **`Vec<PathBuf>` ordered lowest priority
+    first** (`snug.options`, then the OS file), and `main.rs` layers them
+    in that order. One option per line, parsed as shell-like tokens (so
+    `--name "My App"` works with quotes and escapes); `#`-prefixed lines
+    are comments. Repeatable flags (`--jvm-arg`, `--localization`)
+    accumulate from *every* source, base file first, so JVM options
+    arrive in a defined order.
+  - **The layering is stripped high-to-low, not concatenated.** `merge`
+    walks the layers from highest priority down while accumulating the
+    set of flags already spoken for by a higher source, seeded with the
+    command line's own. Concatenating two files that both set `--name`
+    would leave two occurrences and clap aborts with "the argument
+    '--name <NAME>' cannot be used multiple times" — the same failure
+    recorded for file-vs-CLI below, now between two *files*. The set is
+    built once per call and reused across layers so the cost stays at one
+    clap `Command` build per invocation.
   - **Override matching is by flag *identity*, not by string.** Both the
     CLI tokens and the file tokens are resolved through a `FlagSpec`
     built from the `Cli` definition itself, so `-o` on the command line
-    strips `--output` from the file and vice versa. This was a real bug:
+    strips `--output` from the file and vice versa — and an OS layer
+    strips the same flag out of the generic layer. This was a real bug:
     the merge used to compare flag *strings*, so the scaffolded
     `snug.options` (which writes `--output`) could not be overridden with
     the `-o` shown in `--help`, and clap aborted with "the argument
@@ -892,6 +924,11 @@ by accident.
     while *building* a command, so on a derived `Command` it reports
     `None` for every arg and value-skipping silently stops working,
     leaving a stripped flag's value behind as a stray positional.
+  - **`--init-options` writes `snug.options` only, never the OS file.**
+    A generated `snug.<os>.options` would be a full copy of the flag
+    surface, which is precisely what the partial-override design is
+    meant to avoid. Someone building for several platforms is better
+    served by the documented example than by a file they must trim.
 - **The `--init-*` family scaffolds project files and exits.** Two modes,
   both short-circuiting before options-file loading and before the
   JAR-required check, both strict (a dedicated mini-parser in

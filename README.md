@@ -159,8 +159,6 @@ snug app.jar -o App.exe --dry-run
 snug app.jar --emit-payload
 
 # Use a `snug.options` file for default settings (CLI flags always override).
-# Snug looks for `snug.options` next to the snug executable first, then in
-# the current working directory; `--options <path>` picks a specific file.
 # Each line is parsed as if it were on the command line; `#` is a comment.
 # `--input` (file or directory) and every other flag can live here too,
 # so the JAR location doesn't have to be on the command line:
@@ -171,6 +169,17 @@ snug app.jar --emit-payload
 #   --min-java 25
 #   --download-jdk=force
 snug -o App.exe --name "Different Name"   # --name overrides the file
+
+# A value that genuinely differs per platform goes in a companion file named
+# after the host, which overrides `snug.options` (CLI flags still win over it).
+# It is a *partial* override: only the differing values belong in it.
+#   # snug.macos.options  —  the usual case is just the output extension
+#   --output build/MyApp.app
+#
+# Only the file matching the host is read, so a checked-in
+# `snug.windows.options` cannot affect a macOS build, and a missing one is
+# neither an error nor a warning. `--options <path>` means *that file only*,
+# with the per-platform tier not consulted alongside it.
 
 # Snug's own version (distinct from --version, which sets the app's version):
 snug --snug-version

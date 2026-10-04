@@ -1,18 +1,52 @@
-//! Support for a `snug.options` configuration file.
+//! Support for `snug.options` configuration files.
 //!
 //! The CLI accepts an optional `--options <path>` flag pointing at a
 //! file containing one option per line. If no flag is given, `snug`
-//! looks for `snug.options` next to the `snug` executable first, then
-//! in the current working directory.
+//! looks for **two** default files — a generic one and an
+//! operating-system-specific one:
 //!
-//! The file is parsed line by line, with each line tokenised as if it
+//! ```text
+//! snug.options              # every platform
+//! snug.<os>.options         # this host only: snug.macos.options,
+//!                           # snug.windows.options, snug.linux.options
+//! ```
+//!
+//! Precedence, highest first:
+//!
+//! 1. Command-line flags.
+//! 2. `snug.<os>.options`.
+//! 3. `snug.options`.
+//!
+//! So an OS file is a *partial override* of the generic one: it carries
+//! only the values that differ on that platform, and everything else
+//! still falls through to `snug.options`. That is the whole point — the
+//! motivating case is a `--output` whose extension has to differ per
+//! platform (`.exe` vs `.app`), where duplicating the whole file to
+//! change one line is how the two copies drift apart.
+//!
+//! An explicit `--options <path>` means **that file only**. The
+//! operating-system tier is not consulted in addition, so pointing at a
+//! file is also the escape hatch for a build that must not pick up
+//! ambient per-machine configuration.
+//!
+//! ## Lookup order within a tier
+//!
+//! For each of the two names, the snug executable's own directory is
+//! searched first, then the current working directory — so a portable
+//! `snug.exe` shipped alongside its `snug.options` carries its defaults
+//! wherever it is invoked from. This is a *per-tier* search: an exe-dir
+//! `snug.options` and a CWD `snug.<os>.options` both load, and the OS
+//! file still wins on conflicting flags.
+//!
+//! A missing file is not an error, and not a warning. `snug.<os>.options`
+//! is an opt-in, so looking for one and finding nothing must be silent
+//! or every single build on a machine without one would print noise.
+//!
+//! ## File format
+//!
+//! Files are parsed line by line, with each line tokenised as if it
 //! were supplied on the command line (via `shell_words`). Lines starting
 //! with `#` (after trimming) are comments; blank lines are skipped.
-//!
-//! Tokens from the file are prepended to the actual command-line args
-//! before clap sees them, so any value on the command line overrides
-//! the value in the file (clap's "last wins" semantics for non-repeatable
-//! flags, "all collected" for repeatable ones like `--jvm-arg`).
 //!
 //! Example `snug.options`:
 //!
@@ -29,14 +63,20 @@
 //! --jvm-arg=-Xmx2g
 //! --jvm-arg=-Dfile.encoding=UTF-8
 //! ```
+//!
+//! and its `snug.macos.options` companion, overriding only what differs:
+//!
+//! ```text
+//! # The output is the one genuinely platform-specific value here:
+//! # a `.app` bundle rather than a Windows PE.
+//! --output build/MyApp.app
+//! ```
 
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
-/// Default options-file name looked up next to the `snug` executable
-/// and then in the current working directory when `--options` is not
-/// supplied.
+/// Generic options-file name, consulted on every platform.
 pub const DEFAULT_OPTIONS_FILE: &str = "snug.options";
 
 /// Errors that can arise while resolving or loading a `snug.options`
@@ -61,30 +101,81 @@ pub enum OptionsFileError {
     },
 }
 
-/// Resolve the options-file path from the raw command-line arguments.
+/// The OS-specific options-file name for an OS token: `snug.macos.options`,
+/// `snug.windows.options`, `snug.linux.options`.
 ///
-/// Precedence, highest first:
+/// The `<os>` token is Rust's own [`std::env::consts::OS`] spelling, not
+/// a Windows marketing name — `macos`, not `mac`, and `windows`, not
+/// `win`. It is the same vocabulary the rest of the project already uses
+/// (`#[cfg(target_os = "macos")]`, `release/macos-arm64/`,
+/// `scripts/build-macos.sh`), so the filename and the crate's platform
+/// gating are always the same string. The token is a *parameter* rather
+/// than read from the environment here so the precedence rules are
+/// testable for every platform from one host.
+pub fn os_options_file_name(os: &str) -> String {
+    format!("snug.{os}.options")
+}
+
+/// The OS-specific options-file name for the host snug is running on.
+pub fn host_os_options_file_name() -> String {
+    os_options_file_name(std::env::consts::OS)
+}
+
+/// Resolve the options files to load, **lowest priority first**.
 ///
-/// 1. An explicit `--options <path>` / `--options=<path>` flag. The
-///    caller is expected to fail loudly if the path does not exist —
-///    explicit user intent.
-/// 2. `<exe_dir>/snug.options`, if it exists. This lets a portable
-///    `snug.exe` shipped alongside a `snug.options` carry its defaults
-///    with it, regardless of where it is invoked from.
-/// 3. `<cwd>/snug.options`, if it exists.
+/// The returned order is the layering order: `snug.options` before
+/// `snug.<os>.options`, so a caller can merge by walking front to back
+/// and letting each layer win over the ones before it. Empty means no
+/// defaults were supplied anywhere, which is not an error.
 ///
-/// `exe_dir` is `None` when the executable's own location is unknown.
-/// Returns `None` when no candidate file is present (no error).
-pub fn resolve(raw_args: &[String], cwd: &Path, exe_dir: Option<&Path>) -> Option<PathBuf> {
+/// Precedence across sources, highest first:
+///
+/// 1. Command-line flags (handled by the caller, which owns argv).
+/// 2. `snug.<os>.options`.
+/// 3. `snug.options`.
+///
+/// An explicit `--options <path>` returns exactly that one file and
+/// **nothing else**. The OS tier is deliberately not layered on top of
+/// it: an explicit path is how a caller says "use these options", and
+/// silently mixing in an ambient `snug.macos.options` would make a
+/// build's configuration depend on which machine ran it. The path is
+/// not validated as existing — the caller is expected to fail loudly,
+/// which is existing behaviour and the integration test for it.
+///
+/// Within each of the two default names, the snug executable's own
+/// directory is searched before the current working directory. That
+/// search is per-tier: an exe-dir `snug.options` and a CWD
+/// `snug.<os>.options` both load, and the OS file still wins on
+/// conflicting flags. Taking the first hit per name also means a
+/// directory that happens to share the file's name is skipped
+/// (`is_file`, not `exists`) and that `exe_dir == cwd` cannot yield the
+/// same file twice.
+pub fn resolve_all(
+    raw_args: &[String],
+    cwd: &Path,
+    exe_dir: Option<&Path>,
+    os: &str,
+) -> Vec<PathBuf> {
     if let Some(p) = find_options_flag(raw_args) {
-        return Some(p);
+        return vec![p];
     }
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Some(dir) = exe_dir {
-        candidates.push(dir.join(DEFAULT_OPTIONS_FILE));
-    }
-    candidates.push(cwd.join(DEFAULT_OPTIONS_FILE));
-    candidates.into_iter().find(|p| p.is_file())
+
+    let os_file_name = os_options_file_name(os);
+    [DEFAULT_OPTIONS_FILE, os_file_name.as_str()]
+        .iter()
+        .filter_map(|name| {
+            search_dirs(exe_dir, cwd)
+                .map(|dir| dir.join(name))
+                .find(|p| p.is_file())
+        })
+        .collect()
+}
+
+/// The directories searched for a default options file, highest location
+/// priority first: the snug executable's own directory, then the current
+/// working directory.
+fn search_dirs<'a>(exe_dir: Option<&'a Path>, cwd: &'a Path) -> impl Iterator<Item = &'a Path> {
+    exe_dir.into_iter().chain(std::iter::once(cwd))
 }
 
 /// The directory containing the running `snug` executable, or `None` if
@@ -146,28 +237,77 @@ pub fn load(path: &Path) -> Result<Vec<String>, OptionsFileError> {
 
 /// Build the merged argv that clap should parse.
 ///
-/// The merged layout is: `[program_name, ...file_tokens, ...cli_args_minus_options_flag]`.
+/// The merged layout is
+/// `[program_name, ...lowest_layer, ...next_layer, ..., ...cli_args]`.
 ///
-/// - `file_tokens` are prepended so any *later* CLI occurrence of the
-///   same flag wins (clap's last-wins semantics).
-/// - The `--options <path>` flag and its value are stripped from the
-///   CLI portion so clap doesn't see them twice (the file has already
-///   been loaded and merged).
-pub fn merge(raw_args: &[String], file_tokens: Vec<String>) -> Vec<String> {
+/// `file_layers` must be ordered **lowest priority first**, which is
+/// what [`resolve_all`] returns: `snug.options` then
+/// `snug.<os>.options`. With the layers in that order the output is also
+/// in that order, so each non-repeatable flag appears exactly once,
+/// carrying the highest-priority source's value, and repeatable flags
+/// (`--jvm-arg`, `--localization`) accumulate base-first.
+///
+/// ## Why the walk is high-to-low
+///
+/// The layering cannot be done by simply concatenating the files'
+/// tokens: two files both setting `--name` would leave two `--name`
+/// occurrences in the argv and clap aborts the whole build with
+///
+/// ```text
+/// error: the argument '--name <NAME>' cannot be used multiple times
+/// ```
+///
+/// — the same failure recorded for the file-vs-CLI case in
+/// [`FlagSpec`]. So each layer has to be stripped against everything
+/// *above* it, which means walking from highest priority down while
+/// accumulating the set of flags already supplied by a higher source,
+/// seeded with the command line's own flags. A layer's surviving
+/// tokens then join that set, so the next (lower) layer loses to it.
+///
+/// Building the set once per call and reusing it across layers also
+/// keeps the cost at one clap `Command` build per invocation rather
+/// than one per layer.
+///
+/// The `--options <path>` flag and its value are stripped from the CLI
+/// portion so clap doesn't see them twice (the file it named has
+/// already been loaded and merged).
+pub fn merge(raw_args: &[String], file_layers: Vec<Vec<String>>) -> Vec<String> {
     let spec = FlagSpec::from_cli();
-    let cli_flag_names = spec.collect_cli_flags(&raw_args[1..]);
-    let file_tokens_filtered = spec.strip_overridden(&file_tokens, &cli_flag_names);
+    let cli_args = strip_options_flag(&raw_args[1..]);
 
-    let mut out = Vec::with_capacity(raw_args.len() + file_tokens_filtered.len());
-    if let Some(prog) = raw_args.first() {
-        out.push(prog.clone());
-    } else {
-        out.push("snug".to_string());
+    // Flags already spoken for by a higher-priority source, starting
+    // with the command line.
+    let mut seen = spec.collect_cli_flags(&raw_args[1..]);
+    let mut layers: Vec<Vec<String>> = vec![Vec::new(); file_layers.len()];
+
+    for (idx, tokens) in file_layers.iter().enumerate().rev() {
+        let surviving = spec.strip_overridden(tokens, &seen);
+        seen.extend(spec.collect_cli_flags(&surviving));
+        layers[idx] = surviving;
     }
-    out.extend(file_tokens_filtered);
 
+    let total: usize = cli_args.len() + layers.iter().map(Vec::len).sum::<usize>();
+    let mut out = Vec::with_capacity(total + 1);
+    out.push(
+        raw_args
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "snug".to_string()),
+    );
+    for layer in &layers {
+        out.extend(layer.iter().cloned());
+    }
+    out.extend(cli_args);
+    out
+}
+
+/// Drop the `--options <path>` flag and its value from the CLI portion
+/// of argv. The file it named has already been loaded and merged, so
+/// leaving the flag in place would have clap see it a second time.
+fn strip_options_flag(args: &[String]) -> Vec<String> {
+    let mut out = Vec::with_capacity(args.len());
     let mut skip_next = false;
-    for arg in &raw_args[1..] {
+    for arg in args {
         if skip_next {
             skip_next = false;
             continue;
@@ -337,12 +477,17 @@ impl FlagSpec {
         names
     }
 
-    /// Drop file tokens for any flag the CLI also set.
+    /// Drop file tokens for any flag a higher-priority source also set.
+    ///
+    /// "Higher-priority" is the command line on the first layer, and an
+    /// OS-specific options file on the generic one — the same question
+    /// either way, so the caller passes whichever set of canonical names
+    /// it has accumulated so far. See [`merge`].
     ///
     /// Repeatable flags survive: `--jvm-arg` and `--localization` are
-    /// `Vec<T>` fields, so both sides' occurrences are meant to accumulate.
-    /// Stripping either would silently discard the file's half of the JVM
-    /// options.
+    /// `Vec<T>` fields, so occurrences from every layer are meant to
+    /// accumulate. Stripping any of them would silently discard part of
+    /// the JVM options.
     fn strip_overridden(
         &self,
         tokens: &[String],
@@ -399,6 +544,13 @@ mod tests {
         s.iter().map(|s| s.to_string()).collect()
     }
 
+    /// A single options-file layer. Most merge tests below exercise the
+    /// file-vs-CLI relationship with just one file, so this keeps them
+    /// readable rather than adding a nesting level to every call.
+    fn layer(tokens: Vec<String>) -> Vec<Vec<String>> {
+        vec![tokens]
+    }
+
     #[test]
     fn find_options_flag_space_form() {
         let a = args(&["snug", "app.jar", "--options", "custom.opts"]);
@@ -453,7 +605,7 @@ mod tests {
     #[test]
     fn merge_prepends_file_tokens_and_strips_options_flag() {
         let raw = args(&["snug", "app.jar", "--options", "x.opts"]);
-        let merged = merge(&raw, vec!["--name".into(), "File".into()]);
+        let merged = merge(&raw, layer(vec!["--name".into(), "File".into()]));
         // File tokens come first; CLI supplies its own values. No
         // dedup needed here because CLI doesn't repeat --name.
         assert_eq!(
@@ -470,7 +622,15 @@ mod tests {
     #[test]
     fn merge_strips_file_flag_when_cli_overrides() {
         let raw = args(&["snug", "app.jar", "--name", "CLI"]);
-        let merged = merge(&raw, vec!["--name".into(), "File".into(), "--company".into(), "Co".into()]);
+        let merged = merge(
+            &raw,
+            layer(vec![
+                "--name".into(),
+                "File".into(),
+                "--company".into(),
+                "Co".into(),
+            ]),
+        );
         // The file's --name is dropped because CLI also specifies it;
         // --company from the file is kept.
         assert_eq!(
@@ -489,7 +649,10 @@ mod tests {
     #[test]
     fn merge_strips_file_flag_equals_form_when_cli_overrides() {
         let raw = args(&["snug", "app.jar", "--name=CLI"]);
-        let merged = merge(&raw, vec!["--name=File".into(), "--company=Co".into()]);
+        let merged = merge(
+            &raw,
+            layer(vec!["--name=File".into(), "--company=Co".into()]),
+        );
         assert_eq!(
             merged,
             vec![
@@ -507,7 +670,7 @@ mod tests {
         // in the merged argv because clap's ArgAction::Append collects
         // all occurrences.
         let raw = args(&["snug", "app.jar", "--jvm-arg=-Xmx2g"]);
-        let merged = merge(&raw, vec!["--jvm-arg=-Xms256m".into()]);
+        let merged = merge(&raw, layer(vec!["--jvm-arg=-Xms256m".into()]));
         assert!(merged.contains(&"--jvm-arg=-Xms256m".to_string()));
         assert!(merged.contains(&"--jvm-arg=-Xmx2g".to_string()));
     }
@@ -515,8 +678,163 @@ mod tests {
     #[test]
     fn merge_strips_options_equals_form() {
         let raw = args(&["snug", "--options=x.opts", "app.jar"]);
-        let merged = merge(&raw, vec![]);
+        let merged = merge(&raw, layer(vec![]));
         assert_eq!(merged, vec!["snug".to_string(), "app.jar".to_string()]);
+    }
+
+    // ---- Two or more layers -------------------------------------------
+    //
+    // `file_layers` is ordered lowest priority first, which is what
+    // `resolve_all` produces: `snug.options` then `snug.<os>.options`.
+
+    #[test]
+    fn os_layer_overrides_generic_layer_and_appears_once() {
+        // The regression that shaped the high-to-low walk: concatenating
+        // two files that both set `--name` leaves two occurrences and
+        // clap aborts with "the argument '--name <NAME>' cannot be used
+        // multiple times". So the *count* is the assertion here, not just
+        // the winning value.
+        let raw = args(&["snug", "app.jar"]);
+        let merged = merge(
+            &raw,
+            vec![
+                vec!["--name".into(), "Generic".into()],
+                vec!["--name".into(), "OS".into()],
+            ],
+        );
+        let name_count = merged.iter().filter(|t| t.starts_with("--name")).count();
+        assert_eq!(name_count, 1, "exactly one --name must reach clap: {merged:?}");
+        assert!(
+            merged.windows(2).any(|w| w == ["--name".to_string(), "OS".to_string()]),
+            "the OS layer's value must win: {merged:?}"
+        );
+        assert!(!merged.contains(&"Generic".to_string()));
+    }
+
+    #[test]
+    fn cli_overrides_the_os_layer_which_overrides_the_generic_one() {
+        // All three tiers on the same flag, one occurrence, topmost wins.
+        let raw = args(&["snug", "app.jar", "--name", "CLI"]);
+        let merged = merge(
+            &raw,
+            vec![
+                vec!["--name".into(), "Generic".into()],
+                vec!["--name".into(), "OS".into()],
+            ],
+        );
+        let name_count = merged.iter().filter(|t| t.starts_with("--name")).count();
+        assert_eq!(name_count, 1, "{merged:?}");
+        assert!(merged.windows(2).any(|w| w == ["--name".to_string(), "CLI".to_string()]));
+        assert!(!merged.iter().any(|t| t == "Generic" || t == "OS"));
+    }
+
+    #[test]
+    fn os_layer_keeps_flags_the_generic_layer_did_not_set() {
+        // The whole point of the feature: a partial override. The
+        // OS file carries one differing value and inherits the rest.
+        let raw = args(&["snug", "app.jar"]);
+        let merged = merge(
+            &raw,
+            vec![
+                vec!["--name".into(), "Generic".into(), "--company".into(), "Co".into()],
+                vec!["--output".into(), "MyApp.app".into()],
+            ],
+        );
+        assert!(
+            merged.windows(2).any(|w| w == ["--name".to_string(), "Generic".to_string()]),
+            "inherited from the generic layer: {merged:?}"
+        );
+        assert!(
+            merged.windows(2).any(|w| w == ["--company".to_string(), "Co".to_string()]),
+            "inherited from the generic layer: {merged:?}"
+        );
+        assert!(
+            merged.windows(2).any(|w| w == ["--output".to_string(), "MyApp.app".to_string()]),
+            "supplied by the OS layer: {merged:?}"
+        );
+    }
+
+    #[test]
+    fn layers_reach_argv_low_to_high() {
+        // Order is the contract `merge`'s doc states. A flag set by both
+        // layers must appear with the higher-priority value, in the
+        // lower layer's position — which is what makes the base file's
+        // values act as defaults rather than appearing *after* the
+        // override and winning by clap's last-wins.
+        let raw = args(&["snug", "app.jar"]);
+        let merged = merge(
+            &raw,
+            vec![
+                vec!["--company".into(), "GenericCo".into()],
+                vec!["--company".into(), "OSCo".into()],
+            ],
+        );
+        assert_eq!(
+            merged,
+            vec![
+                "snug".to_string(),
+                "--company".to_string(),
+                "OSCo".to_string(),
+                "app.jar".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn repeatable_flags_accumulate_across_every_tier() {
+        // `--jvm-arg` is an `ArgAction::Append` field, so all three
+        // sources' values are wanted — base first, then the OS layer,
+        // then the command line. This is also the only multi-tier case
+        // where more than one occurrence is correct.
+        let raw = args(&["snug", "app.jar", "--jvm-arg=-Xmx2g"]);
+        let merged = merge(
+            &raw,
+            vec![
+                vec!["--jvm-arg".into(), "-Xms256m".into()],
+                vec!["--jvm-arg".into(), "-Dapple.awt.enable-2d=false".into()],
+            ],
+        );
+        // Note the mixed forms: the file layers use the two-token
+        // spelling and the command line the `--flag=value` one. Both
+        // reach clap, which is what `ArgAction::Append` collects.
+        assert_eq!(
+            merged,
+            vec![
+                "snug".to_string(),
+                "--jvm-arg".to_string(),
+                "-Xms256m".to_string(),
+                "--jvm-arg".to_string(),
+                "-Dapple.awt.enable-2d=false".to_string(),
+                "app.jar".to_string(),
+                "--jvm-arg=-Xmx2g".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_value_beginning_with_a_dash_survives_layer_stripping() {
+        // A higher layer overriding a lower one must consume the
+        // overridden flag's *value* token too, or the stripped value is
+        // left behind and clap reads it as a second positional. Here the
+        // OS layer overrides `--jvm-arg`'s sibling flag and the arity
+        // lookup has to keep the two apart.
+        let raw = args(&["snug", "app.jar"]);
+        let merged = merge(
+            &raw,
+            vec![
+                vec!["--min-java".into(), "21".into()],
+                vec!["--min-java".into(), "25".into()],
+            ],
+        );
+        assert_eq!(
+            merged,
+            vec![
+                "snug".to_string(),
+                "--min-java".to_string(),
+                "25".to_string(),
+                "app.jar".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -527,8 +845,7 @@ mod tests {
         // Default file also exists, but the explicit flag wins.
         std::fs::write(dir.join(DEFAULT_OPTIONS_FILE), "--name Y\n").unwrap();
         let raw = args(&["snug", "--options", explicit.to_str().unwrap()]);
-        let resolved = resolve(&raw, &dir, None).unwrap();
-        assert_eq!(resolved, explicit);
+        assert_eq!(resolve_all(&raw, &dir, None, "macos"), vec![explicit]);
     }
 
     #[test]
@@ -536,15 +853,17 @@ mod tests {
         let dir = tempdir();
         std::fs::write(dir.join(DEFAULT_OPTIONS_FILE), "--name Y\n").unwrap();
         let raw = args(&["snug", "app.jar"]);
-        let resolved = resolve(&raw, &dir, None).unwrap();
-        assert_eq!(resolved, dir.join(DEFAULT_OPTIONS_FILE));
+        assert_eq!(
+            resolve_all(&raw, &dir, None, "macos"),
+            vec![dir.join(DEFAULT_OPTIONS_FILE)]
+        );
     }
 
     #[test]
-    fn resolve_returns_none_when_no_file_present() {
+    fn resolve_returns_nothing_when_no_file_present() {
         let dir = tempdir();
         let raw = args(&["snug", "app.jar"]);
-        assert_eq!(resolve(&raw, &dir, None), None);
+        assert!(resolve_all(&raw, &dir, None, "macos").is_empty());
     }
 
     #[test]
@@ -554,8 +873,10 @@ mod tests {
         std::fs::write(exe_dir.join(DEFAULT_OPTIONS_FILE), "--name ExeDir\n").unwrap();
         std::fs::write(cwd.join(DEFAULT_OPTIONS_FILE), "--name Cwd\n").unwrap();
         let raw = args(&["snug", "app.jar"]);
-        let resolved = resolve(&raw, &cwd, Some(&exe_dir)).unwrap();
-        assert_eq!(resolved, exe_dir.join(DEFAULT_OPTIONS_FILE));
+        assert_eq!(
+            resolve_all(&raw, &cwd, Some(&exe_dir), "macos"),
+            vec![exe_dir.join(DEFAULT_OPTIONS_FILE)]
+        );
     }
 
     #[test]
@@ -564,20 +885,25 @@ mod tests {
         let cwd = tempdir();
         std::fs::write(cwd.join(DEFAULT_OPTIONS_FILE), "--name Cwd\n").unwrap();
         let raw = args(&["snug", "app.jar"]);
-        let resolved = resolve(&raw, &cwd, Some(&exe_dir)).unwrap();
-        assert_eq!(resolved, cwd.join(DEFAULT_OPTIONS_FILE));
+        assert_eq!(
+            resolve_all(&raw, &cwd, Some(&exe_dir), "macos"),
+            vec![cwd.join(DEFAULT_OPTIONS_FILE)]
+        );
     }
 
     #[test]
-    fn resolve_explicit_flag_beats_exe_dir_default() {
+    fn resolve_explicit_flag_beats_every_default() {
         let exe_dir = tempdir();
         let cwd = tempdir();
         std::fs::write(exe_dir.join(DEFAULT_OPTIONS_FILE), "--name ExeDir\n").unwrap();
+        std::fs::write(exe_dir.join("snug.macos.options"), "--name ExeDirOS\n").unwrap();
         let explicit = cwd.join("custom.opts");
         std::fs::write(&explicit, "--name Custom\n").unwrap();
         let raw = args(&["snug", "--options", explicit.to_str().unwrap()]);
-        let resolved = resolve(&raw, &cwd, Some(&exe_dir)).unwrap();
-        assert_eq!(resolved, explicit);
+        assert_eq!(
+            resolve_all(&raw, &cwd, Some(&exe_dir), "macos"),
+            vec![explicit]
+        );
     }
 
     #[test]
@@ -589,8 +915,10 @@ mod tests {
         std::fs::create_dir_all(exe_dir.join(DEFAULT_OPTIONS_FILE)).unwrap();
         std::fs::write(cwd.join(DEFAULT_OPTIONS_FILE), "--name Cwd\n").unwrap();
         let raw = args(&["snug", "app.jar"]);
-        let resolved = resolve(&raw, &cwd, Some(&exe_dir)).unwrap();
-        assert_eq!(resolved, cwd.join(DEFAULT_OPTIONS_FILE));
+        assert_eq!(
+            resolve_all(&raw, &cwd, Some(&exe_dir), "macos"),
+            vec![cwd.join(DEFAULT_OPTIONS_FILE)]
+        );
     }
 
     #[test]
@@ -598,7 +926,114 @@ mod tests {
         let dir = tempdir();
         std::fs::write(dir.join(DEFAULT_OPTIONS_FILE), "--name Same\n").unwrap();
         let raw = args(&["snug", "app.jar"]);
-        assert_eq!(resolve(&raw, &dir, Some(&dir)), Some(dir.join(DEFAULT_OPTIONS_FILE)));
+        assert_eq!(
+            resolve_all(&raw, &dir, Some(&dir), "macos"),
+            vec![dir.join(DEFAULT_OPTIONS_FILE)]
+        );
+    }
+
+    // ---- The OS-specific tier ----------------------------------------
+    //
+    // The `os` token is a parameter rather than the host's, so every
+    // platform's rules are testable from one host. `macos` stands in for
+    // whichever token the test is about.
+
+    #[test]
+    fn os_options_file_name_uses_rust_os_spelling() {
+        // Deliberately not `mac` / `win`: the project already spells
+        // these `macos` / `windows` in cfg gates, script names and the
+        // release layout, and the filename has to match.
+        assert_eq!(os_options_file_name("macos"), "snug.macos.options");
+        assert_eq!(os_options_file_name("windows"), "snug.windows.options");
+        assert_eq!(os_options_file_name("linux"), "snug.linux.options");
+        assert_eq!(host_os_options_file_name(), os_options_file_name(std::env::consts::OS));
+    }
+
+    #[test]
+    fn missing_os_file_is_silent_and_yields_only_the_generic_one() {
+        // The important shape: an absent OS file must not appear as an
+        // error, and must not suppress the generic file either.
+        let dir = tempdir();
+        std::fs::write(dir.join(DEFAULT_OPTIONS_FILE), "--name Generic\n").unwrap();
+        let raw = args(&["snug", "app.jar"]);
+        assert_eq!(
+            resolve_all(&raw, &dir, None, "macos"),
+            vec![dir.join(DEFAULT_OPTIONS_FILE)]
+        );
+    }
+
+    #[test]
+    fn another_platforms_os_file_is_ignored() {
+        // A checked-in `snug.windows.options` must not leak into a macOS
+        // build just because it sits in the same directory.
+        let dir = tempdir();
+        std::fs::write(dir.join(DEFAULT_OPTIONS_FILE), "--name Generic\n").unwrap();
+        std::fs::write(dir.join("snug.windows.options"), "--name Windows\n").unwrap();
+        let raw = args(&["snug", "app.jar"]);
+        assert_eq!(
+            resolve_all(&raw, &dir, None, "macos"),
+            vec![dir.join(DEFAULT_OPTIONS_FILE)]
+        );
+    }
+
+    #[test]
+    fn both_files_resolve_lowest_priority_first() {
+        // The order is the layering order `merge` depends on, so assert
+        // it explicitly rather than as a set.
+        let dir = tempdir();
+        let generic = dir.join(DEFAULT_OPTIONS_FILE);
+        let os_file = dir.join("snug.macos.options");
+        std::fs::write(&generic, "--name Generic\n").unwrap();
+        std::fs::write(&os_file, "--name OS\n").unwrap();
+        let raw = args(&["snug", "app.jar"]);
+        assert_eq!(resolve_all(&raw, &dir, None, "macos"), vec![generic, os_file]);
+    }
+
+    #[test]
+    fn os_file_in_cwd_layers_over_generic_file_in_exe_dir() {
+        // Location is a *per-tier* search: the exe dir still wins for
+        // the generic name, but the OS tier is found on its own terms.
+        let exe_dir = tempdir();
+        let cwd = tempdir();
+        let generic = exe_dir.join(DEFAULT_OPTIONS_FILE);
+        let os_file = cwd.join("snug.macos.options");
+        std::fs::write(&generic, "--name ExeDir\n").unwrap();
+        std::fs::write(&os_file, "--name CwdOS\n").unwrap();
+        let raw = args(&["snug", "app.jar"]);
+        assert_eq!(resolve_all(&raw, &cwd, Some(&exe_dir), "macos"), vec![generic, os_file]);
+    }
+
+    #[test]
+    fn os_file_follows_the_same_exe_dir_over_cwd_rule() {
+        let exe_dir = tempdir();
+        let cwd = tempdir();
+        std::fs::write(exe_dir.join("snug.macos.options"), "--name ExeDirOS\n").unwrap();
+        std::fs::write(cwd.join("snug.macos.options"), "--name CwdOS\n").unwrap();
+        let raw = args(&["snug", "app.jar"]);
+        assert_eq!(
+            resolve_all(&raw, &cwd, Some(&exe_dir), "macos"),
+            vec![exe_dir.join("snug.macos.options")]
+        );
+    }
+
+    #[test]
+    fn resolve_ignores_directory_named_like_the_os_file() {
+        let dir = tempdir();
+        std::fs::create_dir_all(dir.join("snug.macos.options")).unwrap();
+        let raw = args(&["snug", "app.jar"]);
+        assert!(resolve_all(&raw, &dir, None, "macos").is_empty());
+    }
+
+    #[test]
+    fn explicit_options_flag_ignores_the_os_tier_entirely() {
+        // The escape hatch: naming a file means *that file*, so an
+        // ambient per-machine OS file cannot change a build's result.
+        let dir = tempdir();
+        std::fs::write(dir.join("snug.macos.options"), "--name OS\n").unwrap();
+        let custom = dir.join("custom.opts");
+        std::fs::write(&custom, "--name Custom\n").unwrap();
+        let raw = args(&["snug", "--options", custom.to_str().unwrap()]);
+        assert_eq!(resolve_all(&raw, &dir, None, "macos"), vec![custom]);
     }
 
     // ---- Short/long flag identity -------------------------------------
@@ -632,7 +1067,7 @@ mod tests {
         let raw = args(&["snug", "app.jar", "-o", "CLI.exe"]);
         let merged = merge(
             &raw,
-            vec!["--output".into(), "File.exe".into(), "--company".into(), "Co".into()],
+            layer(vec!["--output".into(), "File.exe".into(), "--company".into(), "Co".into()]),
         );
         assert_eq!(
             merged,
@@ -653,7 +1088,7 @@ mod tests {
         let raw = args(&["snug", "app.jar", "--output", "CLI.exe"]);
         let merged = merge(
             &raw,
-            vec!["-o".into(), "File.exe".into(), "--company".into(), "Co".into()],
+            layer(vec!["-o".into(), "File.exe".into(), "--company".into(), "Co".into()]),
         );
         assert_eq!(
             merged,
@@ -674,7 +1109,7 @@ mod tests {
         // so it must not leave a tail behind, and it must still override
         // the file's two-token form.
         let raw = args(&["snug", "app.jar", "-oCLI.exe"]);
-        let merged = merge(&raw, vec!["--output".into(), "File.exe".into()]);
+        let merged = merge(&raw, layer(vec!["--output".into(), "File.exe".into()]));
         assert_eq!(
             merged,
             vec![
@@ -693,12 +1128,12 @@ mod tests {
         let raw = args(&["snug", "app.jar", "--name", "CLI"]);
         let merged = merge(
             &raw,
-            vec![
+            layer(vec![
                 "--name".into(),
                 "File".into(),
                 "--min-java".into(),
                 "25".into(),
-            ],
+            ]),
         );
         assert_eq!(
             merged,
@@ -722,12 +1157,12 @@ mod tests {
         let raw = args(&["snug", "app.jar", "--jvm-arg", "-Xmx2g"]);
         let merged = merge(
             &raw,
-            vec![
+            layer(vec![
                 "--jvm-arg".into(),
                 "-Xms256m".into(),
                 "--name".into(),
                 "File".into(),
-            ],
+            ]),
         );
         assert_eq!(
             merged,

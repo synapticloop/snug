@@ -21,11 +21,24 @@
 #  - `#`-prefixed lines are comments and are ignored
 #  - Each line is parsed as shell-like tokens, so you __MUST__ quote any value
 #    with whitespace, e.g. `--name "My App"`.
-
+#
+# Per-platform overrides
+# ----------------------
+# A `snug.macos.options` / `snug.windows.options` / `snug.linux.options`
+# sitting alongside this file overrides it, highest precedence after the
+# command line. It is a *partial* override - only the values that differ
+# need to be in it, the rest still come from here - which is what the
+# `--output` below needs: a macOS build has to name a `.app` bundle, not a
+# Windows PE. Nothing writes that file for you; it is a deliberate,
+# hand-maintained thing.
+#
 # You may also pass through a command line option which points to this file
 # location - for example:
 #
 #    snug --options /path/to/snug.options
+#
+# `--options` means *that file only*: the per-platform tier is not consulted
+# alongside it, so a build's options never depend on which machine ran it.
 #
 # Note: The file does not need to be named snug.options - it can be called
 # anything you would like - but it is recommended to follow the convention

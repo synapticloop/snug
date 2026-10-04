@@ -19,13 +19,54 @@
 #    line. So `--name "My App"` works — quoting and shell-style escapes
 #    are honoured (the file is read with the `shell-words` tokenizer).
 #  - Lines starting with `#` are comments.
-#  - Command-line flags always override file values.
 #  - Repeatable flags (`--jvm-arg`, `--localization`) accumulate from
-#    both sources.
-#  - Lookup order when `--options` is not given: `snug.options` next
-#    to the snug executable first, then `snug.options` in the current
-#    working directory. So a `snug.exe` shipped alongside its
-#    `snug.options` carries its defaults wherever it is run from.
+#    every source rather than overriding.
+#
+#  Per-platform files
+#  ------------------
+#  This file applies to every platform. If some values genuinely differ
+#  per platform, put just those in a companion file named after the
+#  host, and leave the rest here:
+#
+#      snug.macos.options
+#      snug.windows.options
+#      snug.linux.options
+#
+#  Precedence, highest first:
+#
+#      1. command-line flags
+#      2. snug.<os>.options      (this host only)
+#      3. snug.options           (this file, every platform)
+#
+#  A `snug.<os>.options` is a *partial* override: it carries only what
+#  differs, and everything else still falls through to this file. A
+#  companion file is worth creating only when a value really does differ
+#  — the usual case is the output, since a macOS build must name a
+#  `.app` bundle and a Windows build a `.exe`:
+#
+#      # snug.macos.options — just the one line that differs
+#      --output build/MyApp.app
+#
+#  Only the file matching the host is ever read, so a checked-in
+#  `snug.windows.options` cannot affect a macOS build. A missing
+#  companion file is not an error and is not reported — only the files
+#  actually loaded are listed, on stderr, at startup.
+#
+#  `--init-options` scaffolds this file only. An OS-specific file is a
+#  deliberate, hand-maintained thing, so snug will not create one for
+#  you; copy this file and trim it to the differing values if you need
+#  it.
+#
+#  Lookup order
+#  ------------
+#  For each of the two names in turn, snug looks next to the snug
+#  executable first, then in the current working directory. So a
+#  `snug.exe` shipped alongside its `snug.options` carries its defaults
+#  wherever it is run from.
+#
+#  `--options <path>` bypasses all of the above and means *that file
+#  only* — the per-platform tier is not consulted as well, which is the
+#  way to guarantee a build's options do not depend on the machine.
 #
 #  Most lines below are commented out — uncomment the ones you need and
 #  replace the placeholder values. Anything left commented is ignored.
