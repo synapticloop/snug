@@ -908,6 +908,24 @@ fn parse_java_version(text: &str) -> Option<u16> {
 /// itself (flat layout) or one nested directory inside it (Adoptium
 /// default â€” `jdk-25.0.4.1+1/bin/java.exe`). `find_java_home` walks
 /// both shapes.
+/// A JDK snug already downloaded, if one meets `min_java_major`.
+///
+/// Exposed because the launcher's *own* decision to enter the install flow
+/// has to be able to ask this question, and `discover_jvm` cannot answer
+/// it: the cache lives under `~/Library/Application Support/snug/jdk/`,
+/// which is not a Java install location any standard discovery mechanism
+/// looks at. `discover_jvm` scans `explicit`, `JAVA_HOME`, `JDK_HOME`,
+/// `PATH`, `/usr/libexec/java_home` and the common install paths — none of
+/// which include it.
+///
+/// That is why `force` has to consult this itself. "Force" means *install
+/// one if there is nothing to run*, and a cached JDK means there is
+/// something to run: entering the install flow for it would be a download
+/// that never happens behind a dialog nobody needs to answer.
+pub fn cached_jdk_if_any(min_java_major: u16, install_root: &Path) -> Option<PathBuf> {
+    find_cached_jdk(min_java_major, install_root)
+}
+
 fn find_cached_jdk(min_java_major: u16, install_root: &Path) -> Option<PathBuf> {
     let entries = std::fs::read_dir(install_root).ok()?;
     for entry in entries.flatten() {

@@ -255,7 +255,29 @@ pub fn run(self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherErr
                 discover_jvm(&config.behavior.jvm_discovery, config.min_java)?
             } else {
                 log::log("JVM discovery: skipped (download-jdk=force)");
-                None
+                // `force` skips ordinary discovery so that snug's own cache
+                // wins, but nothing here can *see* that cache: it lives in
+                // `~/Library/Application Support/snug/jdk/`, which is not an
+                // install location `discover_jvm` scans. So ask directly.
+                //
+                // This is what keeps a cache hit free of side effects. Left
+                // to `maybe_install` it would still answer `Ok(Some(home))`,
+                // but that value is indistinguishable from a real download
+                // at the call site, and the caller re-execs on it — so a
+                // machine that already had the JDK would pay a pointless
+                // hand-off to "install" it.
+                let install_root = jdk_install_root();
+                match jdk_install::cached_jdk_if_any(config.min_java, &install_root) {
+                    Some(home) => {
+                        log::log(&format!(
+                            "JDK cache hit: {} (meets min_java={}); no download needed",
+                            home.display(),
+                            config.min_java
+                        ));
+                        Some(home)
+                    }
+                    None => None,
+                }
             }
         }
     };
@@ -267,7 +289,10 @@ pub fn run(self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherErr
         // `auto` means to not do. It returns here rather than silently
         // installing, and the log line above says why.
         DownloadJdkMode::Auto => false,
-        DownloadJdkMode::Force => !resumed_after_install(),
+        // `Force` means *install one if there is nothing to run*, so a
+        // cache hit above settles it. `jvm_dir` is `None` on this path
+        // either way, which makes this exactly the cache-miss condition.
+        DownloadJdkMode::Force => jvm_dir.is_none() && !resumed_after_install(),
     };
     if should_offer_install {
         let install_root = jdk_install_root();
