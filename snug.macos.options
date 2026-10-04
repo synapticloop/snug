@@ -1,0 +1,46 @@
+###############################################################################
+#                                                                             #
+#                          .-----.-----.--.--.-----.                          #
+#                          |__ --|     |  |  |  _  |                          #
+#                          |_____|__|__|_____|___  |                          #
+#                                ... .-..    |_____|                          #
+#                                                                             #
+#                                ~ ~ ~ * ~ ~ ~                                #
+#                                                                             #
+###############################################################################
+
+#
+# macOS overrides for the snug options file. Read by `snug` on a macOS host
+# *in addition to* `snug.options`, and it wins on any flag both files set.
+# Precedence, highest first: command line, this file, `snug.options`.
+#
+# So this file is a PARTIAL override, not a second copy. Only the values that
+# genuinely differ on macOS belong here; everything else - name, company,
+# version, min-java, main-class, icon, splash, jvm-arg - still comes from
+# `snug.options`. Keeping it to the differing lines is the whole point: a full
+# second copy is how two files drift apart.
+#
+# The Windows counterpart is `snug.windows.options`, and Linux's is
+# `snug.linux.options`. Only the file matching the host is ever read, so the
+# others can sit side by side in version control without affecting each other.
+# A missing one is not an error and is not reported.
+#
+# `--options <path>` bypasses this file entirely: naming a file means that
+# file only, so it is also the way to guarantee a build's options do not
+# depend on which machine ran it.
+#
+# ---------------------------------------------------------------------------
+# The one value that differs: the output artefact
+# ---------------------------------------------------------------------------
+#
+# `snug.options` says `--output assets/snug-javafx-demo.exe`, which is correct
+# on Windows. On macOS the output extension is what selects the artefact:
+# `-o Foo.app` builds a real `.app` *bundle* (a directory holding a Mach-O
+# launcher plus its payload), while `-o Foo.exe` builds a Windows PE. The
+# extension is the switch, so this one line is the whole override.
+#
+# scripts/build-macos-demo.sh reads this same value rather than hardcoding it,
+# so the demo script and snug cannot disagree about where the bundle goes.
+# ---------------------------------------------------------------------------
+
+--output assets/snug-javafx-demo.app
