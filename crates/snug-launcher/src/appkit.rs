@@ -998,10 +998,6 @@ thread_local! {
     /// Thread-locals rather than atomics because they are only ever
     /// touched from the main thread that is pumping the window.
     static PICKER_CHOICE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
-    /// Whether a click has landed. Separated from `PICKER_CHOICE` so that
-    /// "closed" and "still waiting" are different states rather than both
-    /// being `None`.
-    static PICKER_RESOLVED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 define_class!(
@@ -1020,7 +1016,7 @@ define_class!(
         fn dialogClicked(&self, sender: &NSButton) {
             let tag = sender.tag();
             PICKER_CHOICE.with(|c| c.set(if tag < 0 { None } else { Some(tag as usize) }));
-            PICKER_RESOLVED.with(|r| r.set(true));
+            stop_app();
         }
     }
 
@@ -1034,11 +1030,21 @@ define_class!(
         #[unsafe(method(windowShouldClose:))]
         fn windowShouldClose(&self, _sender: &NSWindow) -> bool {
             PICKER_CHOICE.with(|c| c.set(None));
-            PICKER_RESOLVED.with(|r| r.set(true));
+            stop_app();
             false
         }
     }
 );
+
+/// End the AppKit event loop started by [`preview_picker`].
+///
+/// A no-op when there is no application, so the responder does not have to
+/// know whether the loop is actually running.
+fn stop_app() {
+    if let Some(mtm) = MainThreadMarker::new() {
+        NSApplication::sharedApplication(mtm).stop(None);
+    }
+}
 
 /// The launcher dialog picker: a language menu, a button per dialog, and
 /// Close. Returns `(language_index, dialog_index)`, or `None` if closed.
@@ -1093,7 +1099,7 @@ pub fn preview_picker(
     // mascot appears in three roles at once — Dock tile, picker header
     // and every dialog body.
     if let Some(image) = mascot_image() {
-        let mut dock_icon = image.clone();
+        let dock_icon = image.clone();
         // The Dock draws its tile at roughly 128pt. Handing it the
         // 1024pt original makes AppKit resample on every repaint for no
         // visible gain.
@@ -1199,7 +1205,6 @@ pub fn preview_picker(
 
     let responder = PickerResponder::new(mtm);
     PICKER_CHOICE.with(|c| c.set(None));
-    PICKER_RESOLVED.with(|r| r.set(false));
 
     for (i, name) in dialogs.iter().enumerate() {
         y = put(&mut y, ROW_H, ROW_GAP);
@@ -1239,16 +1244,21 @@ pub fn preview_picker(
     window.center();
     window.makeKeyAndOrderFront(None);
 
-    // Pump until a choice lands, the same hand-driven run loop the progress
-    // window uses. `NSApp::stop:` would need an `NSStopInfo`, and polling a
-    // flag costs nothing here — the picker is idle most of its life.
-    loop {
-        if PICKER_RESOLVED.with(|r| r.get()) {
-            break;
-        }
-        let limit = NSDate::dateWithTimeIntervalSinceNow(0.05);
-        NSRunLoop::currentRunLoop().runUntilDate(&limit);
-    }
+    // The real AppKit event loop, not a hand-pumped `NSRunLoop`.
+    //
+    // Pumping the run loop is *not* enough and looks like it should be:
+    // the window comes up, the Dock tile appears, and every click is
+    // silently dropped. `NSRunLoop` will deliver the sources it is given,
+    // but `NSEvent` dequeue-and-dispatch belongs to `NSApplication`, and a
+    // `NSWindow` receives mouse events only by way of
+    // `-[NSApplication nextEventMatchingMask:untilDate:]`. With no
+    // `[NSApp run]` in the process, clicks queue and are never handled.
+    //
+    // `[NSApp run]` is also the only version of this that is safe here,
+    // precisely because the preview owns the application. The launcher's
+    // own loop has to be a bare run loop, or it would beat JavaFX to
+    // `+sharedApplication` — see `run_event_loop`.
+    app.run();
 
     let chosen = PICKER_CHOICE.with(|c| c.get());
     let language = popup.indexOfSelectedItem().max(0) as usize;
