@@ -15,12 +15,37 @@ pub const APP_NAME: &str = "Example Application Name";
 /// `--company` value. Same reasoning as [`APP_NAME`].
 pub const COMPANY: &str = "Example Company Pty Ltd";
 
-/// File name stem of the produced EXE.
+/// File name stem of the produced application.
 ///
 /// Matches [`APP_NAME`]: the point is that someone who finds
 /// `Example Application Name.exe` on a stranger's desktop immediately
 /// knows it came from here.
 pub const OUTPUT_STEM: &str = "Example Application Name";
+
+/// Extension of the artefact this platform's `snug` produces.
+///
+/// Windows gets a Windows executable; macOS gets a `.app`, because that is
+/// what a double-clickable Mac artefact is, and because a macOS `snug`
+/// embeds a Mach-O launcher rather than a PE stub — asking it for a
+/// Windows `.exe` would work, but shipping a beginner a foreign format
+/// from a Mac-native tool is exactly the kind of surprise this crate
+/// exists to avoid.
+#[cfg(windows)]
+pub const OUTPUT_EXT: &str = "exe";
+
+#[cfg(target_os = "macos")]
+pub const OUTPUT_EXT: &str = "app";
+
+#[cfg(not(any(windows, target_os = "macos")))]
+pub const OUTPUT_EXT: &str = "exe";
+
+/// Name of the `snug` binary this platform ships.
+///
+/// A bare command name rather than `snug.exe`, because the macOS artefact
+/// is installed with **no** extension: it is typed in a terminal, so it has
+/// no business carrying an icon, and the whole bundle-icon model only
+/// applies to things a user clicks.
+pub const SNUG_PROGRAM: &str = if cfg!(windows) { "snug.exe" } else { "snug" };
 
 /// Where the child's stdout + stderr are mirrored, so an error dialog can
 /// point at a real log instead of guessing.
@@ -40,7 +65,7 @@ pub struct Invocation {
     pub output: PathBuf,
 }
 
-/// Build the `snug.exe` invocation for one dropped input.
+/// Build the `snug` invocation for one dropped input.
 ///
 /// The working directory is the input's **parent** in both cases, and
 /// that single choice buys two things:
@@ -48,14 +73,14 @@ pub struct Invocation {
 /// 1. A project-local `snug.options` sitting beside the JAR (or the
 ///    folder) is picked up for free, so icons, splashes and
 ///    `--main-class` work through a plain drag-and-drop.
-/// 2. The EXE lands next to what the user dropped — beside the JAR, or
-///    beside the *folder* rather than inside it. Writing into a dropped
-///    `build/libs` would put the artefact somewhere the next `gradle
+/// 2. The artefact lands next to what the user dropped — beside the JAR,
+///    or beside the *folder* rather than inside it. Writing into a
+///    dropped `build/libs` would put it somewhere the next `gradle
 ///    clean` erases.
 ///
-/// Note the precedence consequence: `snug.options` beside `snug.exe`
-/// outranks the CWD copy, so the packaging layout must not ship one
-/// there or it would silently beat every project file.
+/// Note the precedence consequence: `snug.options` beside the `snug`
+/// binary outranks the CWD copy, so the packaging layout must not ship
+/// one there or it would silently beat every project file.
 pub fn invocation(snug_exe: &Path, input: &Path) -> Invocation {
     let cwd = match input.parent() {
         Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
@@ -65,7 +90,7 @@ pub fn invocation(snug_exe: &Path, input: &Path) -> Invocation {
         // ambiguous.
         _ => PathBuf::from("."),
     };
-    let output = cwd.join(format!("{OUTPUT_STEM}.exe"));
+    let output = cwd.join(format!("{OUTPUT_STEM}.{OUTPUT_EXT}"));
 
     let args = vec![
         OsString::from("--name"),
@@ -279,7 +304,7 @@ mod tests {
                 OsString::from("--company"),
                 OsString::from("Example Company Pty Ltd"),
                 OsString::from("-o"),
-                work.join(format!("{OUTPUT_STEM}.exe")).into_os_string(),
+                work.join(format!("{OUTPUT_STEM}.{OUTPUT_EXT}")).into_os_string(),
                 input.into_os_string(),
             ]
         );
@@ -291,7 +316,7 @@ mod tests {
         assert_eq!(inv.cwd, PathBuf::from("/home/u"));
         assert_eq!(
             inv.output,
-            PathBuf::from("/home/u/Example Application Name.exe")
+            PathBuf::from(format!("/home/u/{OUTPUT_STEM}.{OUTPUT_EXT}"))
         );
     }
 
@@ -302,7 +327,7 @@ mod tests {
         let build_dir = p(&["C:", "proj", "build"]);
         let inv = invocation(Path::new("snug.exe"), &build_dir.join("libs"));
         assert_eq!(inv.cwd, build_dir);
-        assert_eq!(inv.output, build_dir.join(format!("{OUTPUT_STEM}.exe")));
+        assert_eq!(inv.output, build_dir.join(format!("{OUTPUT_STEM}.{OUTPUT_EXT}")));
     }
 
     #[test]
@@ -314,14 +339,14 @@ mod tests {
         let input = builds.join("App.jar");
         let inv = invocation(&p(&["C:", "Program Files", "snug.exe"]), &input);
         assert_eq!(inv.args.last().unwrap(), &OsString::from(&input));
-        assert_eq!(inv.output, builds.join(format!("{OUTPUT_STEM}.exe")));
+        assert_eq!(inv.output, builds.join(format!("{OUTPUT_STEM}.{OUTPUT_EXT}")));
     }
 
     #[test]
     fn invocation_handles_a_bare_relative_filename() {
         let inv = invocation(Path::new("snug.exe"), Path::new("App.jar"));
         assert_eq!(inv.cwd, PathBuf::from("."));
-        assert_eq!(inv.output, PathBuf::from("./Example Application Name.exe"));
+        assert_eq!(inv.output, PathBuf::from(format!("./{OUTPUT_STEM}.{OUTPUT_EXT}")));
     }
 
     #[test]

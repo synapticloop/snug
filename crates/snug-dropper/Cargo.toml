@@ -6,26 +6,23 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "Beginner front-end for snug — drop a JAR (or a folder of JARs) onto it to produce a Windows .exe."
+description = "Beginner front-end for snug — drop a JAR (or a folder of JARs) onto it to produce a native launcher."
 
 [lib]
 name = "snug_dropper"
 path = "src/lib.rs"
 
-# The shipped artefact is renamed to `Build with Snug.exe` at packaging
-# time (see AGENTS.md, slice 9). The target keeps a legal, cargo-friendly
+# The shipped artefact is renamed to `Build with Snug` at packaging time
+# (see AGENTS.md, slice 9). The target keeps a legal, cargo-friendly
 # name so `cargo build` / `cargo run` keep working without quoting.
 [[bin]]
 name = "snug-dropper"
 path = "src/main.rs"
 
-# No runtime dependencies at all.
-#
-# This crate never links the builder, the launcher, or `clap`: it shells
-# out to `snug.exe` and talks to Win32 directly. The only dependency is
-# the raw FFI surface for the dialogs. Release binary is ~240 KB, which
-# is the floor for a statically-linked, `opt-level = "z"` GUI-subsystem
-# Win32 binary rather than anything this code contributes.
+# No dependency on the builder, the launcher, or `clap`: it shells out to
+# `snug` and talks to the platform GUI layer directly. That keeps the
+# release binary small — it is a shim, and everything expensive is in the
+# CLI it invokes.
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }
@@ -33,3 +30,11 @@ windows-sys = { workspace = true }
 # `assets/snug-dropper.png` into the built EXE. The main binary never
 # links it — the `dropper` target has no `editpe` code path at runtime.
 editpe = { workspace = true }
+
+# macOS: the dropper has to *receive* the drop, which needs an
+# `NSApplication` and an `NSApplicationDelegate` — a bare Mach-O cannot be
+# a drop target at all, so there is no way to do this without AppKit.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = "0.3.2"
+objc2-foundation = { version = "0.3", default-features = false, features = ["alloc", "std", "NSString"] }

@@ -29,5 +29,12 @@ pub mod build;
 pub mod decide;
 pub mod terminal;
 
+/// Windows dialogs and the marquee. Pure Win32, so it stays behind the
+/// platform gate rather than dragging `windows-sys` into a Mac build.
 #[cfg(windows)]
 pub mod ui;
+
+/// The AppKit half: `NSApplication`, the `openFile:` delegate that makes
+/// drag-and-drop possible at all on macOS, and the result dialogs.
+#[cfg(target_os = "macos")]
+pub mod macos;

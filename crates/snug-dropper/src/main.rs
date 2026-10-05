@@ -14,18 +14,20 @@
 //! the real builder, where it writes `snug-build.log`, and where the
 //! double-click opens its terminal.
 //!
-//! **Windows-only.** Every item below is `#[cfg(windows)]` because the
-//! crate is useless anywhere else: it ships as a `.exe`, it is renamed to
-//! a `.exe`, and it is dragged onto by beginners who will never run it on
-//! macOS. It used to be gated with a single file-level `#![cfg(windows)]`,
+//! **Windows and macOS.** Every item below is platform-gated because the
+//! crate is useless anywhere else. The two halves are different *shapes*,
+//! not ports of each other: Windows reads the dropped paths from `argv`
+//! and returns a code, while macOS has to own an `NSApplication` and a
+//! delegate (see [`snug_dropper::macos`] for why a bundle is the only
+//! form that can receive a drop at all).
+//!
+//! It used to be gated with a single file-level `#![cfg(windows)]`,
 //! which is tidier but leaves `cargo build --workspace` failing on a
 //! macOS dev box with `E0601: main function not found` — a bin whose whole
 //! body was configured out has no entry point. The per-item form keeps
 //! the crate building everywhere so `--workspace` builds *and* `--workspace`
 //! tests run on macOS / Linux, which is where the library half of this
-//! crate (the drop decision and build plumbing) is developed. The
-//! non-Windows `main` at the bottom is the price of that, and it says
-//! exactly one thing.
+//! crate (the drop decision and build plumbing) is developed.
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
@@ -184,17 +186,30 @@ fn confirm_overwrite(invocation: &Invocation) -> bool {
     ))
 }
 
-/// Non-Windows entry point. This binary is a Windows-only artefact (see
-/// the module docs), so there is nothing here to do beyond saying so.
+/// macOS entry point. The work is in [`snug_dropper::macos`], which is a
+/// module rather than an `if` because a macOS dropper is a different
+/// *shape*: it has to run an `NSApplication` with a delegate, not read
+/// `argv` and return.
+#[cfg(target_os = "macos")]
+fn main() -> ExitCode {
+    snug_dropper::macos::run()
+}
+
+/// Non-Windows, non-macOS entry point. There is no drag-and-drop
+/// contract to honour here — Finder, Explorer and most Linux desktops
+/// have no "launch this on drop" that both halves agree on — so this
+/// binary stays a build host for `cargo` rather than shipping as a
+/// user-facing artefact.
+///
 /// It exists so `cargo build --workspace` and `cargo test --workspace`
-/// succeed on a macOS / Linux dev box instead of failing with
+/// succeed on a Linux dev box instead of failing with
 /// `E0601: main function not found`.
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn main() -> ExitCode {
     eprintln!(
-        "snug-dropper / \"Build with Snug\" is a Windows-only tool. \
-         It is shipped beside snug.exe for Windows users; on macOS, use \
-         `snug` directly."
+        "snug-dropper / \"Build with Snug\" ships for Windows and macOS only. \
+         It is a drag-and-drop front end, and neither has a portable \
+         equivalent on this platform; use `snug` directly."
     );
     ExitCode::FAILURE
 }
