@@ -1,0 +1,17 @@
+[package]
+name = "snug-app-bundle"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Build-support crate that wraps a Mach-O in a double-clickable macOS .app with an icon, used to package snug_preview and Build with Snug."
+
+[dependencies]
+anyhow = { workspace = true }
+snug-icns = { path = "../snug-icns" }
+
+[[bin]]
+name = "snug-bundle"
+path = "src/bin/snug_bundle.rs"

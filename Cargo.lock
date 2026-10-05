@@ -1274,6 +1274,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba467056f1b547ed52077911161fc86985becbc60e8e1857c8a144dab0def891"
 
 [[package]]
+name = "snug-app-bundle"
+version = "0.9.11"
+dependencies = [
+ "anyhow",
+ "snug-icns",
+]
+
+[[package]]
 name = "snug-cli"
 version = "0.9.11"
 dependencies = [
@@ -1297,6 +1305,9 @@ name = "snug-dropper"
 version = "0.9.11"
 dependencies = [
  "editpe",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
  "windows-sys 0.59.0",
 ]
 
@@ -1309,6 +1320,14 @@ dependencies = [
  "serde",
  "sha2",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "snug-icns"
+version = "0.9.11"
+dependencies = [
+ "anyhow",
+ "image",
 ]
 
 [[package]]

@@ -72,10 +72,14 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["all
 # %LOCALAPPDATA% through the Win32 API instead, so it needs no libc.
 
 
-# `build.rs` (this file's sibling) wraps `assets/snug-icon.png` as
-# a single-entry ICO and embeds it as `MAINICON` via `embed-resource`
-# so `find_best_icon_hicon` in `jdk_install.rs` finds the icon when
-# the dialogs need an EXE-icon fallback for the mascot slot.
+# `build.rs` (this file's sibling) wraps `assets/snug-icon.png` as a
+# multi-resolution ICO and embeds it as `MAINICON` via `embed-resource`,
+# so `find_best_icon_hicon` in `jdk_install.rs` finds the icon when the
+# dialogs need an EXE-icon fallback for the mascot slot.
+#
+# macOS deliberately has no equivalent: the launcher is only ever run
+# from inside a `.app`, whose icon comes from `Contents/Resources/App.icns`
+# (written by `snug-app-bundle`). See the `build.rs` comment.
 [build-dependencies]
 embed-resource = { version = "3", default-features = false }
 image = { workspace = true }

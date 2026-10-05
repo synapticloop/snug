@@ -3,6 +3,8 @@ resolver = "2"
 members = [
     "crates/snug-format",
     "crates/snug-payload",
+    "crates/snug-icns",
+    "crates/snug-app-bundle",
     "crates/snug-cli",
     "crates/snug-launcher",
     "crates/snug-dropper",

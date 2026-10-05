@@ -27,13 +27,13 @@
 //! clear error from `embed-resource`. Dev builds on
 //! `windows-latest` runners have `rc.exe` available.
 //!
-//! **`snug_preview.exe` icon override** (uses
-//! `assets/snug-preview.png` instead of `snug-icon.png`). The
-//! un-binned MAINICON above applies to every dev-time bin in this
-//! crate (primary launcher, examples, tests), including the
-//! preview binary. To swap to the preview-specific icon, run the
+//! **`snug_preview` icon override** (uses
+//! `assets/snug-preview.png` instead of `snug-icon.png`). On Windows
+//! the un-binned MAINICON above applies to every dev-time bin in this
+//! crate (primary launcher, examples, tests), including the preview
+//! binary, so the override there is a post-link step: run the
 //! `stamp_preview_icon` helper **after** `cargo build --bin
-//! snug_preview`:
+//! snug_preview`.
 //!
 //! ```bash
 //! cargo build --bin snug_preview
@@ -42,10 +42,16 @@
 //!
 //! See `crates/snug-launcher/src/bin/stamp_preview_icon.rs` for the
 //! helper. Cargo doesn't expose a post-link hook, and
-//! `compile_for_everything` can't apply per-bin overrides without
-//! a linker-resource conflict, so a manual step is the cleanest
-//! path. The first build also needs `cargo build --bin
+//! `compile_for_everything` can't apply per-bin overrides without a
+//! linker-resource conflict, so a manual step is the cleanest path.
+//! The first build also needs `cargo build --bin
 //! stamp_preview_icon` once to compile the helper.
+//!
+//! On macOS neither problem exists. `snug_preview` ships as an `.app`
+//! (see `snug-app-bundle`), so it gets its artwork from
+//! `Contents/Resources/App.icns` — the same place Finder looks for
+//! *every* app's icon — and there is no link-arg to make per-bin and no
+//! stamp to forget.
 
 use std::env;
 use std::fs;
@@ -89,136 +95,28 @@ fn main() {
         let _ = embed_resource::compile_for_everything(&rc_path, embed_resource::NONE);
     }
 
-    // ---- macOS: __TEXT,__icns ----
+    // ---- macOS: deliberately nothing ----
     //
-    // Same shape, different mechanism. macOS has no resource directory
-    // (which is why `editpe` is PE-only and the macOS bundle writes the
-    // icon as a sibling `App.icns` file instead), and a bare executable
-    // has no bundle to read one from — so the icon has to live *inside*
-    // the Mach-O, as an `__icns` section in `__TEXT`. The Apple linker
-    // takes that directly:
+    // The launcher used to link an `__TEXT,__icns` section here, and it
+    // cost 2.2 MB in every shipped artefact. The launcher is never
+    // *displayed*: it is installed at `<App>.app/Contents/MacOS/<App>`,
+    // where Finder shows the **bundle's** icon from
+    // `Contents/Resources/App.icns`, and the nested Mach-O is never
+    // consulted. Worse, the launcher is `include_bytes!`-ed into the
+    // `snug` CLI, so the icon was paid for twice — once in the stub and
+    // again in every `snug` binary and every `.app` that binary builds.
     //
-    // ```text
-    // -Wl,-sectcreate,__TEXT,__icns,<path to icon.icns>
-    // ```
+    // Removing it is why there is no `snug-icns` build-dependency here.
+    // The clickable macOS artefacts (`snug_preview`, and the
+    // `Build with Snug` dropper) get their icons the way a bundle
+    // should, from a real `App.icns` — see `snug-app-bundle`.
     //
-    // Binned rather than un-binned (`rustc-link-arg-bins`): a Mach-O
-    // section belongs to an executable, so applying it to test and bench
-    // harnesses would be meaningless at best, and this crate has bins on
-    // both sides of it that must carry the icon.
-    //
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
-        let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR set by cargo"));
-        let icns = out_dir.join("snug.icns");
-        // Pure Rust, so this is *not* best-effort. A failure here is a real
-        // bug rather than a missing system tool, and a missing icon should
-        // never be able to fail a build.
-        write_macos_icns("assets/snug-icon.png", &icns);
-        println!(
-            "cargo:rustc-link-arg-bins=-Wl,-sectcreate,__TEXT,__icns,{}",
-            icns.display()
-        );
-    }
+    // The one place an icon is still linked into a Mach-O is Windows,
+    // where a bare `.exe` really does carry its own `MAINICON` and
+    // Explorer really does read it.
 }
 
 use std::path::PathBuf;
-
-/// ICNS chunk types, as (pixel size, four-character type).
-///
-/// Chunk ids and the sizes they carry are Apple's, from the Icon Services
-/// documentation. `icp4`/`icp5` are the plain 1x 16 and 32 pixel entries;
-/// `ic11`..`ic14` and `ic10` are the `@2x` tiers, which is why several of
-/// them share a pixel dimension with the entry above.
-///
-/// Derived from what `/usr/bin/iconutil` actually emits, by reading a real
-/// `App.icns` back out of a built `.app` bundle and dumping its chunk list.
-/// One deliberate difference: `iconutil` stores 16 and 32 pixel as raw
-/// `ARGB` (`ic04`, `ic05`) rather than PNG, and appends a `bpli` metadata
-/// chunk. The PNG forms below are equivalent as far as Icon Services is
-/// concerned and `bpli` is optional, so neither is worth a subprocess and
-/// a temporary directory to reproduce.
-const ICNS_CHUNKS: &[(u32, &str)] = &[
-    (16, "icp4"),
-    (32, "icp5"),
-    (32, "ic11"),
-    (64, "ic12"),
-    (128, "ic07"),
-    (256, "ic08"),
-    (256, "ic13"),
-    (512, "ic09"),
-    (512, "ic14"),
-    (1024, "ic10"),
-];
-
-/// Build a single-file ICNS from `png_src`, one PNG-encoded chunk per entry
-/// in [`ICNS_CHUNKS`].
-///
-/// The container is trivial, which is the whole reason for writing it here
-/// rather than shelling out:
-///
-/// ```text
-/// 'icns'                    -- magic
-/// u32 be  total length      -- including these 8 header bytes
-/// then, repeated:
-///   4 bytes  chunk type     -- 'ic07', 'ic10', ...
-///   u32 be  chunk length    -- including these 8 chunk bytes
-///   bytes   payload         -- a whole PNG
-/// ```
-///
-/// An earlier version ran `/usr/bin/iconutil`, which meant a build that
-/// could not spawn it silently produced a binary with no icon. That is a
-/// poor trade for a format this small.
-fn write_macos_icns(png_src: &str, icns_dst: &Path) {
-    use std::io::Cursor;
-
-    println!("cargo:rerun-if-changed={png_src}");
-    // ...or whenever the script itself changes. Without this, the
-    // `rerun-if-changed` above *restricts* cargo to that one file, so edits
-    // here are silently ignored until the PNG is touched -- which is
-    // exactly the trap that made a `link-arg` look like it had been passed
-    // when it never had been.
-    println!("cargo:rerun-if-changed=build.rs");
-
-    let bytes = fs::read(png_src)
-        .unwrap_or_else(|e| panic!("snug-launcher build.rs: read {png_src}: {e}"));
-    let img = image::load_from_memory(&bytes)
-        .unwrap_or_else(|e| panic!("snug-launcher build.rs: decode {png_src}: {e}"));
-
-    let mut out: Vec<u8> = Vec::new();
-    out.extend_from_slice(b"icns");
-    // Placeholder for the total length, patched once every chunk's real
-    // size is known. Getting this wrong is the classic way to produce an
-    // ICNS that parses and renders as nothing.
-    out.extend_from_slice(&0u32.to_be_bytes());
-
-    for (size, ty) in ICNS_CHUNKS {
-        let resized = img.resize_exact(*size, *size, image::imageops::FilterType::Lanczos3);
-        let mut png: Vec<u8> = Vec::new();
-        {
-            // `write_to` needs `Write + Seek`; `Vec<u8>` is only `Write`,
-            // so borrow it through a `Cursor` and take the bytes after.
-            let mut cursor = Cursor::new(&mut png);
-            resized
-                .write_to(&mut cursor, image::ImageFormat::Png)
-                .unwrap_or_else(|e| {
-                    panic!("snug-launcher build.rs: encode {size}x{size} PNG: {e}")
-                });
-        }
-        out.extend_from_slice(ty.as_bytes());
-        out.extend_from_slice(&((png.len() + 8) as u32).to_be_bytes());
-        out.extend_from_slice(&png);
-    }
-
-    let total = (out.len() as u32).to_be_bytes();
-    out[4..8].copy_from_slice(&total);
-
-    fs::write(icns_dst, &out).unwrap_or_else(|e| {
-        panic!(
-            "snug-launcher build.rs: write {}: {e}",
-            icns_dst.display()
-        )
-    });
-}
 
 /// Standard Windows icon sizes. Picked to cover File Explorer
 /// (16/32), taskbar (32/48), shortcut icons (32/48), high-DPI

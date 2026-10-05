@@ -1,0 +1,13 @@
+[package]
+name = "snug-icns"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Build-support crate that turns a PNG into a single-file Apple .icns, shared by the snug-launcher build script and the .app bundler."
+
+[dependencies]
+anyhow = { workspace = true }
+image = { workspace = true }
