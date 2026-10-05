@@ -66,13 +66,89 @@ and run the `./assets/snug-javafx-demo.exe`.
 - **Snug does not have a built-in application update mechanism for your 
   application.** If you distribute a new version, you decide how that version is delivered to users. (That is not to say that you couldn't check for updates in your main application and point people at the new download location)
 - **Snug does not require your application to be published publicly.** It is 
-  well suited to internal applications that are simply copied to colleagues, placed on a shared drive, or distributed through whatever process your business already uses.  This bypasses code-signing the application, which can be expensive for the use cases.
+  well suited to internal applications that are simply copied to colleagues, placed on a shared drive, or distributed through whatever process your business already uses.  This bypasses code-signing the application, which can be expensive for the use cases — see [Distributing what you build](#distributing-what-you-build) for what each platform asks of you instead.
 - **Snug is not an installer framework.** Its primary job is to create a 
   native executable and manage the Java launch experience, rather than build a complete installation and uninstallation system. (This means that you will NOT get a Start menu icon or a desktop shortcut - but you can still run it from your desktop)
 - **Snug does not provide cloud-based deployment infrastructure.** There is 
   no requirement for npm, GitHub Releases, a hosted service, or an online account simply to distribute an application.
 - **Snug does not dictate how you distribute your software.** Once the 
   executable has been created, you remain in control of where it goes and who receives it.
+
+## Distributing what you build
+
+Snug does not sign your application, and neither platform makes signing
+free. What both operating systems *do* is apply a trust check to a
+binary they have not seen before — and both have a way past it that costs
+one click or one command. For software handed to colleagues, this is a
+five-minute job, not a blocker.
+
+The honest summary of where that leaves macOS: **a snug-built `.app` is
+really a personal and small-team tool.** Run it yourself, hand it to
+colleagues, drop it on the shared drive — all of that works well, and the
+artefact is small enough to pass around. The moment you want to give it to
+the public, macOS starts asking questions snug cannot answer, because those
+answers belong to Apple. Windows never asks them, so the very same binary
+that needs a caveat on a Mac needs none there. If you are shipping to
+strangers, read the next subsection before committing to the tool.
+
+| | Windows | macOS |
+|---|---|---|
+| what triggers it | an unsigned `.exe` downloaded in a browser | a `com.apple.quarantine` attribute on a downloaded `.app` |
+| what the user sees | "Windows protected your PC" → **More info** → **Run anyway** | "…cannot be opened because the developer cannot be verified" → Control-click → **Open** |
+| from a terminal | `Unblock-File App.exe` before the first run | `xattr -dr com.apple.quarantine MyApp.app` |
+| is it permanent | yes, unblocking clears it for that copy | yes, removing the attribute is permanent for that copy |
+
+Two macOS details are worth knowing, because the second one is genuinely
+confusing.
+
+**A browser is the only thing that causes this.** Quarantine is set by
+browsers and by nothing else. A `.app` that arrives over a file share, an
+internal share, AirDrop, or a deployment script has no quarantine
+attribute and launches normally — which is why "just put it on the shared
+drive" is the smoothest distribution path on macOS, and worth preferring
+over a download link where you get the choice.
+
+**Launched from a terminal, the failure is silent.** Gatekeeper kills a
+quarantined binary that has not been cleared, and from Terminal that
+surfaces as `Killed: 9` and exit code 137 — no dialog, nothing on
+stderr. Anyone who tries `./MyApp.app/Contents/MacOS/MyApp` before
+clearing the attribute will reasonably conclude the build is broken.
+Clear the attribute first.
+
+Snug already applies an **ad-hoc signature** (`codesign --sign -`) to
+every bundle it produces, and that is not polish. Apple Silicon will not
+execute an unsigned binary at all, so an ad-hoc signature is the floor
+for *running* rather than a distribution credential. It carries no
+developer identity, which is precisely why Gatekeeper still applies to
+it.
+
+### If you are distributing to the public
+
+This is where snug on macOS stops being the right tool, and it is worth
+being straight about the two reasons.
+
+**A snug-built `.app` is in the same trust class as an Electron app, not
+a native one.** Notarizing it requires the hardened runtime, which turns
+on *library validation* — and library validation only permits loading
+code signed by Apple or by the same Team ID. Snug's launcher loads
+`libjvm.dylib` from whatever JDK the user already has, which is signed by
+Oracle, Eclipse or Adoptium and never by you. So a notarized snug app
+must ship with the `disable-library-validation` entitlement, which is
+exactly the protection Apple's own guidance tells you to keep. It
+notarizes and it runs; it is just not a native-grade trust profile, and
+users will assume otherwise. That is a consequence of snug *not*
+bundling a JVM, not a bug that more engineering would fix.
+
+**`jpackage` is the better answer for public distribution, and snug is
+the better answer for almost everything else.** `jpackage` bundles a
+`jlink`'d runtime *inside* the app image and signs every component with
+the same identity, so it notarizes cleanly with no exceptions needed.
+What it cannot do is build cross-platform — Apple's documentation is
+explicit that packages must be built on the target platform, and macOS
+signing additionally needs the Xcode command line tools. So if you develop
+on Windows and have colleagues on Macs, `jpackage` cannot produce
+anything for them and snug can: from the same fat JAR, on the same
+machine, with the same command.
 
 
 Snug generates a single native Windows `.exe` that:
