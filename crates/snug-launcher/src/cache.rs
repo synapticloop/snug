@@ -573,12 +573,37 @@ mod tests {
         );
     }
 
+    // Unix keeps application support and caches in separate directories so
+    // the OS reclaims caches without touching data. Windows has no such
+    // split, and `platform_app_support_base` returns the cache directory
+    // there on purpose (see its own doc comment), so this invariant is
+    // asserted only where it is meant to hold.
+    //
+    // It also could not have been made to pass on Windows by fixing the
+    // fixture: both fallbacks branch on `HOME`, which a Windows shell does
+    // not define. Under Git Bash - which *does* set HOME - the two resolve
+    // to `$HOME/.cache` and `$HOME/.local/share` and this test passed. In
+    // cmd or PowerShell they collapse to the same `temp_dir()` and it
+    // failed. An assertion whose outcome depends on an unrelated
+    // environment variable is the real bug, and gating removes it rather
+    // than papering over one machine's environment.
+    #[cfg(not(windows))]
     #[test]
     fn app_support_fallback_is_not_the_cache_fallback() {
         let support = fallback_app_support_base();
         let cache = fallback_cache_base();
         assert_ne!(support, cache);
         assert!(support.is_absolute());
+    }
+
+    /// The Windows half of the pair above: here the two bases are
+    /// *deliberately* the same directory, so that the install path does
+    /// not move. Without this, Windows simply had no coverage of the
+    /// behaviour its own implementation documents.
+    #[cfg(windows)]
+    #[test]
+    fn on_windows_app_support_is_deliberately_the_cache_directory() {
+        assert_eq!(platform_app_support_base(), platform_cache_base());
     }
 
     #[test]
@@ -591,11 +616,26 @@ mod tests {
         );
     }
 
+    /// A directory that is genuinely absolute on *every* platform.
+    ///
+    /// `pick_cache_base` drops an env value that is not absolute, so a
+    /// fixture has to be absolute or it silently exercises the
+    /// relative-path branch instead of the one under test. `/var/empty`
+    /// and `/Users/someone/...` read as absolute but are not on Windows,
+    /// where only a drive prefix or a UNC path counts - which is how these
+    /// two tests came to assert nothing about the override on Windows.
+    ///
+    /// `temp_dir()` is absolute on every platform cargo supports, and the
+    /// tests below never touch the filesystem, so this names nothing real.
+    fn an_absolute_dir() -> PathBuf {
+        std::env::temp_dir().join("snug-cache-fixture")
+    }
+
     #[test]
     fn env_cache_base_wins_over_the_platform_base() {
         // The whole point of the override: a home whose platform cache
         // directory is unwritable, pointed somewhere that is not.
-        let env = PathBuf::from("/var/empty/snug-cache");
+        let env = an_absolute_dir();
         let platform = PathBuf::from("/Users/someone/Library/Caches");
         assert_eq!(
             pick_cache_base(Some(env.clone().into_os_string()), Some(platform)),
@@ -608,12 +648,13 @@ mod tests {
         // A *base*, not a root. If this ever stopped appending the
         // namespace, two apps sharing one SNUG_CACHE_DIR would overwrite
         // each other's cached JARs.
-        let base = pick_cache_base(
-            Some(OsString::from("/var/empty/snug-cache")),
-            None,
-        );
+        //
+        // Compared against `env` rather than a literal, so the assertion
+        // holds whatever the platform's absolute-path form happens to be.
+        let env = an_absolute_dir();
+        let base = pick_cache_base(Some(env.clone().into_os_string()), None);
         let root = base.join(SNUG_SUBDIR).join("Acme").join("Demo");
-        assert!(root.starts_with("/var/empty/snug-cache"));
+        assert!(root.starts_with(&env), "got {}", root.display());
         assert!(root.ends_with("snug/Acme/Demo"), "got {}", root.display());
     }
 
