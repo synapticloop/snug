@@ -196,6 +196,43 @@ work than the Windows model, easier to inspect (the payload file can be
 hexdumped), and it sidesteps the fact that there is no Mach-O resource
 writer in the dependency graph — `editpe` is PE-only.
 
+**The macOS *icon* is embedded in the Mach-O, and written by hand.**
+Having no resource directory leaves a bare executable with nowhere to get
+an icon: a bundled `.app` reads `Contents/Resources/App.icns`, but
+`cargo run` has no bundle, and **macOS does not read an icon out of a Mach-O
+the way Windows reads `MAINICON`**. So `build.rs` emits
+
+```text
+cargo:rustc-link-arg-bins=-Wl,-sectcreate,__TEXT,__icns,<out>/snug.icns
+```
+
+and writes the ICNS itself:
+
+```text
+'icns'  →  u32 be total length  →  per chunk: 4-byte type, u32 be length, PNG bytes
+```
+
+- The chunk table was **derived, not remembered**: read a real
+  `App.icns` back out of a built `.app` and dumped its chunk list. That
+  showed `iconutil` stores 16/32px as raw `ARGB` (`ic04`, `ic05`) and
+  appends an optional `bpli` chunk; the PNG forms are equivalent to Icon
+  Services, so neither difference earns a subprocess.
+- **It was `iconutil` first, and that was wrong.** The first version shelled
+  out, as `macos_bundle.rs` does, and failed whenever it could not be given
+  a temp directory — leaving a binary with no icon behind a
+  `cargo:warning` everyone learns to scroll past. A cosmetic default must
+  not be a silent failure mode. Pure Rust also means a failure here is a
+  real bug, so it panics like the rest of the script.
+- **The size cost is real and deliberate**: the macOS stubs went from
+  ~0.6 MB to ~3.1 MB, almost all of it the 2.2 MB icon, and the launcher
+  is `include_bytes!`-ed into the `snug` CLI, so each macOS `snug` grows by
+  the same. The 1024px chunk is 1.2 MB of that; dropping it is the lever
+  if it ever matters, at the cost of a softer icon on a Retina tile. The
+  Windows `MAINICON` is tens of KB and unaffected.
+- Binned rather than un-binned link args, because a Mach-O section belongs
+  to an executable — which means the preview's *test harness* carries it
+  too. That is the cost of not having per-bin control from `build.rs`.
+
 ### Release layout
 
 Two thin per-architecture binaries, **not** a universal2. arm64 is the
@@ -567,13 +604,26 @@ by accident.
   configures out `main` too, and you get
   `error[E0601]: main function not found`, which fails
   `cargo build --workspace` on macOS and Linux. So the Windows-only
-  *binaries* — `snug-dropper`, `stamp_dropper_icon`, `snug_preview` — keep
-  a real `main` and gate per item instead: either `#[cfg(windows)]` on each
-  item (`snug-dropper`, `stamp_dropper_icon`) or, for a large file, one
-  `#[cfg(windows)] #[path = "..."] mod imp;` with the implementation moved
-  beside it (`snug_preview`). Either way a non-Windows `main` exists that
-  prints why the tool is Windows-only. Bin *names* must not change —
-  `build-release.cmd` invokes them.
+  *binaries* — `snug-dropper`, `stamp_dropper_icon` — keep a real `main`
+  and gate per item instead: `#[cfg(windows)]` on each item. Bin *names*
+  must not change; `build-release.cmd` invokes them.
+  - **`snug_preview` is the exception, and it is no longer Windows-only.**
+    It uses the other shape: one `#[cfg] #[path = "..."] mod imp;` beside a
+    real `main` that delegates, so the *implementation* is per-platform
+    while the entry point is not. There are now two:
+    `snug_preview/windows_impl.rs` and `snug_preview/macos_impl.rs`, gated
+    `#[cfg(windows)]` and `#[cfg(target_os = "macos")]`, with a third
+    `main` for platforms with neither.
+  - **The two implementations are not ports of each other, and the
+    difference is the point.** The Windows one is ~2000 lines because the
+    Windows dialogs are hand-painted Win32 with no way to drive the real
+    ones, so the previewer reimplements each window. The macOS dialogs are
+    real `NSWindow`s behind ordinary functions, so `macos_impl.rs` *calls*
+    them and reimplements nothing — shorter, and honest, because what you
+    see is the window the launcher actually shows rather than a copy that
+    can drift from it. It is also the reason the macOS preview can afford
+    the dialog mascot at all: run from a terminal there is no bundle, so
+    `--mascot` is effectively mandatory rather than a nicety.
 - **Never hardcode a Windows path literal in a test of portable logic.**
   `Path::new(r"C:\work\App.jar")` is one opaque segment on macOS, so
   `parent()` returns `None` and the code takes its bare-filename fallback:
@@ -1290,8 +1340,7 @@ by accident.
   accepted) are parsed by a hand-rolled `parse_args` taking an
   `IntoIterator`, so all its behaviour is unit-tested without
   spawning a process. Its Language dropdown lists every bundle it
-  found with the built-in English baseline last, unless the user
-  supplied their own `en` — same replacement rule as a build. It
+  found with the built-in English baseline last, unless the user  supplied their own `en` — same replacement rule as a build. It
   **opens on the baseline**, resolved by `default_index` and never by
   hardcoding index 0: tags arrive in `discover_localization_files`
   filename-sorted order, so `de` sorts before `en` and an index-0
@@ -1336,6 +1385,24 @@ by accident.
     `Option<&str>` and its control *and font* are only allocated when
     non-empty, so an empty line costs nothing; `progress_window` reads
     its strings straight off `Dialogs` and always creates the control.
+  - **The macOS half is a different shape, not a port.** It uses real
+    `NSButton` / `NSPopUpButton` in a hand-laid-out `NSWindow` rather than
+    hand-painted Win32, so it is a fraction of the size for the same job.
+    Its language choice comes back *with* the dialog rather than being
+    applied live from the popup — one round trip instead of a callback
+    into the previewer's state, and the reviewer sees the same thing
+    either way: pick a language, click a dialog, read it.
+  - **Two macOS-only traps in the picker, both caught by writing it rather
+    than by clicking it.** Close carries tag `-1`, and clamping it with
+    `max(0)` means clicking Close opens the *first* dialog; the sign has to
+    be read in the responder. And `Option` is ambiguous between "not chosen
+    yet" and "closed", so the picker needs a second resolved flag.
+  - **The macOS picker calls `[NSApp run]`, the launcher never can.** The
+    preview owns its application, so the documented AppKit pattern is
+    correct there. The launcher does not, and must not — see the
+    `+sharedApplication` race and the `drain_appkit_events` note. A run
+    loop is not an event loop, and a window whose process never dequeues
+    `NSEvent` takes no clicks and earns a spinning beachball.
   - **`WINDOW_W` / `WINDOW_H` are CLIENT dimensions in both dialog
     modules, and the window size is derived from them** via
     `AdjustWindowRectEx` before `CreateWindowExW`, exactly as

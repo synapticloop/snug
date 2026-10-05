@@ -97,29 +97,41 @@ Rust-based, and open source.
 
 ## Status
 
-**Pre-alpha.** Slices 1, 3, and 5 are done; the CLI builds a real
-Windows `.exe` end-to-end with in-process resource stamping, and the
-launcher runtime in the stub can locate its payload, extract the JAR to
-a per-user cache, discover a compatible JVM + `jvm.dll`, and (with
-`--download-jdk`) download Eclipse Temurin from Adoptium, verify its
-SHA-256 on disk, extract it, and hand the JVM home back to the
-discovery path. Slice 2 is partial — the actual `JNI_CreateJavaVM`
-invocation step is currently stubbed and returns `JniStub`; it needs
-Windows-machine validation with the `jni` 0.22 invocation API before we
-wire it up.
+**Pre-alpha, and both launchers work on real machines.** The CLI builds a
+real Windows `.exe` end-to-end with in-process resource stamping, and a
+real macOS `.app` end-to-end with an ad-hoc signature. Both launcher
+runtimes locate their payload, extract the JAR to a per-user cache,
+discover a compatible JVM, load `jvm.dll` / `libjvm.dylib`, and invoke
+the Java `main` class through the `jni` 0.22 invocation API. With
+`--download-jdk` they will also fetch Eclipse Temurin from Adoptium,
+verify its SHA-256 on disk, extract it, and hand the JVM home back to
+discovery. The Windows path was validated on a Windows machine; the macOS
+path on a Mac, including the JavaFX system menu bar.
 
 | Slice | Status |
 |-------|--------|
 | CLI surface + embedded-payload format | done |
-| Windows launcher runtime (JVM discovery + JNI + splash) | partial — runtime logic + cross-compiled stub in place; JNI launch stubbed, needs Windows validation |
+| Windows launcher runtime (JVM discovery + JNI) | **done, verified on a Windows machine** |
+| macOS launcher runtime (`libjvm.dylib` + JNI, cache, JDK discovery) | **done, verified on a Mac** |
 | snug-cli builder: stub + payload concatenation, in-process `editpe` resource stamping | **done** |
-| Resource stamping — `VS_VERSIONINFO` (`ProductName`, `CompanyName`, `FileDescription`, `LegalCopyright`, `FixedFileInfo` file/product version, `VFT_APP`) + optional `--icon` + optional `--manifest` | done |
-| Native splash renderer (PNG via GDI+/WIC) | planned |
-| Per-user cache layout (`%LOCALAPPDATA%\snug\<company>\<app>\<jar-sha256>\`) | done |
-| Per-launch log file (`...\<jar-sha256>\snug.log`, truncated on each launch) | done |
-| Old-version cache cleanup | planned |
-| Editable dialog text (`snug-format/assets/snug-localisations.en.txt`) | done |
+| macOS `.app` emitter (`Contents/{Info.plist,MacOS,Resources}`, ad-hoc signed) | **done** |
+| Windows resource stamping — `VS_VERSIONINFO` (`ProductName`, `CompanyName`, `FileDescription`, `LegalCopyright`, `FixedFileInfo` file/product version, `VFT_APP`) + optional `--icon` + optional `--manifest` | done |
+| macOS app menu / `CFBundleName` from `--name` | done |
+| Per-user cache — `%LOCALAPPDATA%\snug` (Windows), `~/Library/Caches/snug` (macOS) | done |
+| Per-launch log file (`<cache>\snug.log`, truncated on each launch) | done |
+| Old-version cache cleanup | done — entries expire on use, swept at most once per 6h |
+| Editable dialog text (`snug-format/assets/snug-localisations.en.txt`) | done, and shared by the Windows and macOS dialogs |
+| macOS JDK download dialogs (consent, progress, retry, failure) | done |
+| Native splash renderer (PNG via GDI+/WIC) | Windows only; not on macOS |
 | GitHub Actions CI (windows-latest release) | planned |
+
+The macOS launcher builds and runs natively too — macOS is where snug is
+developed — and its dialogs carry the *same* localised strings as the
+Windows ones, so a `--localization` bundle translates both. See
+`AGENTS.md` for the platform notes, including the one genuinely
+surprising constraint: the launcher must never create an `NSApplication`
+before JavaFX does, or JavaFX concludes it is embedded in another toolkit
+and the launched app loses its menu bar.
 
 ## Quick start
 
@@ -190,6 +202,13 @@ snug -o App.exe --name "Different Name"   # --name overrides the file
 snug --snug-version
 ```
 
+The output extension picks the artefact: `-o App.exe` builds a Windows
+binary, `-o MyApp.app` builds a macOS bundle, and with no `-o` at all
+the host's own platform is used. A macOS `.app` gets its icon from
+`Contents/Resources/App.icns` and its payload from a sibling file
+`Resources/<App>.snugpayload` -- macOS has no resource directory, which
+is why the payload is a sibling rather than something stamped in.
+
 The produced `.exe` is a 64-bit Windows GUI binary that:
 - contains the full fat JAR + icon + splash (when supplied) embedded at
   the tail behind an 8-byte `SNUGEMBD` magic trailer,
@@ -238,9 +257,9 @@ snug/
 │   ├── snug-icon.png           # 1254×1254, used by README + --icon examples
 │   └── snug-javafx-demo.jar    # JavaFX demo fat JAR (Main-Class read from manifest)
 ├── bin/
-│   ├── launcher-stub.exe       # precompiled cross-platform stub (PE32+ GUI x86-64, ~1.1 MB)
-│   ├── launcher-stub-macos-arm64  # precompiled macOS launcher (Mach-O arm64, ~0.6 MB)
-│   └── launcher-stub-macos-x86_64 # precompiled macOS launcher (Mach-O x86_64, ~0.6 MB)
+│   ├── launcher-stub.exe       # precompiled Windows stub (PE32+ GUI x86-64, ~1.1 MB)
+│   ├── launcher-stub-macos-arm64  # macOS launcher (Mach-O arm64, ~3.1 MB)
+│   └── launcher-stub-macos-x86_64 # macOS launcher (Mach-O x86_64, ~3.1 MB)
 ├── scripts/
 │   ├── build-release.cmd       # Windows batch pipeline: launcher + CLI + demo EXE
 │   ├── build-macos.sh          # macOS pipeline: `snug` CLI for arm64 + x86_64 into release/
@@ -250,7 +269,7 @@ snug/
     │   └── assets/             # snug-localisations.en.txt — canonical English baseline
     ├── snug-launcher/
     │   ├── assets/             # snug-icon.png (build.rs → MAINICON resource)
-    │   └── src/dialogs.rs      # include_str!s the TOML at compile time, fills `{name}` placeholders
+    │   └── src/dialogs.rs      # the localisation key tree, fills `{name}` placeholders
     └── snug-cli/               # CLI + stub-append builder + snug.options + editpe stamping
         └── assets/             # snug.options.example, written by `snug --init-options`
 ```
@@ -280,16 +299,23 @@ hardening slice.
 
 ## Building
 
-Prerequisites: a Rust 1.85+ toolchain. To (re)build the Windows stub
-from macOS or Linux you also need `zig` 0.14+ and `cargo-zigbuild`. On
-Windows the native `x86_64-pc-windows-msvc` target works without
-zig.
+Prerequisites: a Rust 1.85+ toolchain. **Builds are native, never
+cross-artefact** — Windows artefacts are built on Windows, macOS
+artefacts on macOS. That is not a limitation, it is what makes the
+precompiled-stub design work: `snug-cli` embeds its launcher with
+`include_bytes!`, so the launcher has to exist *before* the CLI
+compiles, and `scripts\build-release.cmd` already does them in that
+order. Cross-compiling would mean keeping a foreign toolchain alive
+purely to refresh a binary the target machine could have produced itself.
+The committed stubs are a bootstrap convenience for a fresh clone, not
+the source of truth; every release pipeline regenerates them.
 
 ```bash
-# one-time setup on a fresh Mac/Linux dev box
-brew install zig                                  # or download from ziglang.org
+# one-time setup on a Mac: the x86_64-pc-windows-gnu target is
+# *check-only* here, to prove the source still compiles for Windows.
+# It is never used to produce a shipped artefact.
 rustup target add x86_64-pc-windows-gnu
-cargo install cargo-zigbuild --locked
+cargo check --all-targets --target x86_64-pc-windows-gnu
 
 # full workspace tests
 cargo test --workspace
@@ -297,14 +323,20 @@ cargo test --workspace
 # build the snug CLI for the host platform
 cargo build --release -p snug-cli
 
-# regenerate the stub after changing snug-launcher code
-# (Mac/Linux via zigbuild):
-cargo zigbuild --target x86_64-pc-windows-gnu --release -p snug-launcher
-cp target/x86_64-pc-windows-gnu/release/snug-launcher.exe bin/launcher-stub.exe
-# (Windows native — no zig needed):
+# regenerate the stub after changing snug-launcher code.
+# Native only — see "Building" above for why there is no cross-artefact path.
+# Windows:
 cargo build --release -p snug-launcher
 Copy-Item target\release\snug-launcher.exe bin\launcher-stub.exe -Force
+# macOS (arm64 + x86_64 in one go, each landing in bin/):
+scripts/build-macos.sh
 ```
+
+> **If you change `snug-launcher`, rebuild the stubs before testing.** The
+> `snug` CLI embeds them with `include_bytes!`, so a stale stub means
+> your change is silently not in the binary you are about to run. The
+> release scripts do it for you; a hand-rolled `cargo build -p snug-cli`
+> does not.
 
 Notable test binaries:
 
@@ -313,7 +345,7 @@ Notable test binaries:
   stub's locator still finds the real trailer among the false-positive
   `SNUGEMBD` substrings inside the stub binary
 - `crates/snug-launcher/tests/...` — `find_java_home` roundtrips
-  (Adoptium's nested `jdk-X.Y.Z/` layout), `dialogs` TOML parsing,
+  (Adoptium's nested `jdk-X.Y.Z/` layout), `dialogs` placeholder filling,
   live progress text formatting
 - `crates/snug-cli/tests/end_to_end.rs` — full CLI invocation,
   stub-append, PE resource stamp
@@ -362,43 +394,82 @@ from `api.adoptium.net` when no compatible JVM is on the host.
 
 The flow:
 
-1. Cache check — scan `%LOCALAPPDATA%\snug\jdk\<version>\` for a
-   previously-extracted Temurin whose `java -version` reports a
-   sufficient major. Reused silently.
-2. Metadata fetch — `GET https://api.adoptium.net/v3/assets/feature_releases/<major>/ga?architecture=x64&image_type=jdk&os=windows&vendor=eclipse`.
+1. Cache check — scan the per-user JDK store for a previously-extracted
+   Temurin whose `java -version` reports a sufficient major. Reused
+   silently, and this happens **before any network access**, so a JDK
+   snug already downloaded is never downloaded twice.
+2. Metadata fetch — `GET https://api.adoptium.net/v3/assets/feature_releases/<major>/ga`
+   with the host's own `os` and `architecture` in Adoptium's spelling
+   (`os=windows&architecture=x64` / `os=mac&architecture=aarch64`).
    Returns the latest GA release with `binaries[].package.{link,
    checksum, size}` and `version_data.semver`.
-3. Dialog — first-run users see a `TaskDialog` with **Download
-   Temurin X.Y.Z+1 now / Open the download page in my browser /
-   Cancel** (button text is editable — see below).
-4. Download + verify — fetch the zip to a temp file, stream-hash it
-   with SHA-256, fail the install if the hash doesn't match the
-   declared checksum.
-5. Extract — unpack into `%LOCALAPPDATA%\snug\jdk\<version>\jdk-X.Y.Z+1\`
-   (Adoptium's zips carry a leading directory; `find_java_home` walks
-   up to 3 levels to locate `bin\java.exe`).
-6. Re-discover — set `JAVA_HOME` to the resolved home and re-run the
-   discovery chain. The launcher continues as if Temurin had been on
-   `PATH` all along.
+3. Dialog — first-run users see **Download Temurin X.Y.Z+1 now / Open the
+   download page in my browser / Cancel** (button text is editable — see
+   below). Windows uses a `TaskDialog`; macOS uses a hand-built `NSWindow`
+   rather than an `NSAlert`, because the consent question has to be
+   answerable before a modal session exists — an `NSAlert` runs its own
+   nested event loop, and gating a worker on a window that can never
+   appear is how "minutes of silence and not one byte" happened.
+4. Download + verify — fetch the archive to a temp file, stream-hash it
+   with SHA-256, fail the install if the hash doesn't match the declared
+   checksum. Windows unpacks a zip; macOS a `.tar.gz` (via `tar` +
+   `flate2`).
+5. Extract — unpack into the per-user store. Windows zips carry a
+   leading directory and `find_java_home` walks up to 3 levels to locate
+   `bin\java.exe`; macOS tarballs land as `<version>/Contents/Home`, and
+   the same walk finds `bin/java`.
+6. Re-discover — point discovery at what was just installed and re-run the
+   discovery chain. The launcher continues as if Temurin had been there
+   all along.
 
-A live progress dialog drives the download: title `Downloading Eclipse
-Temurin…`, a determinate progress bar (`TDF_SHOW_PROGRESS_BAR` +
-`TDN_TIMER` callback drives `TDM_SET_PROGRESS_BAR_POS`), and a status
-line rewritten every ~200 ms via `TDM_SET_ELEMENT_TEXT(TDE_CONTENT, …)`
-with `Downloaded X MB of Y MB (Z%)` / `Verifying SHA-256… (Z%)` /
-`Extracting… (Z%)`.
+**On macOS the hand-off is an `execve` of the launcher itself.** Showing
+those dialogs required an `NSApplication`, and creating one before JavaFX
+does costs the launched app its menu bar. `execve` replaces the image —
+destroying that application object — while the PID, audit session and
+LaunchServices registration survive, so it is a hand-off rather than a
+relaunch: one process, one Dock tile. The trigger is *a dialog was shown*,
+not *a JDK was installed*; keying it to the install path alone left the
+decline and failure paths launching into a poisoned process.
+
+A live progress dialog drives the download. On Windows that is a
+`TaskDialog` with `TDF_SHOW_PROGRESS_BAR` + a `TDN_TIMER` callback; on
+macOS it is a plain window with an `NSProgressIndicator` and a status line
+rewritten every tick with `Downloaded X MB of Y MB (Z%)` /
+`Verifying SHA-256… (Z%)` / `Extracting… (Z%)`.
 
 If `api.adoptium.net` itself is unreachable, the user sees a separate
 "Could not reach Adoptium — Snug" dialog with **Open the download page
 in my browser / Cancel** so they can still install Temurin manually
 from the fallback URL.
 
+### The cache path is not `%LOCALAPPDATA%` on macOS
+
+| | Windows | macOS |
+|---|---|---|
+| app cache + log | `%LOCALAPPDATA%\snug\<company>\<app>\<jar-sha256>\` | `~/Library/Caches/snug/<company>/<app>/<jar-sha256>/` |
+| installed JDKs | `%LOCALAPPDATA%\snug\jdk\` | `~/Library/Application Support/snug/jdk/` |
+| the only hardcoded macOS subpath | — | `Library/Caches`; everything above it is dynamic |
+
+`Caches` for the extractable cache and `Application Support` for the
+installed JDK is deliberate — one is regenerable from the payload, the
+other is not.
+
 ## Per-launch log file
 
-Every launch writes a structured trace to
-`%LOCALAPPDATA%\snug\<company>\<app>\<jar-sha256>\snug.log`, alongside
-the cached `app.jar`. The file is truncated on each launch so each
-session produces a self-contained record.
+Every launch writes a structured trace to the per-user cache, alongside
+the cached `app.jar`:
+
+| | path |
+|---|---|
+| Windows | `%LOCALAPPDATA%\snug\<company>\<app>\<jar-sha256>\snug.log` |
+| macOS | `~/Library/Caches/snug/<company>/<app>/<jar-sha256>/snug.log` |
+
+The file is truncated on each launch so each session produces a
+self-contained record -- with one exception, the macOS post-install
+`execve` hand-off, which **appends** instead. That re-entered pass
+re-derives the identical path, so a truncating open would erase the
+download progress recorded by the pass that did the asking, which is
+exactly the evidence a user wants when a download misbehaves.
 
 ```text
 [1758370000] snug-launcher starting — log file: ...
