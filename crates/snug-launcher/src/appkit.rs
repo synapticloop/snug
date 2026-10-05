@@ -554,6 +554,23 @@ pub fn set_mascot_image(image: Option<Retained<NSImage>>) {
     MASCOT_OVERRIDE.with(|m| *m.borrow_mut() = image);
 }
 
+/// Has this process already created an `NSApplication`?
+///
+/// This is the question the launcher's `execve` hand-off actually turns on,
+/// and getting the question wrong is a bug rather than a rounding error.
+/// A dialog was shown — and showing one *requires* an `NSApplication` —
+/// so this being true means the `+sharedApplication` race is already lost
+/// and the app about to be launched will be treated as embedded: no menu
+/// bar, a bouncing Dock icon, and a window that will not take focus.
+///
+/// That is independent of whether a JDK was installed. Declining the
+/// download, or failing to install it, both still leave a dialog on
+/// screen, and both then go on to discover a JDK already on the machine
+/// and launch it — with a poisoned application object still in place.
+pub fn owns_app() -> bool {
+    OWNS_APP.with(std::cell::Cell::get)
+}
+
 /// Load a mascot from an image file on disk, for the preview. Returns
 /// `None` if the file will not load, which the preview reports rather
 /// than treating as fatal — a dialog with the wrong icon is still worth

@@ -324,7 +324,7 @@ pub fn run(self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherErr
                 //
                 // Reached only when a dialog was actually shown, so the
                 // common path — a JVM already installed — never re-execs.
-                match exec_self_with_java_home(self_path, &new_home) {
+                match exec_self_with_java_home(self_path, Some(&new_home)) {
                     Ok(()) => unreachable!("exec only returns on failure"),
                     Err(e) => {
                         // Fall back to continuing in this process. That
@@ -355,6 +355,7 @@ pub fn run(self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherErr
             }
             Ok(None) => {
                 log::log("JDK install flow: declined or exhausted (see the log above)");
+                hand_off_after_dialog(self_path, "the install was declined")?;
                 // `Force` skipped discovery upfront, so run it now as a
                 // courtesy — a JDK may already be installed.
                 if jvm_dir.is_none() {
@@ -363,6 +364,7 @@ pub fn run(self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherErr
             }
             Err(e) => {
                 log::log(&format!("JDK install flow failed: {e}"));
+                hand_off_after_dialog(self_path, "the install failed")?;
                 if jvm_dir.is_none() {
                     jvm_dir = discover_jvm(&config.behavior.jvm_discovery, config.min_java)?;
                 }
@@ -756,24 +758,64 @@ fn resumed_after_install() -> bool {
 ///
 /// Arguments are forwarded so `--forward-args` builds still see the same
 /// `argv` the user launched with.
-fn exec_self_with_java_home(self_path: &Path, java_home: &Path) -> std::io::Result<()> {
+fn exec_self_with_java_home(self_path: &Path, java_home: Option<&Path>) -> std::io::Result<()> {
     use std::os::unix::process::CommandExt;
 
     log::log(&format!(
-        "handing off: re-exec {} with JAVA_HOME={} so JavaFX can create \
-         the NSApplication itself",
+        "handing off: re-exec {}{} so JavaFX can create the NSApplication itself",
         self_path.display(),
-        java_home.display()
+        match java_home {
+            Some(home) => format!(" with JAVA_HOME={}", home.display()),
+            None => String::new(),
+        }
     ));
     // `exec` skips destructors, and this log is the only durable record.
     log::flush();
 
-    let err = std::process::Command::new(self_path)
-        .args(std::env::args_os().skip(1))
-        .env("JAVA_HOME", java_home)
-        .env(RESUME_ENV, "1")
-        .exec();
-    Err(err)
+    let mut cmd = std::process::Command::new(self_path);
+    cmd.args(std::env::args_os().skip(1)).env(RESUME_ENV, "1");
+    // Only the install path has a new JAVA_HOME to advertise. A resumed
+    // pass after a *decline* or a *failure* is handed off for a completely
+    // different reason -- see `hand_off_after_dialog` -- and has nothing
+    // new to point at, so the environment is left alone.
+    if let Some(home) = java_home {
+        cmd.env("JAVA_HOME", home);
+    }
+    Err(cmd.exec())
+}
+
+/// Leave the launcher in a state where a dialog has been on screen.
+///
+/// Showing a dialog required an `NSApplication`, and that is
+/// irreversible: the `+sharedApplication` race is already lost, so glass
+/// will treat the app this process goes on to launch as embedded — no
+/// menu bar, a bouncing Dock icon, a window that will not take focus.
+///
+/// The trigger is **a dialog having been shown**, not a JDK having been
+/// installed. Declining the download still leaves the dialog up; it then
+/// discovers a JDK already on the machine and launches the app anyway,
+/// which is the right thing to do and was producing a dead window. Same
+/// for an install that fails. Keying the hand-off on the installed path
+/// alone missed all three.
+///
+/// The resumed pass does not re-ask: `SNUG_RESUMED_AFTER_INSTALL` turns
+/// off `should_offer_install`, so this can only ever run once.
+///
+/// No `JAVA_HOME` override here — there is nothing new to point at, and
+/// the resumed pass is going to run discovery anyway.
+fn hand_off_after_dialog(self_path: &Path, why: &str) -> std::io::Result<()> {
+    if !crate::appkit::owns_app() || resumed_after_install() {
+        return Ok(());
+    }
+    log::log(&format!(
+        "a dialog was shown and {why}; re-exec so the app starts with a clean \
+         process rather than an NSApplication that JavaFX would read as an \
+         embedding toolkit"
+    ));
+    // Returns only if the re-exec failed, in which case the caller carries
+    // on in-process and the app comes up without a menu bar — degraded, but
+    // running.
+    exec_self_with_java_home(self_path, None)
 }
 
 /// Root directory for installed JDKs on macOS.

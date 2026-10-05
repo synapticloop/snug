@@ -425,15 +425,28 @@ commit — useful history, not a live list.
     that wrong leaves `{major}` visible in front of the user.
 - **A macOS splash.** Win32 GDI+ / WIC today; CoreGraphics / CoreText if
   it is to match, or an `NSImage` view if it is to look native.
-- **`activate_app()` still creates `NSApplication`, so `--download-jdk=force`
-  would win the `+sharedApplication` race — which is now handled by
-  re-executing, not yet verified end to end.** `run_event_loop()` is
-  deliberately `NSApplication`-free so glass can create `NSApplicationFX`
-  itself, but `activate_app()` is the surviving caller of
-  `NSApplication::sharedApplication` + `finishLaunching()`, and the Adoptium
-  dialogs reach it **before the JVM exists**. `auto` never gets there (it
-  returns early rather than downloading unasked), which is why the demo
-  looks fine.
+- **The `execve` hand-off is keyed to *a dialog was shown*, not *a JDK was
+  installed*.** Getting that wrong was a bug, and one that only a person
+  clicking Cancel could find. `run_event_loop()` is deliberately
+  `NSApplication`-free so glass can create `NSApplicationFX` itself, but
+  the Adoptium dialogs reach `activate_app()` — and therefore create an
+  `NSApplication` — **before the JVM exists**, and that is irreversible.
+  `auto` never gets there (it returns early rather than downloading
+  unasked), which is why the demo looks fine by default.
+  - The first version fired the hand-off only on `Ok(Some(home))`. Every
+    other post-dialog path fell straight through and launched the app in a
+    poisoned process, which reads as a dead window: glass sees
+    `isEmbedded == YES`, demotes the process, and the user gets no menu
+    bar, a bouncing Dock icon, and a window that will not take focus. All
+    three paths — installed, **declined**, and **failed** — show a dialog
+    first, so all three now hand off. See `hand_off_after_dialog` and
+    `appkit::owns_app`.
+  - **The lesson is the shape, not the bug.** The path that was tested by
+    hand (a real download) and the paths that were only reasoned about
+    (decline, failure) are not the same path, and the difference only
+    appears when someone actually cancels something. Any hand-off keyed to
+    an *outcome* rather than to the *side effect* that poisons the process
+    will miss its other cases.
   - There is no way out by being careful about *when* snug creates the app:
     any pre-JVM AppKit window needs an `NSApplication`, and the first
     `+sharedApplication` wins permanently. Reordering cannot help.
