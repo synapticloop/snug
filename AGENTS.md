@@ -1244,9 +1244,14 @@ by accident.
     manual check.
   - `resolve_all` returns a **`Vec<PathBuf>` ordered lowest priority
     first** (`snug.options`, then the OS file), and `main.rs` layers them
-    in that order. One option per line, parsed as shell-like tokens (so
-    `--name "My App"` works with quotes and escapes); `#`-prefixed lines
-    are comments. Repeatable flags (`--jvm-arg`, `--localization`)
+    in that order. One option per line, split on whitespace, with `'...'` or
+    `"..."` grouping a value that contains spaces (so `--name "My App"`
+    works). **There are no backslash escapes** — `\` is a literal character,
+    because it is a path separator on Windows; a shell-style tokenizer read
+    `C:\Users\me\app.jar` as `C:Usersmeapp.jar` and silently corrupted every
+    absolute path. `#` opens a comment only at the start of a line, since it
+    is legal in a filename. So the rule is: quote for whitespace, never for
+    escaping. Repeatable flags (`--jvm-arg`, `--localization`)
     accumulate from *every* source, base file first, so JVM options
     arrive in a defined order.
   - **The layering is stripped high-to-low, not concatenated.** `merge`

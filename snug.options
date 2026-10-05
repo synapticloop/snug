@@ -18,9 +18,14 @@
 #    takes precedence over this one, so a portable `snug.exe` + its
 #    defaults travel together.
 #  - CLI flags will __ALWAYS__ override values in this file.
-#  - `#`-prefixed lines are comments and are ignored
-#  - Each line is parsed as shell-like tokens, so you __MUST__ quote any value
+#  - `#`-prefixed lines are comments and are ignored. A `#` anywhere else
+#    on a line is an ordinary character, since it is legal in a filename.
+#  - Each line is split on whitespace, and you __MUST__ quote any value
 #    with whitespace, e.g. `--name "My App"`.
+#  - Quoting is the only grouping mechanism; there are no backslash
+#    escapes, because `\` is a path separator on Windows. An absolute path
+#    can therefore be written straight out:
+#        --input C:\Users\me\app.jar
 #
 # Per-platform overrides
 # ----------------------

@@ -114,10 +114,10 @@ fi
 # split exists to remove.
 #
 # Handles `--flag value` and one layer of double quotes, which is what
-# options_file::load effectively hands clap. It does not reimplement
-# shell_words: a value with a backslash escape or an inline `#` is out of
-# scope for a demo script, and a wrong answer here is caught by the checks
-# below rather than silently producing a bad bundle.
+# options_file::load effectively hands clap. It does not reimplement the
+# tokenizer: a value with an inline `#` is out of scope for a demo script,
+# and a wrong answer here is caught by the checks below rather than
+# silently producing a bad bundle.
 effective_flag() {
     local name="$1"; shift
     local file value

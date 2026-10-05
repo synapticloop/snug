@@ -44,9 +44,17 @@
 //!
 //! ## File format
 //!
-//! Files are parsed line by line, with each line tokenised as if it
-//! were supplied on the command line (via `shell_words`). Lines starting
-//! with `#` (after trimming) are comments; blank lines are skipped.
+//! Files are parsed line by line, with each line split the way a command
+//! line would be read: whitespace separates tokens, and `'...'` or
+//! `"..."` groups one containing whitespace. Lines starting with `#`
+//! (after trimming) are comments; blank lines are skipped.
+//!
+//! Quoting is the *only* grouping mechanism. There are no backslash
+//! escapes, because `\` is a path separator on Windows and treating it
+//! as an escape silently mangles every absolute path — see [`tokenise`]
+//! for the full reasoning. For the same reason `#` is a comment marker
+//! only at the start of a line; elsewhere it is an ordinary character,
+//! since `#` is legal in a filename.
 //!
 //! Example `snug.options`:
 //!
@@ -207,9 +215,8 @@ pub fn find_options_flag(raw_args: &[String]) -> Option<PathBuf> {
 /// argv-style tokens.
 ///
 /// Comment lines (starting with `#` after trimming) and blank lines are
-/// skipped. Each remaining line is tokenised with
-/// [`shell_words::split`], which honours double-quoted strings,
-/// single-quoted strings, and backslash escapes.
+/// skipped. Each remaining line is split by [`tokenise`], which honours
+/// double-quoted and single-quoted strings.
 pub fn load(path: &Path) -> Result<Vec<String>, OptionsFileError> {
     let content = std::fs::read_to_string(path).map_err(|source| OptionsFileError::Io {
         path: path.to_path_buf(),
@@ -221,16 +228,103 @@ pub fn load(path: &Path) -> Result<Vec<String>, OptionsFileError> {
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
-        match shell_words::split(trimmed) {
+        match tokenise(trimmed) {
             Ok(line_tokens) => tokens.extend(line_tokens),
-            Err(e) => {
+            Err(message) => {
                 return Err(OptionsFileError::Syntax {
                     path: path.to_path_buf(),
                     line: idx + 1,
-                    message: e.to_string(),
+                    message: message.to_string(),
                 });
             }
         }
+    }
+    Ok(tokens)
+}
+
+/// Split one options-file line into tokens.
+///
+/// This is deliberately **not** a POSIX-shell tokeniser, even though the
+/// file reads like one. It implements what `snug.options` actually
+/// documents, which is the narrower contract:
+///
+///   - whitespace separates tokens;
+///   - `'...'` and `"..."` group, so a value containing whitespace can
+///     be written `--name "Snug JavaFX Demo"`;
+///   - `\` is an ordinary character, never an escape;
+///   - `#` is handled by [`load`] as a whole-line marker, so here it is
+///     just another character.
+///
+/// The third and fourth points are the whole reason this exists. A shell
+/// tokeniser reads `C:\Users\me\app.jar` as `C:Usersmeapp.jar`, because
+/// in POSIX a backslash escapes the character after it and both
+/// characters vanish. That silently corrupts *every absolute Windows
+/// path*, which is the single most common thing an options file names.
+/// The same tokeniser also treats `#` as a comment wherever a token
+/// starts, so `--input C:\release#2\app.jar` truncates at the hash —
+/// and `#` is a legal character in a Windows filename.
+///
+/// Neither of those behaviours was ever promised. `snug.options` says
+/// "`#`-prefixed lines are comments" and "you __MUST__ quote any value
+/// with whitespace" — full-line comments and quoting, nothing about
+/// escapes. Following the documented contract fixes the Windows paths
+/// and stops two undocumented POSIX-isms leaking into a config file.
+///
+/// The cost is that there is no escape mechanism at all, so a value
+/// containing a literal `'` or `"` cannot be written. That limitation
+/// is unchanged from the previous behaviour, and both characters are
+/// illegal in Windows filenames anyway.
+///
+/// Errors only on an unterminated quote. Silently swallowing the rest of
+/// the line would turn a typo into a confusing "unknown flag" from clap,
+/// several tokens later; naming the line is the useful error.
+fn tokenise(line: &str) -> Result<Vec<String>, &'static str> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    // `started` rather than `!current.is_empty()`, because `""` is a real
+    // token and must not be swallowed by the whitespace branch.
+    let mut started = false;
+    let mut chars = line.chars();
+
+    while let Some(c) = chars.next() {
+        match c {
+            ' ' | '\t' => {
+                if started {
+                    tokens.push(std::mem::take(&mut current));
+                    started = false;
+                }
+            }
+            '\'' => {
+                started = true;
+                loop {
+                    match chars.next() {
+                        Some('\'') => break,
+                        Some(c) => current.push(c),
+                        None => return Err("unterminated '...' - the quote is never closed"),
+                    }
+                }
+            }
+            '"' => {
+                started = true;
+                loop {
+                    match chars.next() {
+                        Some('"') => break,
+                        Some(c) => current.push(c),
+                        None => return Err("unterminated \"...\" - the quote is never closed"),
+                    }
+                }
+            }
+            // Everything else, `\` included, is literal. There is no
+            // escape branch on purpose: see the note above.
+            c => {
+                started = true;
+                current.push(c);
+            }
+        }
+    }
+
+    if started {
+        tokens.push(current);
     }
     Ok(tokens)
 }
@@ -633,6 +727,103 @@ mod tests {
     /// readable rather than adding a nesting level to every call.
     fn layer(tokens: Vec<String>) -> Vec<Vec<String>> {
         vec![tokens]
+    }
+
+    // --- tokenise: the properties the file format actually promises -----
+    //
+    // These are the regression tests for the reason this function is
+    // hand-written instead of being a POSIX shell tokenizer. Each one
+    // documents a class of input that used to be silently corrupted.
+
+    #[test]
+    fn absolute_windows_path_keeps_its_backslashes() {
+        // The bug this whole change exists for. A shell tokenizer reads
+        // `C:\Users` as `C:Users` and drops both the backslash and the
+        // character it escaped.
+        assert_eq!(
+            tokenise(r"--input C:\Users\me\app.jar").unwrap(),
+            args(&[r"--input", r"C:\Users\me\app.jar"]),
+        );
+    }
+
+    #[test]
+    fn backslash_is_literal_in_every_position() {
+        // Leading, trailing, doubled, and inside quotes. None of these
+        // are escapes here, and a trailing backslash in particular must
+        // not swallow the character after it.
+        assert_eq!(
+            tokenise(r#"\leading --x a\  b\\"#).unwrap(),
+            args(&[r"\leading", "--x", r"a\", r"b\\"]),
+        );
+        assert_eq!(tokenise(r#"--icon "C:\a b\icon.png""#).unwrap(), args(&[r#"--icon"#, r"C:\a b\icon.png"]));
+    }
+
+    #[test]
+    fn forward_slash_paths_are_unaffected() {
+        assert_eq!(
+            tokenise("--input assets/app.jar").unwrap(),
+            args(&["--input", "assets/app.jar"]),
+        );
+    }
+
+    #[test]
+    fn quoted_value_keeps_its_whitespace() {
+        // The documented reason quoting exists, so it must not regress.
+        assert_eq!(
+            tokenise(r#"--name "Snug JavaFX Demo""#).unwrap(),
+            args(&["--name", "Snug JavaFX Demo"]),
+        );
+        assert_eq!(
+            tokenise("--copyright 'SynapticLoop Pty Ltd'").unwrap(),
+            args(&["--copyright", "SynapticLoop Pty Ltd"]),
+        );
+    }
+
+    #[test]
+    fn quotes_concatenate_with_adjacent_text() {
+        // `--name="My App"` is how a user would naturally write it, and
+        // a leading `--flag=value` has to survive intact.
+        assert_eq!(
+            tokenise(r#"--name="My App""#).unwrap(),
+            args(&[r#"--name=My App"#]),
+        );
+        assert_eq!(tokenise(r#"--copyright ©"#).unwrap(), args(&["--copyright", "©"]));
+    }
+
+    #[test]
+    fn hash_is_literal_inside_a_line() {
+        // `#` is only a comment marker at the start of a line, because it
+        // is a legal character in a Windows filename. A shell tokenizer
+        // truncates this at the hash.
+        assert_eq!(
+            tokenise(r"--input C:\release#2\app.jar").unwrap(),
+            args(&[r"--input", r"C:\release#2\app.jar"]),
+        );
+    }
+
+    #[test]
+    fn empty_quotes_produce_an_empty_token() {
+        // `--name ""` is a deliberate empty value, not a missing one, so
+        // the token has to be emitted rather than dropped.
+        assert_eq!(tokenise(r#"--name "" tail"#).unwrap(), args(&["--name", "", "tail"]));
+    }
+
+    #[test]
+    fn tabs_separate_tokens_too() {
+        assert_eq!(tokenise("--a\t--b  --c").unwrap(), args(&["--a", "--b", "--c"]));
+    }
+
+    #[test]
+    fn unterminated_quote_is_an_error_not_a_silent_truncation() {
+        // Better to name the line than to hand clap a half-read value.
+        assert!(tokenise(r#"--name "My App"#).is_err());
+        assert!(tokenise("--name 'My App").is_err());
+    }
+
+    #[test]
+    fn an_empty_line_yields_no_tokens() {
+        assert!(tokenise("").unwrap().is_empty());
+        assert!(tokenise("   \t ").unwrap().is_empty());
     }
 
     #[test]

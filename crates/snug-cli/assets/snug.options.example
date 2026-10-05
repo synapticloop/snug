@@ -16,9 +16,17 @@
 #  Format
 #  ------
 #  - One option per line, parsed as if it were supplied on the command
-#    line. So `--name "My App"` works — quoting and shell-style escapes
-#    are honoured (the file is read with the `shell-words` tokenizer).
-#  - Lines starting with `#` are comments.
+#    line. So `--name "My App"` works — single or double quotes group a
+#    value containing whitespace.
+#  - Quoting is the ONLY grouping mechanism: there are no backslash
+#    escapes, because `\` is a path separator on Windows. An absolute
+#    path can be written straight out, unquoted:
+#
+#        --input C:\Users\me\app.jar
+#
+#    (A shell-style tokenizer would read that as `C:Usersmeapp.jar`.)
+#  - Lines starting with `#` are comments. `#` elsewhere on a line is an
+#    ordinary character, because it is legal in a filename.
 #  - Repeatable flags (`--jvm-arg`, `--localization`) accumulate from
 #    every source rather than overriding.
 #

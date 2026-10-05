@@ -26,7 +26,6 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 sha2 = { workspace = true }
 zip = { workspace = true }
-shell-words = { workspace = true }
 editpe = { workspace = true }
 # `image` is used at build time to decode the user's --splash PNG
 # and convert it to the BGRA pre-multiplied form the launcher
