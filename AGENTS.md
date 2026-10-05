@@ -652,7 +652,40 @@ by accident.
     fails to resolve leaves the process **hung with no output at all**; the
     flag makes it exit in ~150 ms and print the error. Worth keeping a
     regression test for.
-  - **The Dock-bouncing symptom was never about pumping.** AGENTS.md used to
+  - **A run loop is not an event loop. This cost two separate debugging
+    sessions, and the two halves have opposite fixes.**
+    `NSRunLoop::runUntilDate` runs the loop's *sources*; `NSEvent`
+    dequeue-and-dispatch belongs to `NSApplication`. A window in a process
+    that never calls `-[NSApplication nextEventMatchingMask:…]` **takes no
+    clicks**, and AppKit's answer to a window that never responds is the
+    spinning beachball. It looks like a hang, or like a window that is
+    merely "not focused", so it is very easy to misattribute.
+    - The **preview** owns its application — no JavaFX in the process, so
+      nothing is competing for `+sharedApplication` — and therefore simply
+      calls `[NSApp run]`, with the responder calling `app.stop(None)`.
+      That is the documented AppKit pattern and it is safe *only* because
+      the preview is alone.
+    - The **launcher** cannot. glass calls `[NSApp run]` itself, inside
+      `if (!isEmbedded)` in `GlassApplication.m`'s `runLoop:`, but only
+      once `run_event_loop` has started — and `progress()` has already come
+      and gone by then, on the far side of the worker hand-off. So at that
+      point snug is still unambiguously the application's owner and the
+      loop is its own to drain: `drain_appkit_events` calls
+      `nextEventMatchingMask_untilDate_inMode_dequeue` once per tick, with
+      `distantPast` as the expiration so it dequeues what is queued rather
+      than waiting (waiting would stall the progress sample the loop exists
+      to take).
+    - **Enforced, not just documented:** `+sharedApplication` *creates* on
+      first call, so a helper that merely wants an application to talk to
+      it would quietly become the creator and win the race on the one path
+      that must never. `OWNS_APP` records that `activate_app` — the only
+      permitted creator — has already run, and `drain_appkit_events` is a
+      no-op without it. Do not "simplify" that check away.
+    - `NSDefaultRunLoopMode` is not bound in objc2-app-kit 0.3.2, and
+      `NSRunLoopMode` is a typedef for `NSString`, so the default mode is
+      spelled out as `kCFRunLoopDefaultMode`. Changing it is the kind of
+      invisible constant that would silently stop mouse events again.
+  - The Dock-bouncing symptom was never about pumping. AGENTS.md used to
     record "do not hand-pump the run loop, the Dock icon bounces forever".
     That was a misdiagnosis: bouncing meant AppKit was stuck in the
     launching state because *glass believed it was embedded* and therefore

@@ -80,9 +80,12 @@ use objc2_app_kit::{
     NSTextField, NSUserInterfaceLayoutOrientation, NSWindow,
     NSWindowDelegate, NSWindowStyleMask,
 };
-use objc2_app_kit::{NSImage, NSImageNameApplicationIcon, NSImageScaling, NSImageView};
+use objc2_app_kit::{
+    NSEventMask, NSImage, NSImageNameApplicationIcon, NSImageScaling, NSImageView,
+};
 use objc2_foundation::{
-    NSDate, NSObject, NSObjectProtocol, NSPoint, NSRect, NSRunLoop, NSSize, NSString,
+    NSDate, NSObject, NSObjectProtocol, NSPoint, NSRect, NSRunLoop, NSRunLoopMode, NSSize,
+    NSString,
 };
 
 use crate::dialogs;
@@ -450,6 +453,7 @@ fn activate_app() -> Option<MainThreadMarker> {
     // is what lets a window take focus. Calling it twice is harmless, and
     // this runs before every window.
     app.finishLaunching();
+    OWNS_APP.with(|o| o.set(true));
     Some(mtm)
 }
 
@@ -861,7 +865,10 @@ pub(crate) fn progress(
     let w = layout::PROGRESS_W;
     let h = layout::PROGRESS_H;
     // NOTE: deliberately does **not** create an `NSApplication`, unlike
-    // `show_window` and `preview_picker`.
+    // `show_window` and `preview_picker`. That is now enforced rather than
+    // merely documented: `drain_appkit_events` below checks `OWNS_APP`
+    // before it touches the shared instance, so the loop can dispatch
+    // events without a helper quietly becoming the creator.
     //
     // On the launch path this window always follows a dialog, which has
     // already created one — so reaching here without one means the caller
@@ -964,6 +971,7 @@ pub(crate) fn progress(
 
         // Pump briefly, then look again. Without this the window would
         // not repaint and the bar would sit frozen.
+        drain_appkit_events(mtm);
         let limit = NSDate::dateWithTimeIntervalSinceNow(0.05);
         NSRunLoop::currentRunLoop().runUntilDate(&limit);
     }
@@ -1319,6 +1327,66 @@ pub fn progress_demo() -> bool {
     let ok = progress("Runtime 25.0.4.1+1 (~190 MB)", Arc::clone(&shared));
     let _ = done.join();
     ok
+}
+
+thread_local! {
+    /// Whether *this* process has already created the `NSApplication`.
+    ///
+    /// Set by `activate_app`, which is the only place allowed to. It exists
+    /// because `+sharedApplication` creates on first call, so a helper that
+    /// merely *wants* an application to talk to it would silently become
+    /// the one that creates it — and creating it before JavaFX does is the
+    /// single thing this whole file is arranged to prevent. Reading this
+    /// flag first turns that from a convention into a guarantee.
+    static OWNS_APP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Drain one queued `NSEvent`, if there is one, so a window in a
+/// non-modal launcher window takes clicks.
+///
+/// This is the second time "hand-pump the run loop" has bitten, and the
+/// two halves are exactly opposite. `NSRunLoop::runUntilDate` runs the
+/// loop's *sources*, but `NSEvent` dequeue-and-dispatch belongs to
+/// `NSApplication` — and a window in a process that never calls
+/// `-[NSApplication nextEventMatchingMask:…]` takes no clicks. The
+/// progress window's Cancel did nothing because of it, and AppKit's own
+/// response to a window that never answers was the spinning beachball.
+///
+/// The launcher cannot simply call `[NSApp run]` the way `preview_picker`
+/// does, because ownership is the whole constraint here. glass calls
+/// `[NSApp run]` itself, inside `if (!isEmbedded)` in `runLoop:`, but only
+/// once `run_event_loop` has started — and this window has come and gone
+/// by then, on the far side of the worker's hand-off. At this point snug
+/// is still unambiguously the application's owner, so the loop is ours to
+/// drain.
+///
+/// `distantPast` as the expiration is deliberate: it means "dequeue
+/// whatever is already queued, do not wait for more". Waiting would stall
+/// the progress sample this loop exists to take.
+fn drain_appkit_events(mtm: MainThreadMarker) {
+    if !OWNS_APP.with(std::cell::Cell::get) {
+        // No application yet, so there is no event queue to drain — and
+        // asking for the shared instance here would create one and win the
+        // race against `NSApplicationFX` on the very path that must never
+        // do so. The progress window only ever appears after a dialog, so
+        // in practice this is belt and braces.
+        return;
+    }
+    let app = NSApplication::sharedApplication(mtm);
+    // `NSRunLoopMode` is a typedef for `NSString`, and
+    // `NSDefaultRunLoopMode` is not bound in objc2-app-kit 0.3.2 — so the
+    // default mode is spelled out. Changing it is the kind of invisible
+    // constant that would silently stop mouse events being delivered.
+    let mode = NSRunLoopMode::from_str("kCFRunLoopDefaultMode");
+    let event = app.nextEventMatchingMask_untilDate_inMode_dequeue(
+        NSEventMask::Any,
+        Some(&NSDate::distantPast()),
+        &mode,
+        true,
+    );
+    if let Some(event) = event {
+        app.sendEvent(&event);
+    }
 }
 
 /// Progress reporting when there is no main thread to put a window on.
