@@ -196,21 +196,37 @@ work than the Windows model, easier to inspect (the payload file can be
 hexdumped), and it sidesteps the fact that there is no Mach-O resource
 writer in the dependency graph — `editpe` is PE-only.
 
-**The macOS *icon* is embedded in the Mach-O, and written by hand.**
-Having no resource directory leaves a bare executable with nowhere to get
-an icon: a bundled `.app` reads `Contents/Resources/App.icns`, but
-`cargo run` has no bundle, and **macOS does not read an icon out of a Mach-O
-the way Windows reads `MAINICON`**. So `build.rs` emits
+**The macOS *icon* is a bundle resource, and only for things you click.**
+A bare Mach-O has nowhere to get an icon: a bundled `.app` reads
+`Contents/Resources/App.icns`, but `cargo run` has no bundle, and **macOS
+does not read an icon out of a Mach-O the way Windows reads `MAINICON`**.
+So the rule is a split by *how the artefact is actually used*:
 
-```text
-cargo:rustc-link-arg-bins=-Wl,-sectcreate,__TEXT,__icns,<out>/snug.icns
-```
+| Artefact | How it is used | Icon |
+|---|---|---|
+| `snug` | typed in a terminal | **none** — a CLI icon is 1.7 MB of Mach-O nobody will ever look at |
+| `snug-launcher` | runs *inside* a bundle, never displayed | **none** — same reason |
+| `snug_preview` | double-clicked | `App.icns` from `assets/snug-preview.png` |
+| `Build with Snug` | double-clicked, JARs dropped on it | `App.icns` from `assets/snug-dropper.png` |
 
-and writes the ICNS itself:
+So there is **no `__TEXT,__icns` link-arg on the macOS binaries at all**.
+The launcher used to carry one, and because the launcher is
+`include_bytes!`-ed into `snug`, that cost 2.2 MB in *every* shipped
+artefact — including each `.app` a user later builds. Dropping it is the
+size win, and the split above is why it is free: nothing a user clicks is
+ever a bare Mach-O.
 
-```text
-'icns'  →  u32 be total length  →  per chunk: 4-byte type, u32 be length, PNG bytes
-```
+Two build-support crates remain:
+
+- `snug-icns` — PNG → single-file `.icns`:
+  ```text
+  'icns'  →  u32 be total length  →  per chunk: 4-byte type, u32 be length, PNG bytes
+  ```
+- `snug-app-bundle` — wraps a Mach-O in a `.app` (`Info.plist`,
+  `MacOS/<name>`, `App.icns`, modes, ad-hoc signature), plus a
+  `snug-bundle` bin so `build-macos.sh` needs no bash for the layout.
+  It is the same shape as `macos_bundle.rs` without the payload, which is
+  what these two artefacts need.
 
 - The chunk table was **derived, not remembered**: read a real
   `App.icns` back out of a built `.app` and dumped its chunk list. That
@@ -222,16 +238,22 @@ and writes the ICNS itself:
   a temp directory — leaving a binary with no icon behind a
   `cargo:warning` everyone learns to scroll past. A cosmetic default must
   not be a silent failure mode. Pure Rust also means a failure here is a
-  real bug, so it panics like the rest of the script.
-- **The size cost is real and deliberate**: the macOS stubs went from
-  ~0.6 MB to ~3.1 MB, almost all of it the 2.2 MB icon, and the launcher
-  is `include_bytes!`-ed into the `snug` CLI, so each macOS `snug` grows by
-  the same. The 1024px chunk is 1.2 MB of that; dropping it is the lever
-  if it ever matters, at the cost of a softer icon on a Retina tile. The
+  real bug, so `snug-icns` panics for a build script and returns `Err`
+  for a caller that can report it — `snug-app-bundle` uses the latter,
+  because a `CFBundleIconFile` pointing at an `App.icns` that was never
+  written is a bundle that silently ships a generic icon.
+- **The size cost is real and deliberate**: each `App.icns` is ~1.7 MB,
+  almost all of it the 1024px chunk. Dropping that chunk is the lever if
+  it ever matters, at the cost of a softer icon on a Retina tile. The
   Windows `MAINICON` is tens of KB and unaffected.
-- Binned rather than un-binned link args, because a Mach-O section belongs
-  to an executable — which means the preview's *test harness* carries it
-  too. That is the cost of not having per-bin control from `build.rs`.
+- **`build-macos.sh` verifies the icon on the artefact, not the intent.**
+  `require_bundle_icon` reads the `App.icns` header length out of the
+  staged bundle and fails on a missing, malformed or implausibly small
+  (`< 1 KB`) icon. A bundler being *asked* for an icon is a claim about
+  the build; the icon being in the staged bundle is a claim about the
+  release. It also fails when the staged `.app` is not a **directory** —
+  the flat-file-with-a-`.app`-name mistake that a Finder launch turns
+  into nothing happening at all.
 
 ### Release layout
 
@@ -249,8 +271,8 @@ The *binary name is always `snug`*; the platform lives in the directory:
 ```text
 release/
 ├── windows-x86_64/            # snug.exe, Build with Snug.exe, snug_preview.exe, demo JAR
-├── macos-arm64/snug
-└── macos-x86_64/snug
+├── macos-arm64/               # snug (no icon), snug_preview.app, Build with Snug.app
+└── macos-x86_64/              # snug (no icon), snug_preview.app, Build with Snug.app
 ```
 
 That is the point of the subdirectory: every platform invokes `snug`, so
@@ -350,7 +372,7 @@ precompiled `launcher-stub.exe` (v2).
 | 6 | Native splash renderer (PNG via GDI+/WIC)      | planned    |
 | 7 | Per-user cache + old-version cleanup           | **done** — cache entries expire. `cache::touch` stamps a cached JAR's mtime on **every** launch that uses it, and `cache::sweep` runs off a detached thread (rate-limited to once per 6h by a `.sweep` stamp file) to delete the ones no longer wanted. Policy: keep the most recently used `KEEP_RECENT` (3) entries — the running build's own entries count toward that depth — up to a per-app byte budget of `clamp(build_bytes * 3, 512 MB, 8 GB)`, and evict anything untouched for `MAX_UNUSED_AGE` (30 days) regardless of rank. The current build is never evicted; everything else is recoverable because a missing entry is re-extracted from the payload on the next launch. Sweeping is *not* triggered by the builder — `snug-cli` never writes to the cache, so the launcher is the sole owner of the policy. |
 | 8 | GitHub Actions CI (windows-latest release)     | planned    |
-| 9 | `Build with Snug` beginner drag-and-drop shim   | **done** — separate `crates/snug-dropper` crate. Drop a `.jar` or a folder of JARs on `Build with Snug.exe` and it runs `snug.exe --name "Example Application Name" --company "Example Company Pty Ltd" -o "<parent>/Example Application Name.exe" <input>` behind an indeterminate marquee on a worker thread, then reports with a `MessageBoxW`. Double-click opens a command window in the EXE's own folder. Two or more items, or one item that is neither a `.jar` nor a directory, get a dialog and *then* the terminal as a hand-off. A build failure or a missing `snug.exe` gets an error dialog and **no** terminal. Built as `snug-dropper.exe`; renamed to `Build with Snug.exe` at packaging time. Must ship in the same folder as `snug.exe`. |
+| 9 | `Build with Snug` beginner drag-and-drop shim   | **done on Windows, done-but-unverified on macOS** — separate `crates/snug-dropper` crate. Drop a `.jar` or a folder of JARs on it and it runs `snug --name "Example Application Name" --company "Example Company Pty Ltd" -o "<parent>/Example Application Name.<ext>" <input>`, then reports the outcome. Double-click opens a terminal in its own folder. Two or more items, or one item that is neither a `.jar` nor a directory, get a dialog and *then* the terminal as a hand-off. A build failure or a missing `snug` gets an error dialog and **no** terminal. The platform-agnostic half — [`decide`](crates/snug-dropper/src/decide.rs) and [`build`](crates/snug-dropper/src/build.rs) — is shared and tested; only the GUI half is per-platform. **Windows:** `argv` *is* the drop payload, so the whole thing is a pure function over a slice of paths; the build runs on a worker thread behind an indeterminate marquee and reports with a `MessageBoxW`. Built as `snug-dropper.exe`; renamed to `Build with Snug.exe` at packaging time. **macOS:** ships as `Build with Snug.app` and is a *different shape*, not a port — see `src/macos.rs` for why a bundle is the only form that can receive a drop. **Not yet verified by running it**: the macOS half compiles and bundles correctly, but the drag-and-drop path has never been exercised. |
 | 10 | Native macOS / Linux `snug` CLI builds    | **done** — `cargo build --workspace` and `cargo test --workspace --lib --bins --tests` pass on macOS (283 tests), and the CLI produces a real `PE32+ executable (GUI) x86-64` end-to-end from a Mac. `scripts/build-macos.sh` stages two thin per-arch binaries into `release/macos-arm64/snug` and `release/macos-x86_64/snug` at a macOS 12.0 deployment floor — same binary name on every platform, platform in the directory, so docs never name two binaries. No universal2: macOS 27 is the last release with Rosetta 2, so arm64 is the future-proof slice and x86_64 only serves the four Intel models that top out at macOS 26. Windows-only surfaces are gated: the six Win32 GUI modules in `snug-launcher` use file-level `#![cfg(windows)]` (joining `jdk_install.rs` / `splash.rs`), while the three Windows-only *binaries* use per-item `#[cfg(windows)]` plus a real non-Windows `main`. `editpe` was made unconditional (pure-Rust PE parsing — `snug-cli` needs it to build EXEs anywhere) and `ureq` Windows-only. Homebrew tap / Developer ID notarization is follow-up; see "Build host". |
 | 11 | macOS launcher runtime (`libjvm.dylib` + JNI) | **done, verified against a real JDK on macOS.** `platform/macos.rs` mirrors `platform/windows.rs` step for step: cache extraction + sweep, log, `Main-Class` resolution, JVM discovery, `libjvm.dylib` load via the same `jni` 0.22 invocation API, and the `main(String[])` / JavaFX `Application.launch` dispatch. `tests/macos_launch_e2e.rs` compiles a real class with `javac`, packages it with `jar`, hands it to the launcher, and asserts the JVM actually runs it — it is skipped rather than failed when no JDK is present. **Not implemented:** splash, the Adoptium download flow, and error dialogs (all Win32); `DownloadJdkMode::Auto`/`Force` degrade to discovery-only and *log* that. |
 | 12 | macOS `.app` bundle emitter | **done, verified by launching a real bundle.** The output extension selects the artefact: `-o MyApp.app` builds a macOS bundle, `-o MyApp.exe` a Windows one, and the *default* is the host's own — `snug app.jar` with no `-o` gives `app.app` on macOS and `app.exe` elsewhere. `macos_bundle.rs` writes `Contents/{Info.plist,MacOS/<App>,Resources/<App>.snugpayload,Resources/App.icns}` and ad-hoc signs it. The launcher is a **byte-copy** — unlike the Windows stub there is nothing to stamp, because a Mach-O has no resource directory and `editpe` is PE-only. `bin/launcher-stub-macos-<arch>` is embedded per `#[cfg(target_arch)]`, so each `snug` binary carries one launcher and can only build a `.app` for its own arch. |
@@ -395,6 +417,45 @@ commit — useful history, not a live list.
   is a Windows build product.
 
 **macOS**
+- **`Build with Snug.app` — the first version never worked, and the
+  reason is not in the delegate protocol's docs.** It latched drops and
+  drained them in `applicationDidFinishLaunching:`. Cocoa defines that
+  method as firing once `-[NSApplication finishLaunching]` has completed
+  **"but no event dispatching has begun"**, and a drop is an `odoc` Apple
+  Event dispatched *by the run loop* — so every drop arrives strictly
+  *after* it returns. The drain always found an empty list, opened a
+  Terminal as if the user had double-clicked, and terminated before the
+  drop was delivered. The symptom is "drag-and-drop does nothing", which
+  reads exactly like an unsupported platform, and is why it had to be
+  chased rather than guessed at.
+- **The fix separates the two cases in time.** Launch arms a short
+  settle callback; a drop re-arms it. Whichever fires first drains the
+  latch, and an empty latch is the double-click. Re-arming rather than
+  acting on the first drop is what keeps a multi-file drop intact —
+  Finder sends one Apple Event per file and `decide` needs the whole set
+  to refuse it with "only one jar". `performSelector:withObject:afterDelay:`
+  is used because re-requesting the same selector cancels the pending
+  one, which is the entire coalescing mechanism, and because
+  `objc2-app-kit` binds no `NSTimer`.
+- **The `.jar` `CFBundleDocumentTypes` claim is load-bearing after all.**
+  It looks like it only affects the "Open With" menu, but it is also what
+  tells the system the app accepts that type, which is what makes the
+  drag land instead of bouncing back. `require_drop_target` checks it,
+  because a bundle with a perfect `App.icns`, a launchable Mach-O and no
+  claim still does nothing when you drop a JAR on it — and it looks
+  broken to a user with nothing on screen to explain why.
+- **What is still unverified.** The ordering is now correct by
+  construction and the code compiles, but the drop path has still never
+  been *run*: the only machine that built this has no GUI session. Check
+  four paths in order — one `.jar`, a folder of JARs, two items (the
+  Terminal hand-off), and a bare double-click — treating the Windows
+  behaviour as the reference.
+- **The macOS dropper resolves `snug` from *outside* its own bundle.**
+  `app_bundle_root()` walks `<release>/Build with Snug.app/Contents/MacOS`
+  up three levels, so `snug` has to sit beside the `.app` and not inside
+  it. Same co-location invariant as the Windows shim, but it is a
+  different walk, and a nested copy would fail with "snug could not be
+  found" rather than doing anything visible.
 - **The macOS dialogs are real `NSWindow`s — deliberately not `NSAlert`s.**
   `appkit.rs` is the macOS half of the `jdk_install::ui` seam. The
   metadata-failed, retry, terminal-failure, **install-consent** and
