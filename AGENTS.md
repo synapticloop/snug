@@ -135,7 +135,7 @@ scripts/build-macos.sh --clean    # wipe release/macos-* first
 `scripts/build-macos-demo.sh` is the demo half — the macOS counterpart of
 step 4 plus the staging block in `scripts\build-release.cmd`. It calls
 `build-macos.sh` (unless `--skip-cli`), then has the freshly built `snug`
-package `assets/snug-javafx-demo.jar` as a real
+package `assets/snug-javafx-demo-macos.jar` as a real
 `assets/snug-javafx-demo.app` and stage it alongside the JAR. The demo is
 built by the arch-matched `snug`, so a demo can never be an `.app` for the
 wrong architecture.
@@ -248,7 +248,7 @@ The *binary name is always `snug`*; the platform lives in the directory:
 
 ```text
 release/
-├── snug.exe, Build with Snug.exe, …   # the existing flat Windows bundle
+├── windows-x86_64/            # snug.exe, Build with Snug.exe, snug_preview.exe, demo JAR
 ├── macos-arm64/snug
 └── macos-x86_64/snug
 ```
@@ -257,6 +257,20 @@ That is the point of the subdirectory: every platform invokes `snug`, so
 the documentation never has to name two different binaries. `arm64` is
 `uname -m` on Apple Silicon, which is what someone reading a directory
 listing will recognise — the Rust target is spelled `aarch64`.
+
+**Windows uses the same convention.** `build-release.cmd` stages into
+`release\windows-x86_64\`, derived from the same `TARGET_ARCH` the cargo
+triple implies, so the two pipelines agree on the shape and a future
+Windows-on-Arm64 slice needs no new convention. The `x86_64` spelling
+matches the macOS Intel directory rather than `amd64`, which is what
+`uname -m` and a Rust target both use. The Windows bundle holds more than
+one artefact (`snug.exe`, `Build with Snug.exe`, `snug_preview.exe`, the
+demo JAR), and the co-location invariant between the first two is why
+they must be staged *together* — so the directory, not the file name, is
+what identifies the platform. Note that `RELEASE_SUBDIR` is derived
+*after* the triple is selected: with `EnableDelayedExpansion`, `!VAR!`
+expands where it is written, not where it was assigned, so reading
+`TARGET_ARCH` one block earlier yields `release\windows-\`.
 
 `build-macos.sh` verifies each artefact's `lipo` arch and its emitted
 `minos` *before* staging and aborts on a mismatch, because a wrong-arch
@@ -910,9 +924,9 @@ by accident.
   loader's own log over a plausible-looking theory.)
   - The three platforms cannot collide at the root — the names differ by
     extension — so one JAR *can* carry all of them, and doing so is fine.
-    What snug's demo does instead is per-platform: `assets/snug-javafx-demo.jar`
+    What snug's demo does instead is per-platform: `assets/snug-javafx-demo-windows.jar`
     carries the Windows natives (used by `scripts\build-release.cmd`) and
-    `assets/snug-javafx-demo-mac.jar` the macOS ones (used by
+    `assets/snug-javafx-demo-macos.jar` the macOS ones (used by
     `scripts/build-macos-demo.sh`).
   - Because the names are platform-specific, a JAR missing its own
     platform's natives fails *only* at startup, with
@@ -1133,7 +1147,7 @@ by accident.
   main(String[])` (`crates/snug-cli/src/classfile.rs` parses the method
   table only — no bytecode). It is a **read-only diagnostic**: it never
   fails a build, because a legitimately missing `main` is normal. The
-  committed `assets/snug-javafx-demo.jar` is the standing example: its
+  committed `assets/snug-javafx-demo-windows.jar` is the standing example: its
   manifest names `synapticloop.snugjavafxdemo.HelloApplication`, a
   JavaFX `Application` subclass with only a constructor and `start(Stage)`
   — the launcher calls `Application.launch()` for it
@@ -1191,7 +1205,7 @@ by accident.
     it applied everywhere and does not — which is the exact problem the
     split exists to fix. Both release scripts pass **no `-o` and no
     `--options`** and rely on the implicit CWD lookup:
-    `scripts\build-release.cmd` runs `snug.exe assets\snug-javafx-demo.jar`
+    `scripts\build-release.cmd` runs `snug.exe assets\snug-javafx-demo-windows.jar`
     and then asserts `assets\snug-javafx-demo.exe` exists;
     `build-macos-demo.sh` reads the path back out of the files via its own
     `effective_flag` helper rather than hardcoding it. So the string lives
@@ -1534,7 +1548,7 @@ by accident.
   - **`release\` is the shipping folder, and it ignores itself.**
     `build-release.cmd` step 8 stages `snug.exe`,
     `Build with Snug.exe`, `snug_preview.exe` and
-    `snug-javafx-demo.jar` in there; the nested `.gitignore` hides
+    `snug-javafx-demo-windows.jar` in there; the nested `.gitignore` hides
     everything but itself, so a fresh clone has the directory and the
     rules without a single artefact. The two shipping EXEs are staged
     *together* on purpose — same co-location invariant as step 7, now
@@ -1730,7 +1744,7 @@ mutating process-global state).
 `snug-dropper` has unit tests for the decision table, the argument
 vector, and the stderr summariser in-crate, plus
 `crates/snug-dropper/tests/end_to_end.rs`, which drives a **real**
-`snug.exe` against `assets/snug-javafx-demo.jar` and asserts the EXE
+`snug.exe` against `assets/snug-javafx-demo-windows.jar` and asserts the EXE
 actually lands on disk. That test skips (rather than fails) when
 `snug.exe` hasn't been built, because `cargo test -p snug-dropper` alone
 doesn't build it — `cargo test --workspace` does. **The dialogs and the

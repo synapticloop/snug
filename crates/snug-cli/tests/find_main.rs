@@ -102,7 +102,7 @@ fn class_with_main(internal_name: &str) -> Vec<u8> {
 
 /// A JavaFX-style `Application` subclass: a constructor and `start`,
 /// and deliberately **no** `main`. This mirrors the shape of
-/// `assets/snug-javafx-demo.jar`'s `HelloApplication`, and is the case
+/// `assets/snug-javafx-demo-windows.jar`'s `HelloApplication`, and is the case
 /// that makes a naive "Main-Class must have a main method" check wrong.
 fn javafx_application_class(internal_name: &str) -> Vec<u8> {
     build_class(

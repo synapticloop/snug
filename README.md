@@ -17,7 +17,7 @@
 
 # Quick-Start
 
-1. Download `snug.exe` and `snug-javafx-demo.jar`
+1. Download `snug.exe` and `snug-javafx-demo-windows.jar`
 2. Run the following command
 
 ```
@@ -221,7 +221,7 @@ The produced `.exe` is a 64-bit Windows GUI binary that:
 ## Demo
 
 A JavaFX demo JAR ships with the repo at
-`assets/snug-javafx-demo.jar`. End-to-end build (from the repo root):
+`assets/snug-javafx-demo-windows.jar`. End-to-end build (from the repo root):
 
 ```powershell
 # Option A: the included build script (builds launcher + CLI + packages demo):
@@ -231,7 +231,7 @@ A JavaFX demo JAR ships with the repo at
 cargo build --release -p snug-launcher
 copy /Y target\release\snug-launcher.exe bin\launcher-stub.exe
 cargo build --release -p snug-cli
-target\release\snug.exe assets\snug-javafx-demo.jar ^
+target\release\snug.exe assets\snug-javafx-demo-windows.jar ^
     -o snug-javafx-demo.exe ^
     --name "Snug JavaFX Demo" --company "SynapticLoop" --version 0.1.0 ^
     --description "Snug JavaFX demo launcher" --copyright "© SynapticLoop" ^
@@ -255,13 +255,15 @@ snug/
 ├── README.md                   # this file
 ├── assets/
 │   ├── snug-icon.png           # 1254×1254, used by README + --icon examples
-│   └── snug-javafx-demo.jar    # JavaFX demo fat JAR (Main-Class read from manifest)
+│   ├── snug-javafx-demo-windows.jar  # JavaFX demo fat JAR, Windows natives
+│   └── snug-javafx-demo-macos.jar    # same demo, macOS .dylib natives
 ├── bin/
 │   ├── launcher-stub.exe       # precompiled Windows stub (PE32+ GUI x86-64, ~1.1 MB)
 │   ├── launcher-stub-macos-arm64  # macOS launcher (Mach-O arm64, ~3.1 MB)
 │   └── launcher-stub-macos-x86_64 # macOS launcher (Mach-O x86_64, ~3.1 MB)
 ├── scripts/
 │   ├── build-release.cmd       # Windows batch pipeline: launcher + CLI + demo EXE
+│                                 #   -> release/windows-x86_64/
 │   ├── build-macos.sh          # macOS pipeline: `snug` CLI for arm64 + x86_64 into release/
 │   └── build-macos-demo.sh     # macOS: build-macos.sh, then package the JavaFX demo as a .app
 └── crates/
@@ -556,4 +558,11 @@ from shipping — add new lookups to its `KEYS` list.
 
 Dual-licensed under MIT OR Apache-2.0, at your option.
 
-<div align="center"><img src="assets/snug-icon.png" alt="snug" width="256"></div>
+---
+
+<div align="center">
+<img src="assets/snug-icon.png" alt="snug" width="256">
+<p><strong>Say Hello to Snug.</strong></p>
+</div>
+
+---

@@ -146,8 +146,8 @@ echo "==> demo input"
 # and JavaFX has to ship its *native* libraries, which are
 # platform-specific binaries with platform-specific names
 # (`libglass.dylib` / `glass.dll` / `libglass.so`). So one JAR cannot serve
-# every platform: the Windows build keeps `snug-javafx-demo.jar` (see
-# scripts\build-release.cmd) and this one takes `snug-javafx-demo-mac.jar`.
+# every platform: the Windows build keeps `snug-javafx-demo-windows.jar` (see
+# scripts\build-release.cmd) and this one takes `snug-javafx-demo-macos.jar`.
 # Both are committed, and both platform files name their own, so a missing
 # one is a broken checkout rather than something to work around — the
 # previous fallback to the shared JAR built a bundle that validates,
@@ -163,9 +163,9 @@ fi
 if [[ ! -f "$DEMO_INPUT" ]]; then
     cat >&2 <<EOF
 build-macos-demo: --input names '$DEMO_INPUT', which does not exist.
-                  On macOS that should be assets/snug-javafx-demo-mac.jar
+                  On macOS that should be assets/snug-javafx-demo-macos.jar
                   (it carries the .dylib natives); the Windows build uses
-                  assets/snug-javafx-demo.jar. Check the --input in
+                  assets/snug-javafx-demo-windows.jar. Check the --input in
                   $OS_OPTIONS_FILE.
 EOF
     exit 1

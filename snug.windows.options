@@ -42,12 +42,12 @@
 # `--input`. The JavaFX demo has to ship its *native* libraries, and those
 # are platform-specific binaries with platform-specific names (`glass.dll`
 # here, `libglass.dylib` there). One JAR cannot carry both, so this names
-# assets\snug-javafx-demo.jar and snug.macos.options names the `-mac`
+# assets\snug-javafx-demo-windows.jar and snug.macos.options names the `-macos`
 # build. Same reason as the output, different value.
 #
 # scripts\build-release.cmd runs
 #
-#     target\release\snug.exe assets\snug-javafx-demo.jar
+#     target\release\snug.exe assets\snug-javafx-demo-windows.jar
 #
 # with no -o and no --options, relying on this file being found from the
 # working directory, and then asserts that the EXE landed at exactly the
@@ -71,5 +71,5 @@
 # assets\... path rather than quietly producing a stray EXE in the repo root.
 # ---------------------------------------------------------------------------
 
---input assets/snug-javafx-demo.jar
+--input assets/snug-javafx-demo-windows.jar
 --output assets/snug-javafx-demo.exe

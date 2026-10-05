@@ -42,9 +42,9 @@
 # string sitting in the shared file is what this split exists to fix -
 # it reads as if it applied everywhere, and it does not.
 #
-#     snug.windows.options   --input assets\snug-javafx-demo.jar
+#     snug.windows.options   --input assets\snug-javafx-demo-windows.jar
 #                             --output assets\snug-javafx-demo.exe
-#     snug.macos.options     --input assets/snug-javafx-demo-mac.jar
+#     snug.macos.options     --input assets/snug-javafx-demo-macos.jar
 #                             --output assets/snug-javafx-demo.app
 #
 # Nothing writes those files for you; they are deliberate,

@@ -49,7 +49,7 @@ fn scratch(label: &str) -> PathBuf {
 }
 
 fn demo_jar() -> PathBuf {
-    let jar = repo_root().join("assets").join("snug-javafx-demo.jar");
+    let jar = repo_root().join("assets").join("snug-javafx-demo-windows.jar");
     assert!(jar.is_file(), "the committed demo jar is missing: {}", jar.display());
     jar
 }

@@ -57,5 +57,5 @@
 # ---------------------------------------------------------------------------
 
 #--download-jdk=force
---input assets/snug-javafx-demo-mac.jar
+--input assets/snug-javafx-demo-macos.jar
 --output assets/snug-javafx-demo.app

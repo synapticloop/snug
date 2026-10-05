@@ -12,7 +12,7 @@ REM   2. copy target\...\snug-launcher.exe -> bin\launcher-stub.exe
 REM      The CLI embed_bytes!()s this exact file; cargo tracks it by content,
 REM      so step 3 picks up the change automatically.
 REM   3. (cargo | cargo zig)build --release -p snug-cli
-REM   4. target\...\snug.exe assets\snug-javafx-demo.jar
+REM   4. target\...\snug.exe assets\snug-javafx-demo-windows.jar
 REM      Reads snug.options for the shared metadata, then snug.windows.options
 REM      for the platform-specific --output, and writes
 REM      assets\snug-javafx-demo.exe. The exe dir (target\release\) holds no
@@ -34,8 +34,10 @@ REM      flag instead of hiding behind --SkipDevTools.
 REM   8. Stage release\: the EXEs a user runs (snug, Build with Snug, and
 REM      the snug_preview dialog preview) plus the demo JAR, so someone can
 REM      try the whole drop-a-JAR flow before building a JAR of their own.
-REM      release\ ignores its own contents, so nothing here is tracked.
-REM      Skip with --SkipRelease.
+REM      They land in release\windows-<arch>\ - the same <os>-<arch>
+REM      convention build-macos.sh stages macos-arm64/ and macos-x86_64/
+REM      into. release\ ignores its own contents, so nothing here is
+REM      tracked. Skip with --SkipRelease.
 REM
 REM Run from the repo root:
 REM     .\scripts\build-release.cmd
@@ -62,7 +64,10 @@ REM                             x86_64-pc-windows-gnu rust target installed.
 REM     --Clean                 cargo clean -p snug-launcher -p snug-cli
 REM                             -p snug-dropper first. Does NOT empty
 REM                             release\; stage it into a fresh folder if
-REM                             you need a guaranteed-clean release.
+REM                             you need a guaranteed-clean release. Note
+REM                             that artefacts staged flat in release\ by
+REM                             a pre-<os>-<arch> run are left where they
+REM                             are; delete them by hand once.
 REM ===========================================================================
 
 setlocal EnableExtensions EnableDelayedExpansion
@@ -123,7 +128,7 @@ if "!CROSS_COMPILE!"=="1" if "!SKIP_LAUNCHER_REBUILD!"=="1" (
 )
 
 set "STUB=bin\launcher-stub.exe"
-set "DEMO_JAR=assets\snug-javafx-demo.jar"
+set "DEMO_JAR=assets\snug-javafx-demo-windows.jar"
 set "DEMO_EXE=assets\snug-javafx-demo.exe"
 set "PREVIEW_PNG=assets\snug-preview.png"
 set "SNUG_CLI_PNG=assets\snug-runner.png"
@@ -133,6 +138,7 @@ set "RELEASE_DIR=release"
 
 if "!CROSS_COMPILE!"=="1" (
     set "TARGET_TRIPLE=x86_64-pc-windows-gnu"
+    set "TARGET_ARCH=x86_64"
     set "BUILT_LAUNCHER_EXE=target\!TARGET_TRIPLE!\release\snug-launcher.exe"
     set "BUILT_CLI_EXE=target\!TARGET_TRIPLE!\release\snug.exe"
     set "BUILT_PREVIEW_EXE=target\!TARGET_TRIPLE!\release\snug_preview.exe"
@@ -151,6 +157,7 @@ if "!CROSS_COMPILE!"=="1" (
     )
 ) else (
     set "TARGET_TRIPLE=x86_64-pc-windows-msvc"
+    set "TARGET_ARCH=x86_64"
     set "BUILT_LAUNCHER_EXE=target\release\snug-launcher.exe"
     set "BUILT_CLI_EXE=target\release\snug.exe"
     set "BUILT_PREVIEW_EXE=target\release\snug_preview.exe"
@@ -163,10 +170,20 @@ if "!CROSS_COMPILE!"=="1" (
     set "BUILD_DROPPER_CMD=cargo build --release -p snug-dropper --bin stamp_dropper_icon"
 )
 
+REM Derived *after* the triple is chosen, because with delayed expansion
+REM `!TARGET_ARCH!` expands where it is written, not where it was set.
+REM Same <os>-<arch> convention as scripts/build-macos.sh, which stages
+REM release/macos-arm64/ and release/macos-x86_64/. The artefact keeps its
+REM own name (snug.exe) and the platform lives in the directory, so the
+REM documentation never has to name two different binaries.
+set "RELEASE_SUBDIR=windows-!TARGET_ARCH!"
+set "STAGE_DIR=!RELEASE_DIR!\!RELEASE_SUBDIR!"
+
 echo.
 echo Building release artefacts in %CD%
 echo   target triple:  !TARGET_TRIPLE!
 echo   cross-compile:  !CROSS_COMPILE!
+echo   staging into:   !STAGE_DIR!\
 
 if "!CLEAN!"=="1" (
     echo.
@@ -429,10 +446,18 @@ echo ==^> Skipping Build with Snug build + package ^(--SkipDropper^)
 REM ---------------------------------------------------------------------------
 REM 8. Stage the release directory.
 REM
-REM    release\ is the folder a user unpacks: snug.exe, the Build with Snug
-REM    shim, the snug_preview dialog preview, and the demo JAR so the whole
-REM    drop-a-JAR flow can be tried before writing a JAR of their own. The
-REM    directory ignores its own contents, so nothing in it is tracked.
+REM    release\windows-x86_64\ is the folder a user unpacks: snug.exe, the
+REM    Build with Snug shim, the snug_preview dialog preview, and the demo
+REM    JAR so the whole drop-a-JAR flow can be tried before writing a JAR of
+REM    their own. The directory ignores its own contents, so nothing in it
+REM    is tracked.
+REM
+REM    The <os>-<arch> subdirectory is the same convention
+REM    scripts/build-macos.sh uses for release/macos-arm64/ and
+REM    release/macos-x86_64/: the artefact keeps its own name and the
+REM    platform lives in the directory. Every platform therefore invokes
+REM    `snug` / `snug.exe` and the documentation never has to name two
+REM    different binaries.
 REM
 REM    snug_preview.exe is a dev tool and ships anyway: it is how you look
 REM    at snug's dialogs and error copy without building and launching an
@@ -454,10 +479,10 @@ REM ---------------------------------------------------------------------------
 if "!SKIP_RELEASE!"=="1" goto skip_release
 
 echo.
-echo ==^> staging !RELEASE_DIR!\
-if not exist "!RELEASE_DIR!" mkdir "!RELEASE_DIR!"
+echo ==^> staging !STAGE_DIR!\
+if not exist "!STAGE_DIR!" mkdir "!STAGE_DIR!"
 if errorlevel 1 (
-    echo [build-release] Failed to create !RELEASE_DIR!\
+    echo [build-release] Failed to create !STAGE_DIR!\
     exit /b 1
 )
 
@@ -470,7 +495,7 @@ REM copy without building and launching an app. Built in step 6, so
 REM --SkipDevTools leaves it unbuilt and :stage warns rather than aborting.
 call :stage "!BUILT_PREVIEW_EXE!" "snug_preview.exe"
 if errorlevel 1 exit /b 1
-call :stage "!DEMO_JAR!" "snug-javafx-demo.jar"
+call :stage "!DEMO_JAR!" "snug-javafx-demo-windows.jar"
 if errorlevel 1 exit /b 1
 
 goto after_release
@@ -496,11 +521,11 @@ for %%I in ("!BUILT_PREVIEW_EXE!") do ( if exist "!BUILT_PREVIEW_EXE!" echo   sn
 for %%I in ("!BUILT_DROPPER_EXE!")     do ( if exist "!BUILT_DROPPER_EXE!" echo   Dropper built:          !BUILT_DROPPER_EXE! ^(%%~zI bytes^) )
 for %%I in ("!DROPPER_PACKAGED!")     do ( if exist "!DROPPER_PACKAGED!" echo   !DROPPER_SHIPPED!:  !DROPPER_PACKAGED! ^(%%~zI bytes^) )
 echo.
-echo Release directory: !RELEASE_DIR!\
-for %%I in ("!RELEASE_DIR!\snug.exe")               do ( if exist "!RELEASE_DIR!\snug.exe" echo     snug.exe                 !RELEASE_DIR!\snug.exe ^(%%~zI bytes^) )
-for %%I in ("!RELEASE_DIR!\!DROPPER_SHIPPED!")     do ( if exist "!RELEASE_DIR!\!DROPPER_SHIPPED!" echo     !DROPPER_SHIPPED!: !RELEASE_DIR!\!DROPPER_SHIPPED! ^(%%~zI bytes^) )
-for %%I in ("!RELEASE_DIR!\snug_preview.exe")          do ( if exist "!RELEASE_DIR!\snug_preview.exe" echo     snug_preview.exe        !RELEASE_DIR!\snug_preview.exe ^(%%~zI bytes^) )
-for %%I in ("!RELEASE_DIR!\snug-javafx-demo.jar")  do ( if exist "!RELEASE_DIR!\snug-javafx-demo.jar" echo     snug-javafx-demo.jar    !RELEASE_DIR!\snug-javafx-demo.jar ^(%%~zI bytes^) )
+echo Release directory: !STAGE_DIR!\
+for %%I in ("!STAGE_DIR!\snug.exe")               do ( if exist "!STAGE_DIR!\snug.exe" echo     snug.exe                 !STAGE_DIR!\snug.exe ^(%%~zI bytes^) )
+for %%I in ("!STAGE_DIR!\!DROPPER_SHIPPED!")     do ( if exist "!STAGE_DIR!\!DROPPER_SHIPPED!" echo     !DROPPER_SHIPPED!: !STAGE_DIR!\!DROPPER_SHIPPED! ^(%%~zI bytes^) )
+for %%I in ("!STAGE_DIR!\snug_preview.exe")      do ( if exist "!STAGE_DIR!\snug_preview.exe" echo     snug_preview.exe        !STAGE_DIR!\snug_preview.exe ^(%%~zI bytes^) )
+for %%I in ("!STAGE_DIR!\snug-javafx-demo-windows.jar") do ( if exist "!STAGE_DIR!\snug-javafx-demo-windows.jar" echo     snug-javafx-demo-windows.jar !STAGE_DIR!\snug-javafx-demo-windows.jar ^(%%~zI bytes^) )
 
 REM End the main flow here. :stage below is reachable only through CALL,
 REM which is what stops the pipeline running off the end of the summary
@@ -529,9 +554,9 @@ if not exist "!_STAGE_SRC!" (
     echo   skip    !_STAGE_NAME! -- not built
     exit /b 0
 )
-copy /Y "!_STAGE_SRC!" "!RELEASE_DIR!\!_STAGE_NAME!" >nul
+copy /Y "!_STAGE_SRC!" "!STAGE_DIR!\!_STAGE_NAME!" >nul
 if errorlevel 1 (
-    echo   FAILED to copy !_STAGE_SRC! into !RELEASE_DIR!
+    echo   FAILED to copy !_STAGE_SRC! into !STAGE_DIR!
     exit /b 1
 )
 echo   staged  !_STAGE_NAME!
