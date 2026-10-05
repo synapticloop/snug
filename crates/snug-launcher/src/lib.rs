@@ -2,7 +2,7 @@
 //! compatible JVM, and launches the embedded fat JAR via JNI.
 //!
 //! The crate is also compiled into the **stub launcher binary** (a
-//! precompiled `launcher-stub.exe`) which the `snug` CLI embeds via
+//! precompiled `launcher-stub-windows-x86_64.exe`) which the `snug` CLI embeds via
 //! `include_bytes!()` and appends a payload to at build time. At runtime
 //! the stub binary scans its own file for the [`MAGIC`] prefix and
 //! behaves accordingly.

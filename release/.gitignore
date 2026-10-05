@@ -1,4 +1,4 @@
-# Everything in here is a build output produced by scripts\build-release.cmd.
+# Everything in here is a build output produced by scripts\build-windows.cmd.
 # This file is the only tracked thing, so a fresh clone has the folder (and
 # these rules) without carrying a single artefact.
 #

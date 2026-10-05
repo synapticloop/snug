@@ -45,7 +45,7 @@
 # assets\snug-javafx-demo-windows.jar and snug.macos.options names the `-macos`
 # build. Same reason as the output, different value.
 #
-# scripts\build-release.cmd runs
+# scripts\build-windows.cmd runs
 #
 #     target\release\snug.exe assets\snug-javafx-demo-windows.jar
 #
@@ -67,7 +67,7 @@
 #
 # If this file is ever missing, snug falls back to its own default of
 # <jar-stem>.exe in the working directory - so the file name would be right
-# but the directory would not, and build-release.cmd fails on the missing
+# but the directory would not, and build-windows.cmd fails on the missing
 # assets\... path rather than quietly producing a stray EXE in the repo root.
 # ---------------------------------------------------------------------------
 

@@ -225,11 +225,11 @@ A JavaFX demo JAR ships with the repo at
 
 ```powershell
 # Option A: the included build script (builds launcher + CLI + packages demo):
-.\scripts\build-release.cmd
+.\scripts\build-windows.cmd
 
 # Option B: the equivalent by hand:
 cargo build --release -p snug-launcher
-copy /Y target\release\snug-launcher.exe bin\launcher-stub.exe
+copy /Y target\release\snug-launcher.exe bin\launcher-stub-windows-x86_64.exe
 cargo build --release -p snug-cli
 target\release\snug.exe assets\snug-javafx-demo-windows.jar ^
     -o snug-javafx-demo.exe ^
@@ -241,7 +241,7 @@ target\release\snug.exe assets\snug-javafx-demo-windows.jar ^
 The JAR's `Main-Class` (`synapticloop.snugjavafxdemo.HelloApplication`)
 is read from its manifest, so no `--main-class` override is needed.
 
-`scripts\build-release.cmd` accepts `--SkipLauncherRebuild` (skip steps
+`scripts\build-windows.cmd` accepts `--SkipLauncherRebuild` (skip steps
 1+2, useful when iterating on CLI-only code) and `--SkipPackage`
 (skip the final `snug.exe` packaging step).
 
@@ -258,11 +258,11 @@ snug/
 │   ├── snug-javafx-demo-windows.jar  # JavaFX demo fat JAR, Windows natives
 │   └── snug-javafx-demo-macos.jar    # same demo, macOS .dylib natives
 ├── bin/
-│   ├── launcher-stub.exe       # precompiled Windows stub (PE32+ GUI x86-64, ~1.1 MB)
+│   ├── launcher-stub-windows-x86_64.exe       # precompiled Windows stub (PE32+ GUI x86-64, ~1.1 MB)
 │   ├── launcher-stub-macos-arm64  # macOS launcher (Mach-O arm64, ~3.1 MB)
 │   └── launcher-stub-macos-x86_64 # macOS launcher (Mach-O x86_64, ~3.1 MB)
 ├── scripts/
-│   ├── build-release.cmd       # Windows batch pipeline: launcher + CLI + demo EXE
+│   ├── build-windows.cmd       # Windows batch pipeline: launcher + CLI + demo EXE
 │                                 #   -> release/windows-x86_64/
 │   ├── build-macos.sh          # macOS pipeline: `snug` CLI for arm64 + x86_64 into release/
 │   └── build-macos-demo.sh     # macOS: build-macos.sh, then package the JavaFX demo as a .app
@@ -294,7 +294,7 @@ understands, so old stubs need rebuilding when the version moves).
 validates before decoding. Payload is a postcard-encoded
 `SnugPayload { config, jar, icon }`.
 
-The stub is currently appended (v1, `bin/launcher-stub.exe`); the
+The stub is currently appended (v1, `bin/launcher-stub-windows-x86_64.exe`); the
 launcher locates the trailer by scanning itself for the magic. A v2
 that stores the payload as an `RCDATA` resource is a planned
 hardening slice.
@@ -306,7 +306,7 @@ cross-artefact** — Windows artefacts are built on Windows, macOS
 artefacts on macOS. That is not a limitation, it is what makes the
 precompiled-stub design work: `snug-cli` embeds its launcher with
 `include_bytes!`, so the launcher has to exist *before* the CLI
-compiles, and `scripts\build-release.cmd` already does them in that
+compiles, and `scripts\build-windows.cmd` already does them in that
 order. Cross-compiling would mean keeping a foreign toolchain alive
 purely to refresh a binary the target machine could have produced itself.
 The committed stubs are a bootstrap convenience for a fresh clone, not
@@ -329,7 +329,7 @@ cargo build --release -p snug-cli
 # Native only — see "Building" above for why there is no cross-artefact path.
 # Windows:
 cargo build --release -p snug-launcher
-Copy-Item target\release\snug-launcher.exe bin\launcher-stub.exe -Force
+Copy-Item target\release\snug-launcher.exe bin\launcher-stub-windows-x86_64.exe -Force
 # macOS (arm64 + x86_64 in one go, each landing in bin/):
 scripts/build-macos.sh
 ```
@@ -512,7 +512,7 @@ messages (`err.*`), the splash strings (`splash.*`), the JDK-install
 errors (`jdk.err.*`) **and** the dialog chrome — titles, headings,
 info-box copy, progress text and button labels (`jdk_install.*`,
 `generic.*`, `launcher.error.*`). Edit the file, rerun
-`scripts\build-release.cmd`, and the rebuilt EXE picks up the change
+`scripts\build-windows.cmd`, and the rebuilt EXE picks up the change
 with no Rust edits needed.
 
 The catalog lives in `snug-format` because the CLI and the launcher both

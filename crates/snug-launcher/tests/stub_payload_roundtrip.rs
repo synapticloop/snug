@@ -1,4 +1,4 @@
-//! Integration test that takes the real precompiled `launcher-stub.exe`,
+//! Integration test that takes the real precompiled `launcher-stub-windows-x86_64.exe`,
 //! embeds a snug payload as an `RT_RCDATA` resource entry (slice 4 /
 //! v2 storage), and verifies the locator finds the payload despite
 //! `SNUGEMBD` substrings already living inside the stub binary.
@@ -13,7 +13,7 @@ use snug_format::{
 use snug_launcher::find_in_file;
 use snug_launcher::payload_locator::PAYLOAD_RESOURCE_NAME;
 
-const STUB_PATH: &str = "../../bin/launcher-stub.exe";
+const STUB_PATH: &str = "../../bin/launcher-stub-windows-x86_64.exe";
 
 #[test]
 fn finds_payload_as_rcdata_resource_on_real_stub() {

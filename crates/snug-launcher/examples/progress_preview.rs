@@ -11,7 +11,7 @@
 //! The window is driven entirely by the `ProgressShared` you construct
 //! here, so layout, font sizes, colours, and animation timing can all
 //! be exercised without rebuilding the fat-JAR-using `snug-cli`,
-//! `snug-format`, or the committed `bin/launcher-stub.exe`.
+//! `snug-format`, or the committed `bin/launcher-stub-windows-x86_64.exe`.
 //!
 //! Behaviour:
 //!

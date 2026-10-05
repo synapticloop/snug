@@ -6,7 +6,7 @@
 //! launcher takes — just with hard-coded sample data instead of a
 //! real Adoptium fetch / JVM scan. Lets you iterate on dialog
 //! layout / copy / button labels without rebuilding `snug-cli`,
-//! `snug-format`, or the committed `bin/launcher-stub.exe`, and
+//! `snug-format`, or the committed `bin/launcher-stub-windows-x86_64.exe`, and
 //! without having to type
 //! `cargo run --example dialogs_preview -- --kind <KIND>` every time.
 //!
@@ -50,7 +50,7 @@
 //!
 //! `--icon <FILE>` replaces the icon every dialog uses. Normally that
 //! artwork comes from the EXE's own `MAINICON` resource, which means
-//! changing it would mean relinking `bin/launcher-stub.exe` — a
+//! changing it would mean relinking `bin/launcher-stub-windows-x86_64.exe` — a
 //! cross-compiled, committed binary, and much too slow a loop for
 //! "try this icon across all eight dialogs". `--icon` instead installs
 //! a process-wide override that the dialogs consult, covering both the

@@ -4,7 +4,7 @@
 # JavaFX demo as a real `.app`.
 #
 # This is the macOS counterpart of step 4 + the staging block in
-# scripts\build-release.cmd: that one builds assets\snug-javafx-demo.exe,
+# scripts\build-windows.cmd: that one builds assets\snug-javafx-demo.exe,
 # this one builds assets/snug-javafx-demo.app. Same input JAR, same options
 # files, same "build into assets/ then stage" shape — so the two platforms
 # cannot drift apart on how a demo is produced.
@@ -64,7 +64,7 @@ Frameworks/LaunchServices.framework/Support/lsregister"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
     echo "build-macos-demo: must run on macOS (found $(uname -s))." >&2
-    echo "                  Windows artefacts come from scripts\\build-release.cmd." >&2
+    echo "                  Windows artefacts come from scripts\\build-windows.cmd." >&2
     exit 1
 fi
 
@@ -147,7 +147,7 @@ echo "==> demo input"
 # platform-specific binaries with platform-specific names
 # (`libglass.dylib` / `glass.dll` / `libglass.so`). So one JAR cannot serve
 # every platform: the Windows build keeps `snug-javafx-demo-windows.jar` (see
-# scripts\build-release.cmd) and this one takes `snug-javafx-demo-macos.jar`.
+# scripts\build-windows.cmd) and this one takes `snug-javafx-demo-macos.jar`.
 # Both are committed, and both platform files name their own, so a missing
 # one is a broken checkout rather than something to work around — the
 # previous fallback to the shared JAR built a bundle that validates,
@@ -204,7 +204,7 @@ $missing
                   Get them from org.openjfx:javafx-graphics:<ver>:mac, the
                   same build as the JAR's classes (read it out of
                   javafx.properties / VersionInfo), and put the .dylib files
-                  in the JAR. build-release.cmd needs the -win artifact's
+                  in the JAR. build-windows.cmd needs the -win artifact's
                   .dll files instead.
 EOF
     exit 1

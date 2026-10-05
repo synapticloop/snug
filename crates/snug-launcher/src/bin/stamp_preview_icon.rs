@@ -62,7 +62,7 @@ fn default_exe_path() -> PathBuf {
     // stamp_preview_icon` stamp the *debug* exe, report success, and
     // leave the release one untouched.
     //
-    // `build-release.cmd` step 6 passes explicit paths, so the release
+    // `build-windows.cmd` step 6 passes explicit paths, so the release
     // pipeline never relied on this; only the zero-argument convenience
     // path was affected.
     let profile = if cfg!(debug_assertions) {

@@ -3,7 +3,7 @@
 //!
 //! The format is designed to be **stub-friendly**: the same encoded blob
 //! can be embedded via `include_bytes!()` in a generated Rust launcher
-//! (template-per-build mode) or appended to a precompiled `launcher-stub.exe`
+//! (template-per-build mode) or appended to a precompiled launcher stub
 //! (stub mode). The launcher locates its payload by scanning for the magic
 //! header, then validates version + CRC32 before decoding.
 //!

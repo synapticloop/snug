@@ -48,7 +48,7 @@
 #                             --output assets/snug-javafx-demo.app
 #
 # Nothing writes those files for you; they are deliberate,
-# hand-maintained things. scripts\build-release.cmd produces the Windows
+# hand-maintained things. scripts\build-windows.cmd produces the Windows
 # EXE and scripts/build-macos-demo.sh the macOS bundle, each reading the
 # values from its own file.
 #

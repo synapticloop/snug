@@ -18,7 +18,7 @@
 //! path the production launcher takes, just with hard-coded sample
 //! data instead of a real Adoptium fetch. Lets you iterate on dialog
 //! layout / copy / button labels without rebuilding `snug-cli`,
-//! `snug-format`, or the committed `bin/launcher-stub.exe`.
+//! `snug-format`, or the committed `bin/launcher-stub-windows-x86_64.exe`.
 //!
 //! `--kind` selects which dialog:
 //!

@@ -30,7 +30,7 @@
 //! implementation byte-identical.
 //!
 //! The bin *name* is unchanged, so `cargo run --bin snug_preview` and
-//! `build-release.cmd` need no edits.
+//! `build-windows.cmd` need no edits.
 
 #[cfg(windows)]
 #[path = "snug_preview/windows_impl.rs"]

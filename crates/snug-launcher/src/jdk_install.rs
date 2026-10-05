@@ -491,7 +491,7 @@ impl ProgressShared {
 ///
 /// This exists for `snug_preview --icon <FILE>`. Swapping the fallback
 /// icon any other way means relinking the EXE, because the resource
-/// lives *in* the binary, and `bin/launcher-stub.exe` is committed and
+/// lives *in* the binary, and `bin/launcher-stub-windows-x86_64.exe` is committed and
 /// cross-compiled from macOS/Linux — far too slow a loop for "try this
 /// icon across all eight dialogs". The production launcher never calls
 /// the setter, so this is inert there and costs one relaxed atomic read

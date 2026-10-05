@@ -688,7 +688,7 @@ fn explicit_options_flag_ignores_the_os_file() {
 //
 // snug.options plus one file per platform is what this project's own
 // demo builds run on, and both release scripts depend on it working:
-// scripts\build-release.cmd passes no -o and no --options, so on Windows
+// scripts\build-windows.cmd passes no -o and no --options, so on Windows
 // the `.exe` path has to arrive from snug.windows.options, and
 // scripts/build-macos-demo.sh likewise relies on snug.macos.options.
 //
@@ -755,7 +755,7 @@ fn each_platform_gets_the_output_for_its_own_artefact() {
     assert_eq!(
         windows,
         root.join("assets/snug-javafx-demo.exe"),
-        "a Windows build must name the .exe build-release.cmd asserts on"
+        "a Windows build must name the .exe build-windows.cmd asserts on"
     );
 }
 

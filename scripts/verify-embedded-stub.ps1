@@ -2,7 +2,7 @@
 # scripts/verify-embedded-stub.ps1
 #
 # Byte-for-byte sanity check that <ExePath> contains the full contents of
-# <StubPath> as a contiguous substring. Used by build-release.cmd to prove
+# <StubPath> as a contiguous substring. Used by build-windows.cmd to prove
 # snug.exe still embeds the launcher stub after a rebuild (catches stale
 # include_bytes!() tracking if cargo's mtime/content cache ever drifts).
 #

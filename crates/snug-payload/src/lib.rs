@@ -116,8 +116,8 @@ mod tests {
         // Read the stub, add the payload as an RT_RCDATA resource via
         // editpe, write it back. This mirrors what `snug-cli` does at
         // build time.
-        let stub_bytes = fs::read("../../bin/launcher-stub.exe")
-            .or_else(|_| fs::read("../bin/launcher-stub.exe"))
+        let stub_bytes = fs::read("../../bin/launcher-stub-windows-x86_64.exe")
+            .or_else(|_| fs::read("../bin/launcher-stub-windows-x86_64.exe"))
             .expect("read committed stub");
         let mut image = Image::parse(&stub_bytes).expect("parse stub");
         image
@@ -152,8 +152,8 @@ mod tests {
         // 4096 bytes of zeros — not a valid PE, but Image::parse_file
         // will reject it; for this test we want to exercise the "valid
         // PE but no resource directory" path. Use the bare stub.
-        let stub = fs::read("../../bin/launcher-stub.exe")
-            .or_else(|_| fs::read("../bin/launcher-stub.exe"))
+        let stub = fs::read("../../bin/launcher-stub-windows-x86_64.exe")
+            .or_else(|_| fs::read("../bin/launcher-stub-windows-x86_64.exe"))
             .expect("read committed stub");
         fs::write(&path, &stub).expect("write bare stub");
         assert!(find_in_file(&path).unwrap().is_none());
@@ -163,8 +163,8 @@ mod tests {
     fn returns_none_when_rcdata_entry_missing() {
         let dir = tempdir();
         let path = dir.join("no-entry.exe");
-        let stub = fs::read("../../bin/launcher-stub.exe")
-            .or_else(|_| fs::read("../bin/launcher-stub.exe"))
+        let stub = fs::read("../../bin/launcher-stub-windows-x86_64.exe")
+            .or_else(|_| fs::read("../bin/launcher-stub-windows-x86_64.exe"))
             .expect("read committed stub");
         fs::write(&path, &stub).expect("write stub");
         // The bare stub has no RCDATA entry.

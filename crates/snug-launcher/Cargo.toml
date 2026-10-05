@@ -81,7 +81,7 @@ embed-resource = { version = "3", default-features = false }
 image = { workspace = true }
 
 # A precompiled stub launcher is cross-compiled from macOS / Linux via
-# `cargo zigbuild` and committed at bin/launcher-stub.exe. Snug-cli's
+# `cargo zigbuild` and committed at bin/launcher-stub-windows-x86_64.exe. Snug-cli's
 # builder (slice 3) embeds it via include_bytes!() and appends the
 # encoded payload.
 [package.metadata.cargo-zigbuild]

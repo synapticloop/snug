@@ -1,23 +1,38 @@
-//! The precompiled `launcher-stub.exe` embedded at compile time.
+//! The precompiled Windows launcher stub embedded at compile time.
 //!
 //! The path resolves relative to this crate's manifest directory, i.e.
-//! `crates/snug-cli/`, so `../../bin/launcher-stub.exe` points at the
-//! committed binary at the workspace root.
+//! `crates/snug-cli/`, so `../../bin/launcher-stub-windows-x86_64.exe`
+//! points at the committed binary at the workspace root.
 //!
-//! To regenerate the stub after changing `snug-launcher`:
+//! The name carries `<os>-<arch>` because `bin/` holds one stub per
+//! target — `launcher-stub-windows-x86_64.exe` alongside
+//! `launcher-stub-macos-arm64` and `launcher-stub-macos-x86_64` — and a
+//! bare `launcher-stub.exe` could not be told apart from the others at a
+//! glance. The suffix matches the `release/<os>-<arch>/` directory the
+//! artefact is shipped into, so the whole set is spelled one way.
 //!
-//! ```bash
-//! cargo zigbuild --target x86_64-pc-windows-gnu --release -p snug-launcher
-//! cp target/x86_64-pc-windows-gnu/release/snug-launcher.exe bin/launcher-stub.exe
+//! To regenerate the stub after changing `snug-launcher`, on a native
+//! Windows host:
+//!
+//! ```text
+//! cargo build --release -p snug-launcher
+//! copy /Y target\release\snug-launcher.exe bin\launcher-stub-windows-x86_64.exe
 //! ```
+//!
+//! `scripts\build-windows.cmd` does both steps in that order, which is
+//! load-bearing: the embed has to exist *before* `snug-cli` compiles.
 
 /// The precompiled Windows stub launcher.
+pub const STUB_BYTES: &[u8] =
+    include_bytes!("../../../bin/launcher-stub-windows-x86_64.exe");
+
+/// The name of this stub on disk, relative to the workspace root.
 ///
-/// On non-Windows hosts this is still embedded — the cross-compiled
-/// `launcher-stub.exe` is just bytes from this crate's point of view.
-/// It's only meaningful on a Windows machine (or via Wine) when the
-/// produced `.exe` is actually executed.
-pub const STUB_BYTES: &[u8] = include_bytes!("../../../bin/launcher-stub.exe");
+/// Kept as a constant rather than repeating the literal in the tests
+/// below, so the `include_bytes!` path and the assertions that talk
+/// about the file cannot drift apart silently. A rename that updated
+/// one and not the other would still compile.
+pub const STUB_FILE_NAME: &str = "launcher-stub-windows-x86_64.exe";
 
 #[cfg(test)]
 mod tests {

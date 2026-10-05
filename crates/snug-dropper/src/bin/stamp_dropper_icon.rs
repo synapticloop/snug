@@ -299,13 +299,13 @@ fn stamp_icon(exe: &Path, png: &Path) -> Result<(), String> {
 }
 
 /// Non-Windows entry point — see the module docs. The stamp helper runs
-/// as part of `build-release.cmd` against a natively-built `.exe`; there
+/// as part of `build-windows.cmd` against a natively-built `.exe`; there
 /// is no macOS / Linux equivalent to run.
 #[cfg(not(windows))]
 fn main() {
     eprintln!(
         "stamp_dropper_icon is a Windows-only build helper. It stamps a \
-         natively-built snug-dropper.exe via build-release.cmd."
+         natively-built snug-dropper.exe via build-windows.cmd."
     );
     std::process::exit(1);
 }

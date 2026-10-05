@@ -1,6 +1,6 @@
 //! Stub launcher entry point.
 //!
-//! The compiled binary is reused as `bin/launcher-stub.exe`; the snug CLI
+//! The compiled binary is reused as `bin/launcher-stub-windows-x86_64.exe`; the snug CLI
 //! embeds it via `include_bytes!()` and appends the encoded payload.
 //!
 //! At runtime we:

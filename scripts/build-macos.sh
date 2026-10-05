@@ -26,7 +26,7 @@
 # Environment:
 #   MACOSX_DEPLOYMENT_TARGET   override the floor (default 12.0 Monterey)
 #
-# Not a replacement for scripts\build-release.cmd — that one is the Windows
+# Not a replacement for scripts\build-windows.cmd — that one is the Windows
 # pipeline (launcher stub, dropper, demo JAR, icon stamping) and needs a
 # native Windows host. This one is macOS-only and touches nothing Windows
 # produces.
@@ -58,7 +58,7 @@ readonly RELEASE_DIR="$ROOT/release"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
     echo "build-macos: must run on macOS (found $(uname -s))." >&2
-    echo "            Windows artefacts come from scripts\\build-release.cmd." >&2
+    echo "            Windows artefacts come from scripts\\build-windows.cmd." >&2
     exit 1
 fi
 
