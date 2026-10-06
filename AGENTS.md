@@ -362,26 +362,26 @@ Deferred work, deliberately not done. Kept here rather than in
 `HANDOFF.md`, which is a dated session snapshot pinned to a specific
 commit — useful history, not a live list.
 
+**Not platform-specific, but it bites both**
+- **`test/localisations/*.txt` are hand-maintained copies of the
+  canonical baseline, and they drift.** They are not read by any code —
+  they exist so a fr/de bundle can be dropped in and eyeballed through
+  `--localization <path>` — and `crates/snug-format/assets/` carries only
+  the `en` baseline, so the French and German text lives *only* in those
+  copies. They had fallen a release behind: all three still held the
+  pre-`{arch}` `phase_label` with `Windows x64` hardcoded, and none had the
+  `arch_macos_*` keys. Resynced, but nothing enforces it.
+  - The `every_localize_key_is_in_the_baseline` test only covers the
+    **built-in** baseline, which is why this drifted silently. The
+    interesting fix is to stop hand-copying — generate the copies from the
+    baseline, or add them to the test's reach — rather than remember to
+    resync. Until then, touching a string in the baseline means checking
+    these three.
+- Note the shape of the failure, because it has now bitten twice in this
+  file: a value that is correct in the baseline and wrong in a copy reads
+  as correct from the baseline, and nothing in the build compares the two.
+
 **Windows**
-- **The Windows progress window never substitutes `phase_label`'s
-  `{arch}`.** `progress_window.rs` passes `phase_label` to its `STATIC`
-  control raw, so the initial text is literally
-  `Downloading runtime ({arch})` — the placeholder is shown to the user
-  rather than a platform name. macOS does fill it, from
-  `jdk_install.progress.arch_macos_*`. The fix is to give Windows its own
-  `arch_windows_*` keys and fill the control in `progress_status`'s
-  equivalent, but it needs a real Windows run to confirm, so it is left
-  rather than changed blind from a Mac.
-  - Worth doing with the same care as the macOS half: an earlier version
-    hardcoded `Windows x64` in the *shared* `phase_label`, so macOS
-    announced itself as a Windows download. Splitting the value out fixed
-    that, and left Windows without a value at all — the same bug one step
-    further on.
-- **Refresh `bin/launcher-stub-windows-x86_64.exe` on a Windows host.** Run
-  `scripts\build-windows.cmd`. Not urgent: every change since has been a
-  `cfg(windows)` no-op, so the committed stub is functionally current.
-  It is worth doing anyway as a proof that the committed binary really
-  came from the current source.
 - **Install `mingw-w64` and do a real Windows *link* build from macOS**
   (`brew install mingw-w64` gives `dlltool` + `windres`). This is
   *verification only* — the stub must still be built on Windows, per the

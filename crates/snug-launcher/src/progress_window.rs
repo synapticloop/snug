@@ -504,10 +504,26 @@ unsafe extern "system" fn progress_wndproc(
             );
             apply_font(hwnd_pct, hfont_pct);
 
+            // `phase_label` is a template carrying an `{arch}` slot, and this control
+            // is the only place the Win32 progress window ever renders it -
+            // `IDC_PHASE` is never used to update the control afterwards, so
+            // whatever it is given here is what the user reads for the whole
+            // run. Passing the raw template is what showed a literal
+            // `Downloading runtime ({arch})`; the substitution is the same
+            // one `appkit::progress_status` does, deliberately, because the
+            // slot is not a shell-like placeholder to be left visible.
+            let phase_text = crate::dialogs::fill(
+                d.jdk_install.progress.phase_label.as_str(),
+                &[(
+                    "arch",
+                    &d.jdk_install.progress.arch_windows_x86_64,
+                )],
+            );
+
             let hwnd_phase = CreateWindowExW(
                 0,
                 wide(STATIC_CLASS_NAME).as_ptr(),
-                wide(&d.jdk_install.progress.phase_label).as_ptr(),
+                wide(&phase_text).as_ptr(),
                 WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP,
                 TEXT_X,
                 PHASE_Y,

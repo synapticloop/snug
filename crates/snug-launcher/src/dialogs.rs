@@ -142,12 +142,24 @@ pub struct ProgressDialog {
     pub cancel_button_during_download: String,
     /// Platform names for the `{arch}` slot of `phase_label`.
     ///
-    /// macOS only for now: they are the values the AppKit progress window
-    /// substitutes. See `appkit::adoptium_arch_label` for why a literal
-    /// here was a bug, and the Backlog for the Windows side, which does not
-    /// substitute the slot at all yet.
+    /// `phase_label` is a *template*, not a finished string. Every
+    /// platform that shows it has to substitute its own name, or the user
+    /// reads a literal `{arch}`.
+    ///
+    /// The macOS pair feeds `appkit::adoptium_arch_label`, which needed
+    /// splitting out because a hardcoded "Windows x64" in the shared
+    /// template had macOS announcing itself as a Windows download. See
+    /// that function for the full story.
+    ///
+    /// The Windows value had no key at all until now: the Win32 progress
+    /// window passed the template straight to its `STATIC` control, so
+    /// `{arch}` was never filled and the dialog showed the placeholder.
+    /// There is one Windows key rather than an arch branch because snug
+    /// targets x86_64 Windows only - one shipping target, one spelling.
+    /// An arm64 slice adds its key and its branch together.
     pub arch_macos_arm64: String,
     pub arch_macos_x86_64: String,
+    pub arch_windows_x86_64: String,
 }
 
 #[derive(Debug, Clone)]
@@ -316,6 +328,7 @@ fn assemble() -> Dialogs {
                     },
                     arch_macos_arm64: lookup("jdk_install.progress.arch_macos_arm64"),
                     arch_macos_x86_64: lookup("jdk_install.progress.arch_macos_x86_64"),
+                    arch_windows_x86_64: lookup("jdk_install.progress.arch_windows_x86_64"),
                 },
                 failure: FailureDialog {
                     title: lookup("jdk_install.failure.title"),
