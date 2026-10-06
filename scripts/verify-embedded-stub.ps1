@@ -16,6 +16,40 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# SHA-256 via .NET rather than the Get-FileHash cmdlet.
+#
+# build-windows.cmd launches this script with `powershell -File`, and cmd is in
+# turn launched by pwsh (the GitHub Actions default shell on Windows). Windows
+# PowerShell 5.1 therefore inherits pwsh's $env:PSModulePath, which puts the
+# PowerShell 7 module directories AHEAD of the Windows PowerShell ones. 5.1
+# then autoloads the PS7 copy of Microsoft.PowerShell.Utility (7.0.0.0), which
+# does not export Get-FileHash to Desktop edition, so the cmdlet simply is not
+# there:
+#
+#     The term 'Get-FileHash' is not recognized as the name of a cmdlet...
+#
+# -NoProfile does NOT fix this - the shadowing comes from the inherited module
+# path, not from a profile. Upstream: PowerShell/PowerShell#8635, fixed only on
+# the Core side by #6850, and actions/runner-images#225, still live on PS 7.4.x.
+#
+# [System.Security.Cryptography.SHA256] lives in mscorlib, so it resolves under
+# every PowerShell edition with no module autoloading involved at all. Both
+# byte arrays are already in hand below, so this is strictly less work than the
+# cmdlet was: no second read of the file, and no MemoryStream for the slice.
+function Get-Sha256Hex {
+    param([Parameter(Mandatory = $true)] [byte[]] $Bytes)
+
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $hash = $sha.ComputeHash($Bytes)
+    } finally {
+        $sha.Dispose()
+    }
+    # BitConverter renders "AB-CD-EF"; Get-FileHash rendered "ABCDEF". Same
+    # casing (upper), so the two remain interchangeable in any printed output.
+    return ([System.BitConverter]::ToString($hash)).Replace('-', '')
+}
+
 $stubFull = (Resolve-Path -LiteralPath $StubPath).Path
 $exeFull  = (Resolve-Path -LiteralPath $ExePath).Path
 
@@ -23,7 +57,7 @@ $stub = [System.IO.File]::ReadAllBytes($stubFull)
 $exe  = [System.IO.File]::ReadAllBytes($exeFull)
 
 $stubLen  = $stub.Length
-$stubSha  = (Get-FileHash -LiteralPath $stubFull -Algorithm SHA256).Hash
+$stubSha  = Get-Sha256Hex -Bytes $stub
 
 if ($exe.Length -lt $stubLen) {
     Write-Host ("  FAIL: {0} ({1} B) is smaller than stub ({2} B)" -f $exeFull, $exe.Length, $stubLen) -ForegroundColor Red
@@ -50,9 +84,7 @@ if ($offset -lt 0) {
 }
 
 $slice    = $exe[$offset..($offset + $stubLen - 1)]
-$ms       = New-Object System.IO.MemoryStream(, $slice)
-$sliceSha = (Get-FileHash -InputStream $ms -Algorithm SHA256).Hash
-$ms.Dispose()
+$sliceSha = Get-Sha256Hex -Bytes $slice
 
 if ($sliceSha -ne $stubSha) {
     Write-Host "  FAIL: slice sha256 does not match stub sha256" -ForegroundColor Red
