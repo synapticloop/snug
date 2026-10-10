@@ -305,7 +305,12 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
         .map(|p| p.display().to_string())
         .collect::<Vec<_>>()
         .join(";");
-    let mut builder = InitArgsBuilder::new().version(JNIVersion::V21);
+    let discovered_major = read_java_major(&jvm_dir)?;
+    let (jni_label, jni_version) = jni_version_for(discovered_major);
+    log::log(&format!(
+        "requesting JNI {jni_label} from the discovered JVM (Java {discovered_major:?})"
+    ));
+    let mut builder = InitArgsBuilder::new().version(jni_version);
     for arg in &config.jvm_args {
         builder = builder.option(arg.clone());
     }
@@ -624,10 +629,47 @@ fn ensure_cached(dest: &Path, bytes: &[u8]) -> Result<(), LauncherError> {
     Ok(())
 }
 
+/// Try one candidate from a *scan* of many.
+///
+/// [`check_candidate`] reports a JDK that is too old as an error, and for a
+/// single explicit choice that is right — if you set `JAVA_HOME` to a
+/// Java 11 and asked for 17, "you have Java 11, you need 17" is the
+/// answer you want.
+///
+/// Inside a scan it is wrong, and it was a real bug: the registry roots are
+/// walked in a fixed order with `SOFTWARE\JavaSoft\JDK` first, so a
+/// machine with both a JDK 11 and a JDK 25 hit the 11 and gave up, never
+/// reaching the 25. Any ordinary developer machine with an old JDK left
+/// installed could not discover the new one. So during a scan a too-old
+/// JDK is recorded and stepped over, and only reported if nothing better
+/// turns up.
+fn scan_candidate(
+    too_old: &mut Option<(PathBuf, u16)>,
+    dir: &Path,
+    min_java: u16,
+) -> Result<Option<PathBuf>, LauncherError> {
+    match check_candidate(dir, min_java) {
+        Ok(found) => Ok(found),
+        Err(LauncherError::JvmTooOld { path, found, .. }) => {
+            if too_old.is_none() {
+                *too_old = Some((path, found));
+            }
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// Discover a JVM satisfying the configured `min_java`.
 ///
 /// Walks the [`JvmDiscovery`] strategy in order and returns the first
 /// directory that exposes a sufficiently new `java`.
+///
+/// The first three steps are *explicit choices* — `--jvm-home`, `JAVA_HOME`,
+/// `JDK_HOME` — so `check_candidate` is used there and a too-old JDK is a
+/// hard error, which is the more actionable message. From `PATH` onwards we
+/// are surveying whatever the machine happens to have, so `scan_candidate`
+/// steps over a too-old one instead.
 pub fn discover_jvm(
     strategy: &JvmDiscovery,
     min_java: u16,
@@ -651,6 +693,9 @@ pub fn discover_jvm(
             }
         }
     }
+    // Remembered across the scan; reported only if nothing qualifies.
+    let mut too_old: Option<(PathBuf, u16)> = None;
+
     if strategy.try_path {
         if let Some(p) = read_env_var("PATH") {
             let p_str = p.to_string_lossy();
@@ -661,7 +706,7 @@ pub fn discover_jvm(
                 }
                 let dir_path = PathBuf::from(dir);
                 let candidate = dir_path.parent().unwrap_or(&dir_path);
-                if let Some(ok) = check_candidate(candidate, min_java)? {
+                if let Some(ok) = scan_candidate(&mut too_old, candidate, min_java)? {
                     return Ok(Some(ok));
                 }
             }
@@ -676,7 +721,7 @@ pub fn discover_jvm(
             "SOFTWARE\\Microsoft\\JDK",
         ] {
             if let Ok(Some(path)) = read_registry_jdk_path(HKEY_LOCAL_MACHINE, root) {
-                if let Some(ok) = check_candidate(&path, min_java)? {
+                if let Some(ok) = scan_candidate(&mut too_old, &path, min_java)? {
                     return Ok(Some(ok));
                 }
             }
@@ -684,10 +729,20 @@ pub fn discover_jvm(
     }
     if strategy.try_common {
         for c in common_install_paths() {
-            if let Some(ok) = check_candidate(&c, min_java)? {
+            if let Some(ok) = scan_candidate(&mut too_old, &c, min_java)? {
                 return Ok(Some(ok));
             }
         }
+    }
+    // Stepping over a too-old JDK during the scan must not lose the
+    // information: "you have Java 11, you need 25" is far more actionable
+    // than a bare "not found", and is what this has always reported.
+    if let Some((path, found)) = too_old {
+        return Err(LauncherError::JvmTooOld {
+            path,
+            found,
+            min_java,
+        });
     }
     Ok(None)
 }
@@ -882,6 +937,40 @@ fn parse_version_subkey(name: &str) -> Option<u32> {
     Some(major * 1_000_000 + minor * 1_000 + patch)
 }
 
+/// The JNI spec version to request from the JVM we just discovered.
+///
+/// Asking for a version *newer* than the JVM understands is how
+/// `JNI_CreateJavaVM` fails with a useless "JNI call failed". This used
+/// to pin `JNIVersion::V21` unconditionally, so a user who set
+/// `--min-java 17` got a perfectly good Java 17 discovered and loaded —
+/// and then was asked for a JNI 21 entry point that does not exist in it.
+/// Same failure shape as a `;`-joined classpath: snug reports nothing
+/// useful and the error surfaces from inside the JVM.
+///
+/// Everything used here (`FindClass`, `GetStaticMethodID`,
+/// `CallStaticMethod`, `NewString`, the array and exception calls) is
+/// JNI 1.0-era, so requesting exactly what the JVM provides costs
+/// nothing and is correct for every version. `None` — meaning we could
+/// not read the JVM's version — falls back to the lowest spec
+/// everything understands, which can only ever succeed.
+fn jni_version_for(major: Option<u16>) -> (&'static str, JNIVersion) {
+    // Cap at the highest version the JNI spec actually publishes for
+    // `JNI_CreateJavaVM`. Tried building `(major << 16)` for majors above
+    // 21 so a Java 25 VM would be offered its own level, the way the `java`
+    // executable does — and it fails outright with "JNI_CreateJavaVM
+    // failed: JNI call failed". `JNI_VERSION_21` is the ceiling; there is
+    // no 22/23/24/25 constant, so a larger number is simply not a version
+    // the VM recognises.
+    match major {
+        Some(m) if m >= 21 => ("21", JNIVersion::V21),
+        Some(m) if m >= 20 => ("20", JNIVersion::V20),
+        Some(m) if m >= 19 => ("19", JNIVersion::V19),
+        Some(m) if m >= 10 => ("10", JNIVersion::V10),
+        Some(m) if m >= 9 => ("9", JNIVersion::V9),
+        _ => ("1.8", JNIVersion::V1_8),
+    }
+}
+
 fn common_install_paths() -> Vec<PathBuf> {
     let mut out = Vec::new();
     if let Some(pf) = read_env_var("ProgramFiles") {
@@ -957,5 +1046,123 @@ mod tests {
             parse_version_subkey("21.0.5").unwrap()
         );
         assert!(parse_version_subkey("not").is_none());
+    }
+
+    // ---- F-06: JNI version follows the discovered JVM --------------------
+
+    #[test]
+    fn jni_version_never_exceeds_the_discovered_jvm() {
+        // The bug: a hardcoded JNIVersion::V21 made a discovered Java 17
+        // fail at JNI_CreateJavaVM with "JNI call failed", after discovery
+        // had already accepted it.
+        assert_eq!(jni_version_for(None).1, JNIVersion::V1_8);
+        assert_eq!(jni_version_for(Some(8)).1, JNIVersion::V1_8);
+        assert_eq!(jni_version_for(Some(9)).1, JNIVersion::V9);
+        assert_eq!(jni_version_for(Some(11)).1, JNIVersion::V10);
+        assert_eq!(jni_version_for(Some(17)).1, JNIVersion::V10);
+        assert_eq!(jni_version_for(Some(19)).1, JNIVersion::V19);
+        assert_eq!(jni_version_for(Some(21)).1, JNIVersion::V21);
+        // Capped at 21 even for a Java 25 VM: building `(25 << 16)` by hand
+        // fails with "JNI_CreateJavaVM failed: JNI call failed". So the
+        // invariant is two-sided -- never offer less than the VM's floor,
+        // and never offer a level the spec does not publish.
+        assert_eq!(jni_version_for(Some(25)).1, JNIVersion::V21);
+        assert_eq!(jni_version_for(Some(25)).1.major(), 21);
+        assert_eq!(jni_version_for(Some(17)).1.major(), 10);
+        // The label is what goes in the log, so it must be the readable spec
+        // name rather than the raw `ver` field.
+        assert_eq!(jni_version_for(Some(25)).0, "21");
+        assert_eq!(jni_version_for(Some(17)).0, "10");
+        assert_eq!(jni_version_for(None).0, "1.8");
+    }
+
+    // ---- F-07: a too-old JDK must not abort a scan -----------------------
+
+    /// Build a fake JDK home whose `release` file advertises `version`.
+    fn fake_jdk(root: &Path, version: &str) -> PathBuf {
+        let home = root.join(format!("jdk{version}"));
+        std::fs::create_dir_all(home.join("bin")).unwrap();
+        std::fs::write(home.join("bin").join("java.exe"), b"").unwrap();
+        std::fs::write(home.join("bin").join("javaw.exe"), b"").unwrap();
+        std::fs::write(home.join("release"), format!("JAVA_VERSION=\"{version}\"\n")).unwrap();
+        home
+    }
+
+    fn tempdir() -> PathBuf {
+        let base = std::env::temp_dir();
+        // Counter is load-bearing: pid + nanos is not unique under parallel
+        // tests on a coarse clock.
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let unique = format!(
+            "snug-win-jdk-test-{}-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let dir = base.join(unique);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_too_old_jdk_does_not_abort_the_scan() {
+        // The bug: `SOFTWARE\JavaSoft\JDK` is walked first, so a machine
+        // with both a JDK 11 and a JDK 25 hit the 11, returned JvmTooOld via
+        // `?`, and never reached the 25. Any developer machine with an old
+        // JDK still installed could not discover the new one.
+        let dir = tempdir();
+        let old_home = fake_jdk(&dir, "11");
+        let new_home = fake_jdk(&dir, "25");
+
+        let mut too_old = None;
+        // Registry order, exactly as `discover_jvm` walks it: the old one
+        // is visited first.
+        let mut found = None;
+        for c in [&old_home, &new_home] {
+            if let Some(ok) = scan_candidate(&mut too_old, c, 25).unwrap() {
+                found = Some(ok);
+                break;
+            }
+        }
+
+        assert_eq!(
+            found.as_deref(),
+            Some(new_home.as_path()),
+            "the scan must step over the too-old JDK and reach the good one"
+        );
+        assert!(too_old.is_some(), "the too-old JDK should be remembered");
+    }
+
+    #[test]
+    fn an_explicit_choice_of_a_too_old_jdk_is_still_an_error() {
+        // The complement, and the reason the two paths use different
+        // functions: `--jvm-home`/`JAVA_HOME`/`JDK_HOME` are deliberate, so
+        // "you have Java 11, you need 25" is the answer the user wants
+        // rather than something to scan past.
+        let dir = tempdir();
+        let home = fake_jdk(&dir, "11");
+        let err = check_candidate(&home, 25).unwrap_err();
+        match err {
+            LauncherError::JvmTooOld { found, min_java, .. } => {
+                assert_eq!(found, 11);
+                assert_eq!(min_java, 25);
+            }
+            other => panic!("expected JvmTooOld, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_remembered_too_old_jdk_is_still_reported_when_nothing_qualifies() {
+        // Stepping over it during a scan must not lose the information.
+        // The macOS twin records this and then drops it (its
+        // `discover_jvm` returns `Ok(None)`); Windows keeps the diagnostic.
+        let dir = tempdir();
+        let home = fake_jdk(&dir, "11");
+        let mut too_old = None;
+        assert!(scan_candidate(&mut too_old, &home, 25).unwrap().is_none());
+        assert_eq!(too_old, Some((home, 11)));
     }
 }
