@@ -34,6 +34,7 @@ Nothing in this review has been changed except items explicitly marked `DONE`.
 | ✅ `F-09` | A candidate without `jvm.dll` is rejected before it reaches the loader |
 | ✅ `F-10` | Cache extraction is atomic, and a truncated `app.jar` self-repairs |
 | ✅ `F-11` | The built EXE is staged and renamed, so a failed rebuild keeps the old one |
+| ✅ `F-12` | The documented `\#` escape now survives comment stripping |
 | ✅ `F-29` | Concurrent JDK installs — staging + atomic publish + cross-process lock |
 
 ### Next action required before CI is green
@@ -192,8 +193,12 @@ git add bin\launcher-stub-windows-x86_64.exe
 - **Fix:** Write to `<output>.tmp` in the same directory, then `fs::rename` over the target.
 
 ### F-12 — The documented `\#` escape is dead
-- **Status:** `TODO`
-- **File:** `crates/snug-format/src/localization.rs:91` (`strip_comment`), `:116` (`unescape`), `:151-160`
+- **Status:** `DONE`
+- **Fixed:** 2026-10-10. `strip_comment` now scans for the first hash that is not escaped, treating a `#` as escaped when preceded by an odd number of backslashes — so `\#` is a literal hash and `\\#` correctly reads as "a literal backslash, then a real comment". Byte scanning is safe here: `#` and `\` are ASCII, so the only slice position is necessarily a character boundary.
+- **Tests:** 6 new, and *where* they run is the point. They go through `Localization::parse`, not `unescape` directly — the defect was an **ordering** problem between the two, and the pre-existing `unescape_handles_common_sequences` passed throughout because it called the decoder in isolation, bypassing the order that broke it. Mutation-verified: reverting to `line.find('#')` fails `an_escaped_hash_survives_comment_stripping` and `escapes_and_comments_interleave_correctly`, and nothing else.
+- **Behaviour-neutral for the repo as it stands:** no shipped bundle (`snug-localisations.en.txt`, nor the hand-maintained `test/localisations/*.txt`) puts a `#` in a value, so this only *enables* the documented escape rather than changing any current output. That also means the `test/localisations` copies needed no resync here.
+- **Bonus finding while testing:** `\t` in a value decodes to a real tab, so a Windows path through a `temp` directory becomes control characters in the dialog. That is correct per the documented escapes and not a defect — but it is now pinned by `backslash_t_in_a_value_is_a_tab_not_a_path_separator`, so the next contributor learns it from a test rather than from a mangled dialog.
+- **File:** `crates/snug-format/src/localization.rs:151-181`
 - **Trigger:** Any bundle value containing a `#`, written exactly as the format instructs (`crates/snug-format/assets/snug-localisations.en.txt:20`): `err.foo = Error \#42`.
 - **Impact:** `strip_comment` runs first and does a bare `line.find('#')`, matching the *escaped* hash and cutting the line. The escape never reaches `unescape`. The value silently becomes `Error \` in a user-facing dialog — text lost, stray backslash added, no parse error, and the key exists so the missing-key check can't flag it. The `unescape_handles_common_sequences` test passes only because it calls `unescape` in isolation, bypassing the real order. Confirmed by three independent reviewers.
 - **Fix:** Make `strip_comment` find the first *unescaped* `#`.

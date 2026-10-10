@@ -148,15 +148,40 @@ pub enum LocalizationParseError {
     },
 }
 
-/// Strip a `#`-prefixed trailing comment, respecting nothing —
-/// comments are not allowed inside values. Callers that need
-/// literal `#` in a value should write `\#` (the backslash is
-/// stripped by `unescape`).
+/// Strip a trailing comment, starting at the first `#` that is not
+/// escaped.
+///
+/// A `#` is escaped when it follows an *odd* number of backslashes: `\#` is
+/// a literal hash, `\\#` is a literal backslash followed by a real comment.
+/// The backslash is left in place for [`unescape`] to consume, which is why
+/// this returns the line unchanged up to the comment rather than rebuilding
+/// it.
+///
+/// This used to be `line.find('#')`, which matched the *escaped* hash too.
+/// Since `strip_comment` runs before `unescape`, the escape never reached
+/// the decoder: a contributor following the documented `\#` convention got
+/// their value silently cut at the hash, with a stray backslash left over
+/// (`Error \#42` became `Error \`). No parse error, and the missing-key
+/// guard could not see it, because the key was present -- it just held the
+/// wrong text. The unit test passed because it called `unescape` directly
+/// and bypassed the order that broke it.
+///
+/// Scanning by byte is safe here: `#` and `\` are ASCII, so the only place
+/// this ever slices is a position that is necessarily a character boundary.
 fn strip_comment(line: &str) -> &str {
-    match line.find('#') {
-        Some(i) => &line[..i],
-        None => line,
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            // Skip the escape *and* what it escapes. Stepping two is what
+            // makes `\\#` read as "an escaped backslash, then a comment"
+            // rather than "an escaped hash".
+            b'\\' => i += 2,
+            b'#' => return &line[..i],
+            _ => i += 1,
+        }
     }
+    line
 }
 
 /// Decode the value-side escape sequences: `\\n` → `\n`, `\\t` → `\t`,
@@ -377,6 +402,78 @@ err.bar = multi\\nline
         assert_eq!(unescape(r"eq\=sign"), "eq=sign");
         // Unknown escape → preserved verbatim.
         assert_eq!(unescape(r"x\yz"), "x\\yz");
+    }
+
+    // --- Escaped hashes (F-12) ------------------------------------------
+    //
+    // These deliberately go through `parse`, not `unescape` directly. The
+    // bug was an ordering problem between the two, so a test that skips
+    // `strip_comment` cannot see it -- which is exactly what
+    // `unescape_handles_common_sequences` was doing.
+
+    #[test]
+    fn an_escaped_hash_survives_comment_stripping() {
+        let bundle = Localization::parse("en", concat!(r"err.code = Error \#42", "\n")).unwrap();
+        assert_eq!(
+            bundle.get("err.code"),
+            Some("Error #42"),
+            "the documented `\\#` must reach the value, not start a comment"
+        );
+    }
+
+    #[test]
+    fn a_real_comment_is_still_stripped() {
+        let bundle = Localization::parse("en", "err.a = kept  # trailing note\n").unwrap();
+        assert_eq!(bundle.get("err.a"), Some("kept"));
+    }
+
+    #[test]
+    fn an_escaped_backslash_does_not_escape_the_next_hash() {
+        // `\\#` is a literal backslash followed by a real comment. Getting
+        // this backwards would let a value swallow the rest of the file's
+        // comments, or cut a legitimate value short.
+        let bundle =
+            Localization::parse("en", "err.a = back\\\\  # note\nerr.b = second\n").unwrap();
+        assert_eq!(bundle.get("err.a"), Some("back\\"));
+        assert_eq!(bundle.get("err.b"), Some("second"));
+    }
+
+    #[test]
+    fn a_lone_trailing_backslash_does_not_panic() {
+        // The scan steps two bytes for an escape; a `\` at the very end has
+        // nothing to step over. It must not slice mid-character or panic.
+        let bundle = Localization::parse("en", "err.a = ends with \\\n").unwrap();
+        assert_eq!(bundle.get("err.a"), Some("ends with \\"));
+    }
+
+    #[test]
+    fn escapes_and_comments_interleave_correctly() {
+        // The realistic composite: a literal hash, an escaped equals, a real
+        // comment, and a second key afterwards.
+        //
+        // Note the path avoids `\t` and `\n` on purpose: those ARE decoded,
+        // so a Windows path through a `temp` or `notepad` directory becomes
+        // real control characters. That is documented, not a bug, but it is
+        // the first thing a contributor trips over.
+        let text = concat!(
+            "err.a = C:\\Users\\admin \\# not a comment\n",
+            "err.b = k\\=v   # this part is a comment\n",
+            "err.c = plain\n",
+        );
+        let bundle = Localization::parse("en", text).unwrap();
+        assert_eq!(bundle.get("err.a"), Some(r"C:\Users\admin # not a comment"));
+        assert_eq!(bundle.get("err.b"), Some("k=v"));
+        assert_eq!(bundle.get("err.c"), Some("plain"));
+    }
+
+    #[test]
+    fn backslash_t_in_a_value_is_a_tab_not_a_path_separator() {
+        // Pinned because it is the other half of why a Windows path needs
+        // doubling: `\t` and `\n` are decoded, so `C:\temp` cannot be
+        // written as-is. Worth stating explicitly rather than leaving a
+        // contributor to discover it as a mangled dialog.
+        let bundle = Localization::parse("en", concat!(r"err.a = C:\temp", "\n")).unwrap();
+        assert_eq!(bundle.get("err.a"), Some("C:\temp"));
     }
 
     #[test]
