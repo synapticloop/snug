@@ -23,25 +23,37 @@ Nothing in this review has been changed except items explicitly marked `DONE`.
 
 | Done | Item |
 |---|---|
-| ✅ `F-01` | `-o` overwriting the input JAR — guarded canonically, tested, verified end-to-end |
-| ✅ `F-02` | `build-windows.cmd` step 8 — builds both dropper targets now |
-| ✅ `F-03` | Stub-hash check — normalised via `scripts/pe-stable-hash.ps1`, verified reproducible |
-| ✅ `F-04` | Dropper dialogs — caption/body swap fixed (F-04) and the overwrite prompt reworded |
-| ✅ `F-05` | Cancel during verify/extract — now honoured, and no longer overruled by the worker |
-| ✅ `F-06` | Windows JNI version follows the discovered JVM (ported from macOS) |
-| ✅ `F-07` | A too-old JDK no longer aborts the scan (ported from macOS, plus its diagnostic kept) |
-| ✅ `F-08` | `try_common` expanded to the JDKs inside each vendor directory |
-| ✅ `F-09` | A candidate without `jvm.dll` is rejected before it reaches the loader |
-| ✅ `F-10` | Cache extraction is atomic, and a truncated `app.jar` self-repairs |
-| ✅ `F-11` | The built EXE is staged and renamed, so a failed rebuild keeps the old one |
-| ✅ `F-12` | The documented `\#` escape now survives comment stripping |
-| ✅ `F-13` | Multi-release overlays are no longer offered as entry points |
-| ✅ `F-14` | A mis-encoded manifest attribute no longer fails the build |
-| ✅ `F-15` | The terminal JDK-failure dialog finally shows what went wrong |
-| ✅ `F-16` | `--require_equals` flags no longer swallow the next token |
-| ✅ `F-17` | A UTF-8 BOM no longer corrupts the first option |
-| ✅ `F-29` | Concurrent JDK installs — staging + atomic publish + cross-process lock |
-| ✅ `F-30` | `failure.heading` rendered, instead of repeating the window title |
+| Done | Item |
+|---|---|
+| ✅ `F-01` | `-o` pointing at the input JAR silently destroys it |
+| ✅ `F-02` | `build-windows.cmd` fails on a clean tree; step 8 never builds the dropper |
+| ✅ `F-03` | CI's "committed stub matches a fresh build" check can never pass |
+| ✅ `F-04` | Every dropper dialog shows title and body swapped |
+| ✅ `F-05` | Cancelling during verify/extract launches the app anyway |
+| ✅ `F-06` | Windows still pins `JNIVersion::V21` |
+| ✅ `F-07` | One too-old JDK aborts the entire Windows discovery scan |
+| ✅ `F-08` | `try_common` can never match — the scan stops at the parent directory |
+| ✅ `F-09` | Discovery accepts a candidate the loader can't use |
+| ✅ `F-10` | Cache extraction isn't atomic, and a truncated JAR is never reclaimed |
+| ✅ `F-11` | The Windows EXE is written non-atomically over the previous one |
+| ✅ `F-12` | The documented `\#` escape is dead |
+| ✅ `F-13` | Multi-release JAR entries reported as launchable entry points |
+| ✅ `F-14` | A non-UTF-8 manifest aborts the entire build |
+| ✅ `F-15` | The terminal JDK-failure dialog renders no error text |
+| ✅ `F-16` | Bare `--download-jdk` swallows the next token |
+| ✅ `F-17` | A UTF-8 BOM turns the first option into an unknown argument |
+| ✅ `F-18` | `SnugPayload.icon` is a dead field that doubles every EXE icon bytes |
+| ✅ `F-19` | GUI-subsystem guarantee lives only in a path nothing calls |
+| ✅ `F-20` | Every launcher error re-decodes the whole payload for one URL |
+| ✅ `F-21` | A `--options` with no value is silently discarded |
+| ✅ `F-22` | Meta-flags written *into* an options file are silently ignored |
+| ✅ `F-23` | Malformed `--manifest` XML is embedded verbatim |
+| ✅ `F-24` | The dropper shifts a multi-segment relative input |
+| ✅ `F-25` | `payload_len` is an unchecked narrowing cast |
+| ✅ `F-26` | A wrapped `Main-Class` continuation yields "no main class" silently |
+| ✅ `F-28` | The exe-dir options tier doesn't carry relative paths, despite the documented promise |
+| ✅ `F-29` | Two snug apps downloading the same JDK corrupt each other's install |
+| ✅ `F-30` | `failure.heading` is a dead key; the heading repeats the title |
 ### Next action required before CI is green
 `F-03` made the stub check work, and it immediately found real drift. Refresh the
 committed stub and commit it:
@@ -247,41 +259,42 @@ git add bin\launcher-stub-windows-x86_64.exe
 - **The localisation key survives.** `launcher.fallback_messagebox.title` is still used by `snug_preview --kind early-bail` and `dialogs_preview`, so removing the function orphans nothing.
 - **File:** `crates/snug-launcher/src/main.rs`
 ### F-21 — A `--options` with no value is silently discarded
-- **Status:** `TODO`
-- **File:** `crates/snug-cli/src/options_file.rs:204-206`, `:448-450`
-- **Trigger:** `snug app.jar --options` (flag last, no path). `find_options_flag` returns `None`, so `resolve_all` falls back to the ambient default names and `strip_options_flag` then deletes the dangling token.
-- **Impact:** clap never raises "a value is required", so the build proceeds on whatever `snug.options` is lying around, exit 0 — the opposite of what `--options` exists to guarantee. The typo `--options --name Foo` is likewise mishandled (`--name` taken as the path).
-- **Fix:** Treat `--options` with no following value as a parse error.
+- **Status:** `DONE`
+- **Fixed:** 2026-10-10. `find_options_flag` returned `None` — meaning "not supplied" — for a trailing `--options`, and took the *next flag* as the path for `--options --name Foo`. Both fell back to whatever `snug.options` was lying around, so `snug App.jar --options` built the **wrong build** and exited 0. Clap never objected because the flag had been stripped before parsing.
+- Now a `MissingValue` error (new `OptionsFileError` variant) propagated through `resolve_all`. A following `-` is still accepted as a filename; a following `--flag` is not.
+- **Signature change:** `find_options_flag` and `resolve_all` return `Result` now. Genuinely-absent stays silent — that is what "not supplied" means — but a malformed one is loud.
+- **Tests:** `an_options_flag_with_no_value_is_an_error_not_an_absent_flag`, `a_bare_dash_is_still_a_legal_filename_for_options`.
+- **File:** `crates/snug-cli/src/options_file.rs`
 ### F-22 — Meta-flags written *into* an options file are silently ignored
-- **Status:** `TODO`
-- **File:** `crates/snug-cli/src/options_file.rs:384-458`, `crates/snug-cli/src/main.rs:40`
-- **Trigger:** `snug.options` containing `--options other.options` — the flag is advertised in the shipped template at `assets/snug.options.example:240`.
-- **Impact:** `strip_options_flag` runs only over the CLI portion and `collect_cli_flags` deliberately never records `options` in `seen`, so the file's pair reaches clap, sets `cli.options`, and nothing ever loads it. Same for `--init-options` / `--init-localizations` from a file: `is_init_flag` scans raw argv only, so it parses, builds, and never scaffolds.
-- **Fix:** Strip or explicitly reject `--options` and the `--init-*` family in `strip_overridden`/`merge`.
+- **Status:** `DONE`
+- **Fixed:** 2026-10-10. `--options` and the `--init-*` family are consumed by `main` *before* any file is opened, so a file's copy can never take effect. Left in the merged argv they reached clap, which then either loaded nothing or short-circuited the entire build — silently, with a success message. Now stripped from file layers by `strip_meta_flags`.
+- **Tests:** `meta_flags_in_a_file_are_dropped_rather_than_reaching_clap`, and `a_lone_dash_after_meta_flags_is_not_eaten_as_a_value` (the join must not swallow the token that follows).
+- **File:** `crates/snug-cli/src/options_file.rs`
 ### F-23 — Malformed `--manifest` XML is embedded verbatim
-- **Status:** `TODO`
-- **File:** `crates/snug-cli/src/resources.rs:93-105`
-- **Trigger:** `--manifest broken.xml` with an XML syntax error (unclosed tag, stray `<`, bad attribute).
-- **Impact:** `editpe` 0.2.4's `set_manifest` validates only resource-table structure, stores the string as opaque bytes and returns `Ok`. The build reports success and the defect surfaces only on the target machine as an SxS activation failure — the app never starts, with no build-time signal. *(Verified against the vendored `editpe` source, not reproduced locally.)*
-- **Fix:** Reject non-well-formed XML at the CLI boundary before calling `set_manifest`.
+- **Status:** `DONE`
+- **Fixed:** 2026-10-10. `editpe`'s `set_manifest` validates only resource-table structure and stores the string opaquely, so an unclosed tag produced a perfectly "successful" build that failed on the target machine as an SxS activation error — the app simply would not start, with nothing in the build log connecting it to a typo in a hand-written file.
+- Validated with `quick-xml`, which was **already in `Cargo.lock` transitively via `zip`** — so the dependency cost is zero.
+- **Two gaps the tests exposed, both now handled:** `quick-xml` reports a mismatched end tag but reaches EOF happily on a document that simply stops mid-element (`<assembly><trustInfo>`), so element depth is tracked explicitly; and an empty file reads as "well-formed", so that is rejected too.
+- **Known limit, stated in the test:** a raw `<` *inside* an attribute value is accepted by `quick-xml` and is not caught. Catching it would mean re-implementing attribute scanning to be stricter than the parser that will read the document.
+- **File:** `crates/snug-cli/src/resources.rs`
 ### F-24 — The dropper shifts a multi-segment relative input
-- **Status:** `TODO`
-- **File:** `crates/snug-dropper/src/build.rs:59-78`
-- **Trigger:** `Build with Snug.exe build\libs` from a terminal or a shortcut argument whose path is relative with more than one segment.
-- **Impact:** `cwd` is the input's parent while the input itself passes through verbatim, so `build\libs` resolves to `build\build\libs`; the same one-level shift applies to `-o`. Windows drag-and-drop always passes absolute paths, so this is dev/shortcut-only.
-- **Fix:** Resolve `input` to an absolute path before computing `cwd` and `output`.
+- **Status:** `DONE`
+- **Fixed:** 2026-10-10. `cwd` was the input's parent while the argument stayed relative, so `build\libs` reached the child as cwd=`build` + arg=`build\libs` -> `build\build\libs`. Relative inputs are now resolved against the process directory first; anything already rooted or drive-qualified is passed through untouched so its `cwd` stays exactly its parent.
+- Explorer hands drag-and-drop absolute paths, so this only bites when driven from a terminal or a shortcut argument — exactly where a "no such JAR" for a file that plainly exists is hardest to read.
+- **Test:** `a_multi_segment_relative_input_does_not_shift_by_one_level`.
+- **File:** `crates/snug-dropper/src/build.rs`
 ### F-25 — `payload_len` is an unchecked narrowing cast
-- **Status:** `TODO`
-- **File:** `crates/snug-format/src/embedded.rs:72`
-- **Trigger:** An input whose encoded payload reaches 4 GiB (a fat JAR bundling a runtime or a large model).
-- **Impact:** `payload_bytes.len() as u32` wraps, writing a header whose `payload_len` disagrees with the bytes actually written while `payload_crc32` still covers the full buffer. The launcher then fails on `Truncated`/`BadCrc32` and the artefact is dead on arrival, with a message pointing at the launcher rather than the build.
-- **Fix:** `u32::try_from(payload_bytes.len())` and fail the build with the actual size.
+- **Status:** `DONE`
+- **Fixed:** 2026-10-10. `payload_bytes.len() as u32` **wrapped** past 4 GiB, writing a header that disagreed with the bytes actually following it, so the artefact failed validation at launch with a truncated/CRC error pointing at the launcher rather than at the build. Now `u32::try_from`, with a new `FormatError::PayloadTooLarge { len }`.
+- `codec::encode` returns the error. `SnugEmbedded::new` is infallible by signature (converting it would churn ~15 call sites for a case that cannot occur in practice), so it panics with a message naming the size — loud beats silently wrong.
+- **Test:** `a_payload_the_header_cannot_describe_is_refused_not_wrapped`, asserting the boundary arithmetic (`u32::MAX + 1` wraps to 0 under the old cast, is rejected by `try_from`) rather than allocating 4 GiB.
+- **File:** `crates/snug-format/src/{embedded,codec,error}.rs`
 ### F-26 — A wrapped `Main-Class` continuation yields "no main class" silently
-- **Status:** `TODO`
-- **File:** `crates/snug-cli/src/manifest.rs:89-108`
-- **Trigger:** A `MANIFEST.MF` whose `Main-Class` value hits the 72-byte line limit, so a conforming writer emits an indented continuation.
-- **Impact:** `parse_main_class` returns the truncated first line's value, or `None` if the value is entirely on the continuation. Either way the build emits no warning — `warn_on_ambiguous_manifests` only fires for multiple *declaring JARs*. The doc at `:91-93` asserting "none are legal for `Main-Class` anyway" is wrong.
-- **Fix:** Join indented continuation lines before splitting on `:`.
+- **Status:** `DONE`
+- **Fixed:** 2026-10-10. Manifest values wrap at 72 bytes with continuations starting by a single space, and a long package name pushes `Main-Class` over the limit. `parse_main_class` read only the first physical line, silently truncating the class name. Continuations are now joined.
+- **The old doc comment claimed continuations are "not legal for `Main-Class`" — that is wrong**, and is why this survived: the 72-byte limit applies to every line in the file. Corrected.
+- **Tests:** 4, including `a_continuation_does_not_swallow_the_next_header`, which guards the failure mode a naive join introduces.
+- **File:** `crates/snug-cli/src/manifest.rs`
 ### F-27 — Each build serialises the whole payload three times
 - **Status:** `TODO`
 - **File:** `crates/snug-cli/src/main.rs:121-122`, `crates/snug-cli/src/build.rs:522-523`
@@ -289,31 +302,7 @@ git add bin\launcher-stub-windows-x86_64.exe
 - **Impact:** `main.rs:122` builds a `SnugEmbedded` (full postcard encode for len + CRC), then `build.rs:522` builds a *second* from `payload.clone()` — a full copy of every JAR byte plus another encode — and `:523` encodes a third time. Peak memory runs at roughly 3-4× the JAR size on the 200 MB case the code itself cites.
 - **Fix:** Pass the `&SnugEmbedded` already built in `main.rs` into `build_exe`.
 ### F-28 — The exe-dir options tier doesn't carry relative paths, despite the documented promise
-- **Status:** `TODO`
-- **File:** `crates/snug-cli/src/options_file.rs:34-39` (doc) vs `:161-187` (behaviour)
-- **Trigger:** Shipping `snug.exe` beside a `snug.options` naming a relative input (as the repo's own does with `assets/…`) and invoking `snug` from a different CWD.
-- **Impact:** `resolve_all` finds the file in exe-dir, but the tokens merge into argv and every path in them resolves against the CWD, so the documented promise "carries its defaults wherever it is invoked from" holds for scalar flags only. The failure is a confusing `stat-ing input app.jar: system cannot find the file`, from a file the tool itself located and announced.
-- **Fix:** Resolve path-valued tokens in an exe-dir file against that file's directory, or narrow the doc claim.
----
-## Verified sound — don't re-audit these
-Payload self-scan and CRC-before-decode ordering (`snug-format/src/codec.rs:52-94`);
-classfile parsing is panic-free (`checked_add` + safe slicing, bounded 64 KB window with an
-honest `oversized` note surfaced to the user); `build.rs` completes all encode/stamp work in
-memory before a single write, so a stamp failure cannot truncate an existing EXE;
-classpath built via `std::env::join_paths` and passed as one JNI option string, so
-`Program Files` / `%LOCALAPPDATA%` spaces are safe; `budget_for` overflow-safe
-(`saturating_mul` + `clamp`), current build never evicted; registry enumeration respects
-`RegEnumKeyExW`/`RegQueryValueExW` lengths and validates `JavaHome` with `is_dir`;
-resource stamping never silently swallowed (icon / manifest / version all propagate `?`);
-RT_RCDATA lookup is by resource name, so a false-positive `SNUGEMBD` in the stub cannot mislead it;
-dropper uses `Command::args()` argv throughout — no shell, no injection possible;
-`decide.rs` classification consistent across double-click and drag-and-drop;
-`merge` builds `FlagSpec` once per call and walks strictly high-to-low;
-placeholder substitution is `str::replace`-based, never `format!`, so no user-facing string can panic;
-malformed options files fail loudly with a line number;
-`build-macos.sh` / `build-macos-demo.sh` gate staging on `[[ -d "$DEMO_APP" ]]`, `lipo` arch and
-`otool minos` before copying anything.
-## Stale docs spotted in passing
-- `AGENTS.md:1791-1792` still says "Cross-platform launcher (mac `.app`, Linux ELF) —
-  explicitly NOT in scope. Snug is Windows-only by design", which contradicts slices 11-13
-  and most of the "Build host" section.
+- **Status:** `DONE` (doc, not behaviour — deliberate)
+- **Decided against implementing it.** The module doc claimed a portable `snug.exe` "carries its defaults wherever it is invoked from", but a relative path in an options file resolves against the **CWD**, not the directory the file was found in. Fixing the behaviour means deciding which flags are path-valued and rebasing only those; guessing wrong would silently mangle `--jvm-arg`. The doc now states the real behaviour and records why the fuller fix was not taken.
+- **Open if you want it:** rebase `jar` / `input` / `output` / `icon` / `manifest` / `splash` / `cache-dir` / `localization` onto the options file's own directory, but only when the file was found in the exe dir. Contained change; say the word.
+- **File:** `crates/snug-cli/src/options_file.rs` (module docs)

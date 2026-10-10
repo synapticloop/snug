@@ -33,10 +33,21 @@
 //!
 //! For each of the two names, the snug executable's own directory is
 //! searched first, then the current working directory — so a portable
-//! `snug.exe` shipped alongside its `snug.options` carries its defaults
-//! wherever it is invoked from. This is a *per-tier* search: an exe-dir
-//! `snug.options` and a CWD `snug.<os>.options` both load, and the OS
-//! file still wins on conflicting flags.
+//! `snug.exe` shipped alongside its `snug.options` carries its scalar
+//! defaults (`--name`, `--company`, `--version`, …) wherever it is invoked
+//! from. This is a *per-tier* search: an exe-dir `snug.options` and a CWD
+//! `snug.<os>.options` both load, and the OS file still wins on
+//! conflicting flags.
+//!
+//! Path-valued tokens are the exception, and this is stated plainly because
+//! the opposite used to be claimed here: a relative path inside an options
+//! file resolves against the **current working directory**, not against the
+//! directory the file was found in. An exe-dir `snug.options` naming
+//! `assets/demo.jar` therefore works only when invoked from the repo root,
+//! and otherwise fails with a stat error that reads as though the file were
+//! ignored. Rebasing such paths onto the file's own directory would need a
+//! decided list of which flags are path-valued, and guessing wrong would
+//! silently mangle `--jvm-arg`, so it has not been done.
 //!
 //! A missing file is not an error, and not a warning. `snug.<os>.options`
 //! is an opt-in, so looking for one and finding nothing must be silent
@@ -107,6 +118,15 @@ pub enum OptionsFileError {
         line: usize,
         message: String,
     },
+
+    /// `{flag}` was supplied with no usable value.
+    ///
+    /// Distinct from "flag not supplied": that one is silent, because
+    /// options-file discovery is opt-in. This one means the user asked for
+    /// something specific and did not say what, and silently building the
+    /// ambient configuration instead is the worst possible reading.
+    #[error("{flag} requires a path to an options file\nhint: {flag} <path>, or {flag}=<path>")]
+    MissingValue { flag: &'static str },
 }
 
 /// The OS-specific options-file name for an OS token: `snug.macos.options`,
@@ -163,20 +183,23 @@ pub fn resolve_all(
     cwd: &Path,
     exe_dir: Option<&Path>,
     os: &str,
-) -> Vec<PathBuf> {
-    if let Some(p) = find_options_flag(raw_args) {
-        return vec![p];
+) -> Result<Vec<PathBuf>, OptionsFileError> {
+    // A malformed `--options` propagates rather than falling through to
+    // ambient discovery -- that fall-through is precisely the bug.
+    if let Some(p) = find_options_flag(raw_args)? {
+        return Ok(vec![p]);
     }
 
     let os_file_name = os_options_file_name(os);
-    [DEFAULT_OPTIONS_FILE, os_file_name.as_str()]
+    let hits: Vec<PathBuf> = [DEFAULT_OPTIONS_FILE, os_file_name.as_str()]
         .iter()
         .filter_map(|name| {
             search_dirs(exe_dir, cwd)
                 .map(|dir| dir.join(name))
                 .find(|p| p.is_file())
         })
-        .collect()
+        .collect();
+    Ok(hits)
 }
 
 /// The directories searched for a default options file, highest location
@@ -198,17 +221,43 @@ pub fn current_exe_dir() -> Option<PathBuf> {
 ///
 /// Returns the resolved path, or `None` if the flag wasn't supplied.
 /// Does not validate that the file exists; that's the caller's job.
-pub fn find_options_flag(raw_args: &[String]) -> Option<PathBuf> {
-    let iter = raw_args.iter().enumerate();
-    for (i, arg) in iter {
+///
+/// An `--options` with no usable value is an **error**, not an absent
+/// flag. It used to return `None` (flag trailing at the end of argv) or
+/// swallow the next flag as a path (`--options --name Foo`), and both
+/// silently fell back to whatever `snug.options` happened to be lying
+/// around -- so `snug App.jar --options` built the *wrong* build and
+/// exited 0. Clap never saw the flag to object, because it had been
+/// stripped before parsing.
+///
+/// A value starting with `-` is rejected as well: a bare `-` is a
+/// legitimate (if odd) filename, but `--anything` is a flag, and treating
+/// it as a path is always the wrong reading.
+pub fn find_options_flag(raw_args: &[String]) -> Result<Option<PathBuf>, OptionsFileError> {
+    for (i, arg) in raw_args.iter().enumerate() {
         if arg == "--options" {
-            return raw_args.get(i + 1).map(PathBuf::from);
+            return match raw_args.get(i + 1) {
+                None => Err(OptionsFileError::MissingValue {
+                    flag: "--options",
+                }),
+                Some(next) if next.starts_with('-') && next != "-" => Err(
+                    OptionsFileError::MissingValue {
+                        flag: "--options",
+                    },
+                ),
+                Some(next) => Ok(Some(PathBuf::from(next))),
+            };
         }
         if let Some(value) = arg.strip_prefix("--options=") {
-            return Some(PathBuf::from(value));
+            if value.is_empty() {
+                return Err(OptionsFileError::MissingValue {
+                    flag: "--options",
+                });
+            }
+            return Ok(Some(PathBuf::from(value)));
         }
     }
-    None
+    Ok(None)
 }
 
 /// Load a `snug.options` file and return its contents as a flat list of
@@ -393,6 +442,42 @@ const INPUT_FLAG: &str = "input";
 /// is therefore dropped when the command line carries a positional JAR,
 /// which is what lets an options file carry a default input for `snug`
 /// on its own while `snug some-other.jar` still builds that one instead.
+/// Flags that only mean something on the command line.
+///
+/// `main` consumes `--options` and the `--init-*` family *before* any
+/// options file is opened, so a file's copy can never take effect. Leaving
+/// them in the merged argv just handed clap a flag whose meaning had already
+/// been decided elsewhere — at best a no-op, at worst a silent no-op that
+/// reported success.
+const META_FLAGS: &[&str] = &["options", "init-options", "init-localizations"];
+
+/// Drop meta-flags (and an attached value) from one file layer.
+fn strip_meta_flags(tokens: &[String]) -> Vec<String> {
+    let mut out = Vec::with_capacity(tokens.len());
+    let mut skip_next = false;
+    for token in tokens {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if token == "--" {
+            out.push(token.clone());
+            continue;
+        }
+        if let Some(name) = long_flag_name(token) {
+            if META_FLAGS.contains(&name.as_str()) {
+                // `--options` takes a separate value; the rest do not.
+                if !token.contains('=') && name == "options" {
+                    skip_next = true;
+                }
+                continue;
+            }
+        }
+        out.push(token.clone());
+    }
+    out
+}
+
 pub fn merge(raw_args: &[String], file_layers: Vec<Vec<String>>) -> Vec<String> {
     let spec = FlagSpec::from_cli();
     let cli_args = strip_options_flag(&raw_args[1..]);
@@ -416,6 +501,14 @@ pub fn merge(raw_args: &[String], file_layers: Vec<Vec<String>>) -> Vec<String> 
     let mut layers: Vec<Vec<String>> = vec![Vec::new(); file_layers.len()];
 
     for (idx, tokens) in file_layers.iter().enumerate().rev() {
+        // Meta-flags are meaningless in a file: they are consumed by `main`
+        // *before* any file is read, so a file's copy can never take effect.
+        // Left in place they used to reach clap, which then either loaded
+        // nothing (`--options other.options` in a file) or short-circuited
+        // the whole build (`--init-options` in a file), silently and with a
+        // success message. Dropping them is the honest reading: the file
+        // described a request that had already been decided.
+        let tokens = &strip_meta_flags(tokens);
         let surviving = spec.strip_overridden(tokens, &seen);
         seen.extend(spec.collect_cli_flags(&surviving));
         // Same precedence one tier down: a JAR in a higher-priority file
@@ -849,19 +942,107 @@ mod tests {
     #[test]
     fn find_options_flag_space_form() {
         let a = args(&["snug", "app.jar", "--options", "custom.opts"]);
-        assert_eq!(find_options_flag(&a), Some(PathBuf::from("custom.opts")));
+        assert_eq!(find_options_flag(&a).unwrap(), Some(PathBuf::from("custom.opts")));
     }
 
     #[test]
     fn find_options_flag_equals_form() {
         let a = args(&["snug", "--options=foo.opts", "app.jar"]);
-        assert_eq!(find_options_flag(&a), Some(PathBuf::from("foo.opts")));
+        assert_eq!(find_options_flag(&a).unwrap(), Some(PathBuf::from("foo.opts")));
+    }
+
+    #[test]
+    fn meta_flags_in_a_file_are_dropped_rather_than_reaching_clap() {
+        // `main` consumes --options and the --init-* family before any file is
+        // opened, so a file's copy can never take effect. They used to reach
+        // clap, which then either loaded nothing (--options other.options in a
+        // file) or short-circuited the whole build (--init-options in a
+        // file) -- silently, with a success message either way.
+        let cli = args(&["snug", "app.jar"]);
+        for meta in [
+            vec!["--options", "other.options"],
+            vec!["--options=other.options"],
+            vec!["--init-options"],
+            vec!["--init-localizations"],
+        ] {
+            let mut layer: Vec<String> = meta.iter().map(|s| s.to_string()).collect();
+            layer.push("--name".into());
+            layer.push("Keep".into());
+            let merged = merge(&cli, vec![layer]);
+            let flags: Vec<&str> = merged.iter().map(String::as_str).collect();
+            assert!(
+                !flags.iter().any(|f| f.starts_with("--init-") || f.starts_with("--options")),
+                "`{meta:?}` should not survive into the merged argv: {merged:?}"
+            );
+            assert!(
+                flags.contains(&"--name") && flags.contains(&"Keep"),
+                "the real options must still merge: {merged:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_lone_dash_after_meta_flags_is_not_eaten_as_a_value() {
+        // `--options` consumes exactly one following token; `--init-options`
+        // takes none. Getting that backwards would swallow a real option.
+        let cli = args(&["snug", "app.jar"]);
+        let merged = merge(&cli, vec![vec![
+            "--init-options".into(),
+            "--name".into(),
+            "Keep".into(),
+        ]]);
+        // Order-insensitive: the merge legitimately relocates the positional
+        // ahead of the flags it layers. What matters is that the meta-flag
+        // is gone and that the value which followed it was *not* consumed as
+        // that flag's argument.
+        let flags: Vec<&str> = merged.iter().map(String::as_str).collect();
+        assert!(!flags.contains(&"--init-options"), "{merged:?}");
+        assert!(flags.contains(&"--name"), "{merged:?}");
+        assert!(flags.contains(&"Keep"), "{merged:?}");
+        assert!(flags.contains(&"app.jar"), "{merged:?}");
     }
 
     #[test]
     fn find_options_flag_absent() {
         let a = args(&["snug", "app.jar", "--name", "Foo"]);
-        assert_eq!(find_options_flag(&a), None);
+        assert_eq!(find_options_flag(&a).unwrap(), None);
+    }
+
+    #[test]
+    fn an_options_flag_with_no_value_is_an_error_not_an_absent_flag() {
+        // The bug: both of these used to read as "`--options` was not
+        // supplied", so `snug App.jar --options` silently fell back to the
+        // ambient `snug.options` and built the *wrong* build, exit 0. Clap
+        // never objected because the flag had been stripped before parsing.
+        for argv in [
+            vec!["snug", "app.jar", "--options"],
+            vec!["snug", "--options", "--name", "Foo"],
+            vec!["snug", "--options="],
+        ] {
+            let a = args(&argv);
+            let err = find_options_flag(&a).unwrap_err();
+            assert!(
+                matches!(err, OptionsFileError::MissingValue { flag: "--options" }),
+                "`{argv:?}` should be a MissingValue error, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_bare_dash_is_still_a_legal_filename_for_options() {
+        // Odd, but `-` is a real filename and the rule only rejects things
+        // that look like flags.
+        let a = args(&["snug", "app.jar", "--options", "-"]);
+        assert_eq!(find_options_flag(&a).unwrap(), Some(PathBuf::from("-")));
+    }
+
+    #[test]
+    fn a_well_formed_options_flag_still_resolves() {
+        let a = args(&["snug", "app.jar", "--options", "custom.opts"]);
+        assert_eq!(
+            find_options_flag(&a).unwrap(),
+            Some(PathBuf::from("custom.opts"))
+        );
     }
 
     #[test]
@@ -1212,7 +1393,7 @@ mod tests {
         // Default file also exists, but the explicit flag wins.
         std::fs::write(dir.join(DEFAULT_OPTIONS_FILE), "--name Y\n").unwrap();
         let raw = args(&["snug", "--options", explicit.to_str().unwrap()]);
-        assert_eq!(resolve_all(&raw, &dir, None, "macos"), vec![explicit]);
+        assert_eq!(resolve_all(&raw, &dir, None, "macos").unwrap(), vec![explicit]);
     }
 
     #[test]
@@ -1221,7 +1402,7 @@ mod tests {
         std::fs::write(dir.join(DEFAULT_OPTIONS_FILE), "--name Y\n").unwrap();
         let raw = args(&["snug", "app.jar"]);
         assert_eq!(
-            resolve_all(&raw, &dir, None, "macos"),
+            resolve_all(&raw, &dir, None, "macos").unwrap(),
             vec![dir.join(DEFAULT_OPTIONS_FILE)]
         );
     }
@@ -1230,7 +1411,7 @@ mod tests {
     fn resolve_returns_nothing_when_no_file_present() {
         let dir = tempdir();
         let raw = args(&["snug", "app.jar"]);
-        assert!(resolve_all(&raw, &dir, None, "macos").is_empty());
+        assert!(resolve_all(&raw, &dir, None, "macos").unwrap().is_empty());
     }
 
     #[test]
@@ -1241,7 +1422,7 @@ mod tests {
         std::fs::write(cwd.join(DEFAULT_OPTIONS_FILE), "--name Cwd\n").unwrap();
         let raw = args(&["snug", "app.jar"]);
         assert_eq!(
-            resolve_all(&raw, &cwd, Some(&exe_dir), "macos"),
+            resolve_all(&raw, &cwd, Some(&exe_dir), "macos").unwrap(),
             vec![exe_dir.join(DEFAULT_OPTIONS_FILE)]
         );
     }
@@ -1253,7 +1434,7 @@ mod tests {
         std::fs::write(cwd.join(DEFAULT_OPTIONS_FILE), "--name Cwd\n").unwrap();
         let raw = args(&["snug", "app.jar"]);
         assert_eq!(
-            resolve_all(&raw, &cwd, Some(&exe_dir), "macos"),
+            resolve_all(&raw, &cwd, Some(&exe_dir), "macos").unwrap(),
             vec![cwd.join(DEFAULT_OPTIONS_FILE)]
         );
     }
@@ -1268,7 +1449,7 @@ mod tests {
         std::fs::write(&explicit, "--name Custom\n").unwrap();
         let raw = args(&["snug", "--options", explicit.to_str().unwrap()]);
         assert_eq!(
-            resolve_all(&raw, &cwd, Some(&exe_dir), "macos"),
+            resolve_all(&raw, &cwd, Some(&exe_dir), "macos").unwrap(),
             vec![explicit]
         );
     }
@@ -1283,7 +1464,7 @@ mod tests {
         std::fs::write(cwd.join(DEFAULT_OPTIONS_FILE), "--name Cwd\n").unwrap();
         let raw = args(&["snug", "app.jar"]);
         assert_eq!(
-            resolve_all(&raw, &cwd, Some(&exe_dir), "macos"),
+            resolve_all(&raw, &cwd, Some(&exe_dir), "macos").unwrap(),
             vec![cwd.join(DEFAULT_OPTIONS_FILE)]
         );
     }
@@ -1294,7 +1475,7 @@ mod tests {
         std::fs::write(dir.join(DEFAULT_OPTIONS_FILE), "--name Same\n").unwrap();
         let raw = args(&["snug", "app.jar"]);
         assert_eq!(
-            resolve_all(&raw, &dir, Some(&dir), "macos"),
+            resolve_all(&raw, &dir, Some(&dir), "macos").unwrap(),
             vec![dir.join(DEFAULT_OPTIONS_FILE)]
         );
     }
@@ -1324,7 +1505,7 @@ mod tests {
         std::fs::write(dir.join(DEFAULT_OPTIONS_FILE), "--name Generic\n").unwrap();
         let raw = args(&["snug", "app.jar"]);
         assert_eq!(
-            resolve_all(&raw, &dir, None, "macos"),
+            resolve_all(&raw, &dir, None, "macos").unwrap(),
             vec![dir.join(DEFAULT_OPTIONS_FILE)]
         );
     }
@@ -1338,7 +1519,7 @@ mod tests {
         std::fs::write(dir.join("snug.windows.options"), "--name Windows\n").unwrap();
         let raw = args(&["snug", "app.jar"]);
         assert_eq!(
-            resolve_all(&raw, &dir, None, "macos"),
+            resolve_all(&raw, &dir, None, "macos").unwrap(),
             vec![dir.join(DEFAULT_OPTIONS_FILE)]
         );
     }
@@ -1353,7 +1534,7 @@ mod tests {
         std::fs::write(&generic, "--name Generic\n").unwrap();
         std::fs::write(&os_file, "--name OS\n").unwrap();
         let raw = args(&["snug", "app.jar"]);
-        assert_eq!(resolve_all(&raw, &dir, None, "macos"), vec![generic, os_file]);
+        assert_eq!(resolve_all(&raw, &dir, None, "macos").unwrap(), vec![generic, os_file]);
     }
 
     #[test]
@@ -1367,7 +1548,7 @@ mod tests {
         std::fs::write(&generic, "--name ExeDir\n").unwrap();
         std::fs::write(&os_file, "--name CwdOS\n").unwrap();
         let raw = args(&["snug", "app.jar"]);
-        assert_eq!(resolve_all(&raw, &cwd, Some(&exe_dir), "macos"), vec![generic, os_file]);
+        assert_eq!(resolve_all(&raw, &cwd, Some(&exe_dir), "macos").unwrap(), vec![generic, os_file]);
     }
 
     #[test]
@@ -1378,7 +1559,7 @@ mod tests {
         std::fs::write(cwd.join("snug.macos.options"), "--name CwdOS\n").unwrap();
         let raw = args(&["snug", "app.jar"]);
         assert_eq!(
-            resolve_all(&raw, &cwd, Some(&exe_dir), "macos"),
+            resolve_all(&raw, &cwd, Some(&exe_dir), "macos").unwrap(),
             vec![exe_dir.join("snug.macos.options")]
         );
     }
@@ -1388,7 +1569,7 @@ mod tests {
         let dir = tempdir();
         std::fs::create_dir_all(dir.join("snug.macos.options")).unwrap();
         let raw = args(&["snug", "app.jar"]);
-        assert!(resolve_all(&raw, &dir, None, "macos").is_empty());
+        assert!(resolve_all(&raw, &dir, None, "macos").unwrap().is_empty());
     }
 
     #[test]
@@ -1400,7 +1581,7 @@ mod tests {
         let custom = dir.join("custom.opts");
         std::fs::write(&custom, "--name Custom\n").unwrap();
         let raw = args(&["snug", "--options", custom.to_str().unwrap()]);
-        assert_eq!(resolve_all(&raw, &dir, None, "macos"), vec![custom]);
+        assert_eq!(resolve_all(&raw, &dir, None, "macos").unwrap(), vec![custom]);
     }
 
     // ---- Short/long flag identity -------------------------------------

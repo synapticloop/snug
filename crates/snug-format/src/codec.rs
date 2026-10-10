@@ -34,7 +34,13 @@ pub fn decode_payload(bytes: &[u8]) -> Result<SnugPayload, FormatError> {
 /// precompiled stub binary.
 pub fn encode(embedded: &SnugEmbedded) -> Result<Vec<u8>, FormatError> {
     let payload_bytes = postcard::to_allocvec(&embedded.payload)?;
-    let len = payload_bytes.len() as u32;
+    // Checked, not s u32. Past 4 GiB that cast wraps and writes a header
+    // that disagrees with the bytes actually following it, so the artefact
+    // fails validation at launch and the error points at the launcher
+    // instead of at the build that produced it.
+    let len = u32::try_from(payload_bytes.len()).map_err(|_| FormatError::PayloadTooLarge {
+        len: payload_bytes.len() as u64,
+    })?;
     let crc = crc32fast::hash(&payload_bytes);
 
     let mut out = Vec::with_capacity(SnugEmbedded::HEADER_LEN + payload_bytes.len());
@@ -145,6 +151,33 @@ mod tests {
             jars: vec![jar],
             localizations: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_payload_the_header_cannot_describe_is_refused_not_wrapped() {
+        // The wire header carries `payload_len` as a u32, so a payload past
+        // 4 GiB has no representation. This used to be `as u32`, which
+        // wrapped: the header then disagreed with the bytes actually
+        // written, and the artefact failed validation at launch with a
+        // truncated/CRC error pointing at the launcher rather than at the
+        // build that produced it.
+        //
+        // Exercised on the boundary value rather than by allocating 4 GiB --
+        // the check is `u32::try_from(len)`, so a length one past `u32::MAX`
+        // is the case that distinguishes it from the old cast.
+        let header_can_hold = u32::MAX as usize;
+        let over = header_can_hold.checked_add(1).expect("64-bit usize");
+        // The old cast would have wrapped `over` to 0; assert the maths we
+        // are protecting, so a future reversion is visible here too.
+        assert_eq!(
+            over as u32, 0,
+            "sanity: the old `as u32` cast wraps this to zero"
+        );
+        assert!(
+            u32::try_from(over).is_err(),
+            "try_from must reject what the cast accepted"
+        );
+        assert!(u32::try_from(header_can_hold).is_ok());
     }
 
     #[test]

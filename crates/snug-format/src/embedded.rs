@@ -69,7 +69,16 @@ impl SnugEmbedded {
     /// Wrap a payload with a freshly computed length and CRC32.
     pub fn new(payload: SnugPayload) -> Self {
         let payload_bytes = postcard::to_allocvec(&payload).expect("postcard alloc never fails");
-        let payload_len = payload_bytes.len() as u32;
+        // Checked, not s u32 -- see the note in FormatError::PayloadTooLarge.
+        // This constructor cannot return an error, so an unrepresentable
+        // payload panics here rather than silently wrapping. The fallible
+        // path for real builds is codec::encode, which returns the error.
+        let payload_len = u32::try_from(payload_bytes.len()).unwrap_or_else(|_| {
+            panic!(
+                "encoded payload is {} bytes, which exceeds the 4 GiB a u32 payload_len can describe; use snug --emit-payload to inspect it",
+                payload_bytes.len()
+            )
+        });
         let payload_crc32 = crc32fast::hash(&payload_bytes);
         Self {
             magic: *MAGIC,

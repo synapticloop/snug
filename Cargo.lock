@@ -1269,7 +1269,7 @@ checksum = "ba467056f1b547ed52077911161fc86985becbc60e8e1857c8a144dab0def891"
 
 [[package]]
 name = "snug-cli"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1277,6 +1277,7 @@ dependencies = [
  "image",
  "plist",
  "postcard",
+ "quick-xml",
  "serde",
  "sha2",
  "snug-format",
@@ -1287,7 +1288,7 @@ dependencies = [
 
 [[package]]
 name = "snug-dropper"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "editpe",
  "windows-sys 0.59.0",
@@ -1295,7 +1296,7 @@ dependencies = [
 
 [[package]]
 name = "snug-format"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "crc32fast",
  "postcard",
@@ -1306,7 +1307,7 @@ dependencies = [
 
 [[package]]
 name = "snug-launcher"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "editpe",
  "embed-resource",
@@ -1331,7 +1332,7 @@ dependencies = [
 
 [[package]]
 name = "snug-payload"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "editpe",
  "snug-format",

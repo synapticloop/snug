@@ -19,6 +19,18 @@ pub enum FormatError {
     #[error("payload CRC32 mismatch: declared {declared:#010x}, computed {computed:#010x}")]
     BadCrc32 { declared: u32, computed: u32 },
 
+    /// The encoded payload is larger than the header can describe.
+    ///
+    /// `payload_len` is a u32 in the wire header, so a payload past 4 GiB
+    /// has no representation. Reachable only by a multi-gigabyte fat JAR; it
+    /// used to be reached by `payload_bytes.len() as u32`, which *wrapped*
+    /// and wrote a header disagreeing with the bytes actually present --
+    /// producing an artefact that failed validation at launch with a
+    /// truncated/CRC error pointing at the launcher rather than at the build.
+    #[error(
+        "encoded payload is {len} bytes, which exceeds the 4 GiB a u32 payload_len can describe"
+    )]
+    PayloadTooLarge { len: u64 },
     /// Underlying I/O error reading or writing a snug blob.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),

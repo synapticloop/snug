@@ -15,7 +15,7 @@ members = [
 # the pre-1.0 ceiling). Micro-only: the project sits at 0.9.x, and
 # AGENTS.md says to keep incrementing the patch rather than roll over
 # to 1.0.0.
-version = "0.10.0"
+version = "0.10.1"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
@@ -53,6 +53,10 @@ windows-sys = { version = "0.59", features = [
 ] }
 jni = { version = "0.22", features = ["invocation"] }
 editpe = { version = "0.2", default-features = false, features = ["images"] }
+# Already in the tree transitively (via zip), so this costs nothing extra.
+# Used to reject a malformed `--manifest` at build time rather than letting
+# it surface as an SxS activation failure on the target machine.
+quick-xml = { version = "0.42", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png"] }
 ureq = { version = "2", default-features = false, features = ["native-tls", "gzip"] }
 serde_json = "1"

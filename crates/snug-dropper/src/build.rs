@@ -56,7 +56,42 @@ pub struct Invocation {
 /// Note the precedence consequence: `snug.options` beside `snug.exe`
 /// outranks the CWD copy, so the packaging layout must not ship one
 /// there or it would silently beat every project file.
+/// Is this path already rooted (leading separator) or drive-qualified?
+///
+/// Deliberately not `Path::is_absolute`, which on Windows reports `false`
+/// for a leading-slash path like `/home/u/App.jar`. Those are passed through
+/// untouched so their `cwd` stays exactly their parent.
+fn is_rooted_or_drive_qualified(path: &Path) -> bool {
+    path.is_absolute()
+        || matches!(
+            path.components().next(),
+            Some(std::path::Component::RootDir | std::path::Component::Prefix(_))
+        )
+}
+
 pub fn invocation(snug_exe: &Path, input: &Path) -> Invocation {
+    // Fix the one genuinely broken shape: a *relative* input with a
+    // parent. The child is given `cwd = input.parent()` and the raw
+    // argument, so `build\libs` became cwd `build` with the argument
+    // still `build\libs` — which the child then resolved against that cwd
+    // as `build\build\libs`.
+    //
+    // Only relative inputs are rebased. Anything already rooted or
+    // drive-qualified is passed through untouched, so an absolute input's
+    // `cwd` is still exactly its parent and nothing about the existing
+    // contract changes.
+    let input = if is_rooted_or_drive_qualified(input) {
+        input.to_path_buf()
+    } else if input.parent().is_some_and(|p| !p.as_os_str().is_empty()) {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(input)
+    } else {
+        // Bare filename: no parent, so `cwd` becomes "." below and the
+        // child's relative lookup is already correct.
+        input.to_path_buf()
+    };
+
     let cwd = match input.parent() {
         Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
         // A bare relative filename has no parent. Fall back to the
@@ -74,7 +109,7 @@ pub fn invocation(snug_exe: &Path, input: &Path) -> Invocation {
         OsString::from(COMPANY),
         OsString::from("-o"),
         output.clone().into_os_string(),
-        input.as_os_str().to_owned(),
+        input.into_os_string(),
     ];
 
     Invocation {
@@ -315,6 +350,38 @@ mod tests {
         let inv = invocation(&p(&["C:", "Program Files", "snug.exe"]), &input);
         assert_eq!(inv.args.last().unwrap(), &OsString::from(&input));
         assert_eq!(inv.output, builds.join(format!("{OUTPUT_STEM}.exe")));
+    }
+
+    #[test]
+    fn a_multi_segment_relative_input_does_not_shift_by_one_level() {
+        // The bug: `cwd` is the input's parent while the argument stays
+        // relative, so `build\libs` reached the child as
+        // cwd=`build` + arg=`build\libs` -> `build\build\libs`, which is
+        // the hardest kind of "no such JAR" to read because the input
+        // plainly exists.
+        //
+        // Explorer hands drag-and-drop absolute paths, so this only bites
+        // when driven from a terminal or a shortcut argument.
+        let inv = invocation(Path::new("snug.exe"), Path::new("build/libs"));
+        assert!(
+            inv.args.last().unwrap().to_string_lossy().contains("build"),
+            "the relative input should be resolved against the process directory: {:?}",
+            inv.args.last().unwrap()
+        );
+        assert!(
+            inv.cwd.is_absolute() || inv.cwd == Path::new("."),
+            "cwd should be the resolved input's parent, got {:?}",
+            inv.cwd
+        );
+        // The decisive property: the argument resolved against `cwd` must
+        // be the original input, not the input joined onto cwd a second time.
+        let arg = std::path::Path::new(inv.args.last().unwrap());
+        let resolved = inv.cwd.join(arg);
+        assert!(
+            resolved.to_string_lossy().replace('\\', "/").ends_with("build/libs"),
+            "cwd + argument must reproduce the original relative path, got {:?}",
+            resolved
+        );
     }
 
     #[test]

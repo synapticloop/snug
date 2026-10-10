@@ -69,8 +69,13 @@ fn run() -> Result<()> {
     // silent.
     let cwd = std::env::current_dir().context("reading current working directory")?;
     let exe_dir = options_file::current_exe_dir();
-    let options_paths =
-        options_file::resolve_all(&raw_args, &cwd, exe_dir.as_deref(), std::env::consts::OS);
+    let options_paths = options_file::resolve_all(
+        &raw_args,
+        &cwd,
+        exe_dir.as_deref(),
+        std::env::consts::OS,
+    )
+    .context("resolving which options files apply")?;
     let mut file_layers = Vec::with_capacity(options_paths.len());
     for p in &options_paths {
         file_layers.push(

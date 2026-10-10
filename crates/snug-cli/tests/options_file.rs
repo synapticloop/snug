@@ -299,7 +299,7 @@ fn options_file_load_skips_comments() {
 fn resolve_returns_nothing_when_no_default_and_no_explicit() {
     let tmp = tempdir();
     let args: Vec<String> = ["snug", "app.jar"].iter().map(|s| s.to_string()).collect();
-    assert!(options_file::resolve_all(&args, &tmp, None, "macos").is_empty());
+    assert!(options_file::resolve_all(&args, &tmp, None, "macos").unwrap().is_empty());
 }
 
 #[test]
@@ -308,7 +308,7 @@ fn resolve_finds_default_in_cwd() {
     fs::write(tmp.join("snug.options"), "--name X\n").unwrap();
     let args: Vec<String> = ["snug", "app.jar"].iter().map(|s| s.to_string()).collect();
     assert_eq!(
-        options_file::resolve_all(&args, &tmp, None, "macos"),
+        options_file::resolve_all(&args, &tmp, None, "macos").unwrap(),
         vec![tmp.join("snug.options")]
     );
 }
@@ -321,7 +321,7 @@ fn resolve_prefers_exe_dir_over_cwd() {
     fs::write(cwd.join("snug.options"), "--name Cwd\n").unwrap();
     let args: Vec<String> = ["snug", "app.jar"].iter().map(|s| s.to_string()).collect();
     assert_eq!(
-        options_file::resolve_all(&args, &cwd, Some(&exe_dir), "macos"),
+        options_file::resolve_all(&args, &cwd, Some(exe_dir.as_path()), "macos").unwrap(),
         vec![exe_dir.join("snug.options")]
     );
 }
@@ -334,7 +334,7 @@ fn resolve_returns_both_files_lowest_priority_first() {
     fs::write(tmp.join("snug.macos.options"), "--name Y\n").unwrap();
     let args: Vec<String> = ["snug", "app.jar"].iter().map(|s| s.to_string()).collect();
     assert_eq!(
-        options_file::resolve_all(&args, &tmp, None, "macos"),
+        options_file::resolve_all(&args, &tmp, None, "macos").unwrap(),
         vec![tmp.join("snug.options"), tmp.join("snug.macos.options")]
     );
 }
@@ -718,7 +718,7 @@ fn effective_repo_output(os: &str) -> Result<Option<PathBuf>, clap::Error> {
     let root = repo_root();
     let raw: Vec<String> = ["snug", "demo.jar"].iter().map(|s| s.to_string()).collect();
 
-    let paths = options_file::resolve_all(&raw, &root, None, os);
+    let paths = options_file::resolve_all(&raw, &root, None, os).unwrap();
     let mut layers = Vec::with_capacity(paths.len());
     for p in &paths {
         layers.push(options_file::load(p).expect("repo options files must parse"));

@@ -97,22 +97,44 @@ where
 
 /// Parse a `Main-Class:` line out of a manifest body.
 ///
-/// The manifest format is line-based, with continuation lines indented by
-/// a single space; we only need single-line `Main-Class:` and ignore
-/// continuations (none are legal for `Main-Class` anyway).
+/// Manifest values wrap at 72 bytes, with continuation lines starting with a
+/// single space — and a long package name can push `Main-Class` past that.
+/// A conforming writer then emits
+///
+/// ```text
+/// Main-Class: com.example.some.rather.long.package.name.and.Cla
+///  ss
+/// ```
+///
+/// which this used to read as `com.example...Cla`, silently producing a
+/// launcher that cannot start. Continuation lines are joined here.
+///
+/// Contrary to what the previous comment claimed, continuations *are* legal
+/// for `Main-Class` — the 72-byte limit applies to every line in the file.
 pub fn parse_main_class(manifest: &str) -> Option<String> {
-    for line in manifest.lines() {
+    let mut lines = manifest.lines();
+    while let Some(line) = lines.next() {
         // Manifest headers are ASCII; non-UTF-8 is impossible by spec.
         let Some((key, value)) = line.split_once(':') else {
             continue;
         };
-        if key.trim() == "Main-Class" {
-            let v = value.trim();
-            if v.is_empty() {
-                return None;
-            }
-            return Some(v.to_owned());
+        if key.trim() != "Main-Class" {
+            continue;
         }
+        let mut v = value.trim_start().to_owned();
+        // Join continuation lines: each begins with a single space and
+        // carries the rest of the value.
+        for next in lines.by_ref() {
+            let Some(continuation) = next.strip_prefix(' ') else {
+                break;
+            };
+            v.push_str(continuation);
+        }
+        let v = v.trim();
+        if v.is_empty() {
+            return None;
+        }
+        return Some(v.to_owned());
     }
     None
 }
@@ -120,6 +142,44 @@ pub fn parse_main_class(manifest: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn joins_a_wrapped_main_class_continuation() {
+        // Manifest values wrap at 72 bytes. A long package name pushes
+        // `Main-Class` over the limit and a conforming writer splits it.
+        // This used to read only the first physical line, producing a
+        // silently wrong class name and a launcher that cannot start.
+        let mf = "Manifest-Version: 1.0\nMain-Class: com.example.a.rather.long.package.\n com.example.Fully.Qualified.Main\n";
+        assert_eq!(
+            parse_main_class(mf).as_deref(),
+            Some("com.example.a.rather.long.package.com.example.Fully.Qualified.Main"),
+            "the continuation carries the rest of the value"
+        );
+    }
+
+    #[test]
+    fn a_three_line_continuation_is_joined() {
+        let mf = "Main-Class: com.example.\n Very.\n Long.Main\n";
+        assert_eq!(parse_main_class(mf).as_deref(), Some("com.example.Very.Long.Main"));
+    }
+
+    #[test]
+    fn a_continuation_does_not_swallow_the_next_header() {
+        // The join must stop at the first line that is not a continuation,
+        // or every later header would be appended to the class name.
+        let mf = "Main-Class: com.example.Main\n continued\nBuilt-By: someone\n";
+        assert_eq!(
+            parse_main_class(mf).as_deref(),
+            Some("com.example.Maincontinued"),
+            "the join stops at the first non-continuation line"
+        );
+    }
+
+    #[test]
+    fn an_ordinary_single_line_is_unaffected() {
+        let mf = "Manifest-Version: 1.0\nBuilt-By: julian\nMain-Class: a.b.C\n";
+        assert_eq!(parse_main_class(mf).as_deref(), Some("a.b.C"));
+    }
 
     #[test]
     fn parses_simple_main_class() {

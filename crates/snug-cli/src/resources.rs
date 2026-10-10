@@ -43,6 +43,54 @@ pub struct ResourcePlan {
     pub manifest: Option<PathBuf>,
 }
 
+/// Parse `xml` far enough to know it is well-formed.
+///
+/// The point is to catch what a hand-edited `.manifest` actually gets
+/// wrong — an unclosed tag, a mismatched end tag, a stray `<`, an
+/// unterminated attribute — so the error lands on the user's own build
+/// rather than as an activation failure on someone else's machine. It is a
+/// well-formedness check, not a validator: it does not check that the
+/// document is a *correct* application manifest, only that it parses.
+fn validate_xml_well_formed(xml: &str) -> Result<()> {
+    use quick_xml::events::Event;
+
+    // An empty or whitespace-only file reaches EOF immediately and looks
+    // "well-formed" to the reader -- but an empty RT_MANIFEST fails SxS
+    // activation on the target machine exactly as a typo would. Almost
+    // always a file that got truncated or written by the wrong tool.
+    if xml.trim().is_empty() {
+        anyhow::bail!("not well-formed XML: the manifest is empty");
+    }
+
+    let mut reader = quick_xml::Reader::from_str(xml);
+    // Off by default, and it catches a mismatched end tag
+    // (`<assembly></assembl>`).
+    reader.config_mut().check_end_names = true;
+
+    // Tracked here rather than left to the reader: quick-xml reports a
+    // mismatched end tag but reaches EOF happily on a document that simply
+    // *stops* mid-element (`<assembly><trustInfo>`). An unclosed root is the
+    // single most likely hand-editing mistake, so it gets its own check
+    // rather than an assumption about library behaviour.
+    let mut depth: usize = 0;
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(_)) => depth += 1,
+            Ok(Event::End(_)) => depth = depth.saturating_sub(1),
+            Ok(Event::Eof) => {
+                if depth != 0 {
+                    anyhow::bail!("not well-formed XML: {depth} element(s) left unclosed");
+                }
+                return Ok(());
+            }
+            Ok(_) => {}
+            Err(e) => anyhow::bail!("not well-formed XML: {e}"),
+        }
+        buf.clear();
+    }
+}
+
 impl ResourcePlan {
     /// Build a `ResourcePlan` from a parsed CLI invocation.
     pub fn from_cli(cli: &Cli) -> Self {
@@ -94,6 +142,17 @@ impl ResourcePlan {
             let manifest_xml = std::fs::read_to_string(manifest_path).with_context(|| {
                 format!("reading manifest XML at {}", manifest_path.display())
             })?;
+            // Reject a malformed manifest *here*, at build time.
+            //
+            // `editpe`'s `set_manifest` validates only the resource-table
+            // structure and then stores the string as opaque bytes, so an
+            // unclosed tag, a stray `<`, or a mismatched close tag produced a
+            // perfectly "successful" build. The defect only surfaced on the
+            // target machine as an SxS activation failure -- the app simply
+            // would not start, with nothing in the build log to connect it to
+            // a typo in a file the user wrote by hand.
+            validate_xml_well_formed(&manifest_xml)
+                .with_context(|| format!("parsing manifest XML at {}", manifest_path.display()))?;
             resources
                 .set_manifest(&manifest_xml)
                 .with_context(|| {
@@ -454,6 +513,71 @@ mod tests {
         let bad = format!("{}.0", "9".repeat(400));
         let err = validate_app_version(&bad).unwrap_err();
         assert!(err.contains("out of range"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn a_well_formed_manifest_passes() {
+        assert!(
+            validate_xml_well_formed(concat!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+                "\n",
+                r#"<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">"#,
+                "\n",
+                r#"  <assemblyIdentity version="1.0.0.0" processorArchitecture="*" name="Demo" type="win32"/>"#,
+                "\n",
+                r#"  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">"#,
+                "\n",
+                r#"    <security><requestedPrivileges>"#,
+                "\n",
+                r#"      <requestedExecutionLevel level="asInvoker" uiAccess="false"/>"#,
+                "\n",
+                r#"    </requestedPrivileges></security>"#,
+                "\n",
+                r#"  </trustInfo>"#,
+                "\n",
+                "</assembly>",
+            ))
+            .is_ok(),
+            "the manifest shape snug documents must still validate"
+        );
+    }
+
+    #[test]
+    fn a_malformed_manifest_is_rejected_at_build_time() {
+        // The whole point: `editpe` stores the string opaquely, so each of
+        // these used to build "successfully" and then fail on the target
+        // machine as an SxS activation error, with nothing in the build log
+        // to connect it to a typo in a hand-written file.
+        for bad in [
+            r#"<assembly><trustInfo>"#,           // unclosed
+            r#"<assembly></assembl>"#,            // mismatched end tag
+            r#"<assembly><a b="c/></assembly>"#, // unterminated attribute
+            r#"<assembly><a></b></assembly>"#,   // crossed nesting
+            "",                                    // not a document
+        ] {
+            assert!(
+                validate_xml_well_formed(bad).is_err(),
+                "`{bad}` should be rejected at build time"
+            );
+        }
+
+        // Known limit, stated rather than hidden: a raw `<` *inside* an
+        // attribute value (`b="c < d"`) is a spec violation that quick-xml
+        // accepts, and this check does not catch it. Catching it would mean
+        // re-implementing attribute scanning to be stricter than the parser
+        // that will read the document. The mistakes people actually make
+        // when hand-editing a manifest are the ones above.
+    }
+
+    #[test]
+    fn the_rejection_says_what_was_wrong() {
+        let msg = validate_xml_well_formed("<assembly></assembl>")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            msg.contains("not well-formed XML"),
+            "the message should name the problem, got: {msg}"
+        );
     }
 
     #[test]
