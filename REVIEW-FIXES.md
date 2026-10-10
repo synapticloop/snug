@@ -26,6 +26,8 @@ Nothing in this review has been changed except items explicitly marked `DONE`.
 | ✅ `F-02` | `build-windows.cmd` step 8 — builds both dropper targets now |
 | ✅ `F-03` | Stub-hash check — normalised via `scripts/pe-stable-hash.ps1`, verified reproducible |
 | ✅ `F-04` | Dropper dialogs — caption/body swap fixed (F-04) and the overwrite prompt reworded |
+| ✅ `F-05` | Cancel during verify/extract — now honoured, and no longer overruled by the worker |
+| ✅ `F-29` | Concurrent JDK installs — staging + atomic publish + cross-process lock |
 
 ### Next action required before CI is green
 
@@ -40,6 +42,26 @@ git add bin\launcher-stub-windows-x86_64.exe
 ---
 
 ## P0 — data loss, silent failure, CI red
+
+> IDs are stable, not positional: a finding added later keeps its number even
+> if it lands in a different group. F-29 was found while fixing F-05.
+
+### F-29 — Two snug apps downloading the same JDK corrupt each other's install
+- **Status:** `DONE`
+- **Found:** 2026-10-10, while walking F-05. Not in the original review round.
+- **Why it matters:** `jdk_install_root()` is `%LOCALAPPDATA%\snug\jdk` — **machine-wide**, not per-app, because a JDK must outlive the per-app cache sweep (`platform/macos.rs:832-834`). Every path under it was derived from `min_java_major` alone, with no PID, nonce or lock. So two snug apps — or one app launched twice, which is what happens when someone impatiently re-clicks during a 200 MB download — collided on `<root>/<major>.zip.tmp` and `<root>/<major>/`.
+- **Trigger:** no system Java + `--download-jdk` auto/force on two processes, both missing the cache.
+- **Impact:** three distinct failures. (a) `run_one_install_attempt` opened with `remove_file(tmp_zip)` + `remove_dir_all(install_dir)`, so the second process **recursively deleted the tree the first was extracting into**, and both then wrote into it concurrently — either could report `Success` over a JDK missing most of its files. (b) The shared temp file interleaved, so SHA-256 failed and the user was told "SHA-256 mismatch" three times and sent to debug a network that was fine. (c) A half-extracted tree left at the canonical path was adopted by `find_cached_jdk` as a cache hit on the next launch.
+- **Fixed:** three layers, because they solve different problems.
+  1. **Staging + atomic publish.** The worker extracts into `<root>/.<major>.staging-<pid>/`; `publish()` validates via `find_java_home`, then renames staging onto `<root>/<major>` and rebases JAVA_HOME onto the published path. The canonical path now exists only if a rename put it there.
+  2. **`find_cached_jdk` skips dot-prefixed entries**, so a mid-extraction staging tree can never be adopted as a cache hit.
+  3. **Cross-process lock.** `InstallLock` on `<root>/<major>.lock`, acquired in `maybe_install` **before** the cache check — which is what makes the wait useful: if the process we waited for finished, the re-check becomes a cache hit and we never download at all. On Windows this is `LockFileEx`, which the kernel releases on crash, so there is no stale lock; other platforms degrade to `create_new` with an age-based takeover, documented as weaker.
+  - `publish()` may only remove a pre-existing install because the caller holds that lock; the two layers depend on each other.
+- **⚠️ Two bugs found in my own fix, both worth recording:**
+  - `LockFileEx` **blocks** unless `LOCKFILE_FAIL_IMMEDIATELY` is passed. Without it the call never returns while a peer holds the lock, so the timeout below it was dead code and the launcher would hang forever — the exact failure mode this whole flow exists to avoid. Caught because the test binary hung, not by reading the code.
+  - `LockFileEx` takes an `*mut OVERLAPPED`, which windows-sys gates behind the `Win32_System_IO` feature. That feature is now enabled in the workspace `Cargo.toml`.
+- **Tests:** 4 new. `the_install_lock_actually_excludes` proves exclusion (a second short-wait acquire must fail, then succeed after `drop`), which is why `acquire_within` exists separately from `acquire`. Plus staging-hidden-from-cache-scan, publish-rebases-JAVA_HOME, publish-replaces-existing.
+- **File:** `crates/snug-launcher/src/jdk_install.rs` (`InstallLock`, `staging_dir`, `publish`, `find_cached_jdk`), `crates/snug-launcher/src/platform/windows.rs:510-515`, `Cargo.toml`
 
 ### F-01 — `-o` pointing at the input JAR silently destroys it
 - **Status:** `DONE`
@@ -82,8 +104,15 @@ git add bin\launcher-stub-windows-x86_64.exe
 - **Fix:** Swap the two arguments at the three call sites (or rename the params to `caption, text`).
 
 ### F-05 — Cancelling during verify/extract launches the app anyway
-- **Status:** `TODO`
-- **File:** `crates/snug-launcher/src/jdk_install.rs:1041`, `:1120`; UI side `crates/snug-launcher/src/appkit.rs:1005-1008`
+- **Status:** `DONE`
+- **Fixed:** 2026-10-10. Four changes, because the defect was wider than first described:
+  1. `hash_file_sha256` and `extract_jdk_archive`/`extract_jdk_zip` now take `&AtomicBool` and consult it per 64 KB chunk / per zip entry, so verify and extract stop instead of running on after the window closed.
+  2. New `claim_outcome(&shared, code)` uses `compare_exchange(0, code, …)` instead of `store`, so the worker *declares* a terminal outcome and never overrules one the UI already settled. `:1224`'s unconditional `done.store(1, …)` was the actual reported-outcome bug.
+  3. New `Phase<T>` / `settle()` fold each phase result, so a cancellation landing *while a phase was failing* also reports `done == 3` rather than `2`.
+  4. Tracing this surfaced a fourth manifestation: `download_to_disk` already signalled a cancel as `Err(JdkError::Download("cancelled by user"))`, so the worker's `Err` arm stored **2 (error)** — clicking Cancel mid-download raised "Download failed — Try again?", contradicting the doc at `jdk_install.rs:1231`. Fixed by the same `settle()` path.
+- **Not a `JdkError` variant on purpose:** every `JdkError` is wired to a localisation key in `Display`, so a new variant would mean inventing user-facing text for something that is not a failure.
+- **Tests:** 4 new. `a_worker_cannot_overrule_a_cancel_it_races_against` is the regression test for the headline bug; `a_cancel_during_a_failing_phase_reports_cancelled_not_failed` and `a_genuine_failure_still_reports_failed` are the two halves of the preference; `hashing_stops_promptly_when_cancelled` covers the per-chunk latch.
+- **File:** `crates/snug-launcher/src/jdk_install.rs:1041`, `:1120`, plus the phase functions
 - **Trigger:** Download finishes, user clicks Cancel during phase 1 (SHA-256) or phase 2 (extract) — both live for tens of seconds on a ~190 MB archive.
 - **Impact:** `shared.cancel` is checked only inside `download_to_disk`'s read loop and once at `:1041`. Phases 1-2 never check it, then `:1120` runs `shared.done.store(1, …)` **overwriting** the `done = 3` the UI wrote. `run_one_install_attempt` reads `done == 1` → `Success(home)` (`:1402`). Three comments assert the opposite of what the code does (`jdk_install.rs:358-367`, `:1394-1397`, `progress_window.rs:968-969`). Cross-platform.
 - **Fix:** Check `cancel` between phases 1 and 2, and make the terminal `done.store(1)` respect it.
