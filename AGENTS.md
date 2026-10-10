@@ -623,6 +623,11 @@ by accident.
   checksum and RSDS record are normalised (see `scripts/pe-stable-hash.ps1`).
   So the stub is a genuine function of the version, and refreshing it is a
   consequence of a release, not just hygiene.
+- **Run `scripts\refresh-stub.ps1`, not the whole pipeline.** Steps 1-2 of
+  `scripts\build-windows.cmd` do the same thing; the rest of that script
+  builds and stages a release, which is not needed between ordinary commits.
+  The script takes `-CheckOnly`, which compares without building and exits 1
+  if the committed stub is stale — usable as a pre-commit gate.
 - **Default increment is the micro (patch) number:**
   `0.2.0` → `0.2.1` → `0.2.2`. Use this for fixes, copy changes,
   refactors, and anything that doesn't alter the CLI surface or the
