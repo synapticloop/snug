@@ -32,6 +32,8 @@ Nothing in this review has been changed except items explicitly marked `DONE`.
 | ✅ `F-07` | A too-old JDK no longer aborts the scan (ported from macOS, plus its diagnostic kept) |
 | ✅ `F-08` | `try_common` expanded to the JDKs inside each vendor directory |
 | ✅ `F-09` | A candidate without `jvm.dll` is rejected before it reaches the loader |
+| ✅ `F-10` | Cache extraction is atomic, and a truncated `app.jar` self-repairs |
+| ✅ `F-11` | The built EXE is staged and renamed, so a failed rebuild keeps the old one |
 | ✅ `F-29` | Concurrent JDK installs — staging + atomic publish + cross-process lock |
 
 ### Next action required before CI is green
@@ -166,15 +168,25 @@ git add bin\launcher-stub-windows-x86_64.exe
 - **Fix:** Add the `locate_jvm_dll` existence test to the candidate check.
 
 ### F-10 — Cache extraction isn't atomic, and a truncated JAR is never reclaimed
-- **Status:** `TODO`
-- **File:** `crates/snug-launcher/src/platform/windows.rs:616-625`, `crates/snug-launcher/src/cache.rs:261-269`, `:293-297`
+- **Status:** `DONE`
+- **Fixed:** 2026-10-10. New `cache::ensure_cached_atomic` (the extraction is platform-neutral, so it lives in the shared module rather than being duplicated per platform). Two properties: it stages through `temp_sibling` and renames, and it *verifies* by length rather than trusting `exists()`. `platform/windows.rs::ensure_cached` now delegates to it.
+- **Impact of the fix:** a truncated `app.jar` is no longer permanent. The length check turns it from "app stays broken with a `ZipException` until the user deletes the cache by hand" into a repair the next launch performs itself — which matters because the current build is never evicted by `sweep`, so it could not be cleaned up from outside.
+- **Concurrency:** the staging name carries the pid so two launches of the same app never stage through one file. `rename` is atomic, so both succeed and the later one wins with identical content — the race that F-29 fixed at the JDK-install layer, now also closed here.
+- **Tests:** 4 new, mutation-verified. Reverting the length check to `exists()` fails `a_truncated_cached_jar_is_repaired` *and* `a_failed_write_does_not_leave_its_staging_file`, and nothing else.
+- **Known coverage limit:** the tests pin truncation-repair and no-leftover-staging, but **not** atomicity under a genuine mid-write interruption — that needs fault injection, which this codebase does not have. Stating it rather than implying the property is fully covered.
+- **⚠️ `platform/macos.rs` still carries a byte-identical copy of the old truncate-in-place version.** Left untouched per the standing "ignore macOS paths" instruction; the call site should adopt the shared helper in one line whenever macOS is in scope. Its doc comment says so.
+- **File:** `crates/snug-launcher/src/cache.rs` (`ensure_cached_atomic`, `temp_sibling`), `crates/snug-launcher/src/platform/windows.rs:620-631`
 - **Trigger:** An interrupted write, a full disk, or two concurrent launches of the same build (double-click, or an app that relaunches itself).
 - **Impact:** `ensure_cached` is `exists()` → `fs::write()` (O_TRUNC). A short `app.jar` passes the only check forever — the sweep reclaims directories with *no* `app.jar` (`:261-269`), and the current build is never evicted (`:293-297`). The app stays broken with `ZipException` / "no Main-Class found" until the user deletes the cache by hand.
 - **Fix:** Write to a sibling temp file and `fs::rename` into place; treat an existing entry whose length ≠ `bytes.len()` as absent.
 
 ### F-11 — The Windows EXE is written non-atomically over the previous one
-- **Status:** `TODO`
-- **File:** `crates/snug-cli/src/build.rs:551-553` → `vendor/editpe/src/image.rs:276-278`
+- **Status:** `DONE`
+- **Fixed:** 2026-10-10. `build_exe` stages through `staged_output_path` and renames into place. The staging name is a *suffix* (`App.exe.tmp-<pid>`), not an extension replacement, so an editor or sync client watching the output directory sees an unmistakably unfinished file rather than a competing `App.exe.tmp`. Both the write and the rename remove the staging file on failure.
+- **No vendored change:** `editpe` is untouched — `write_file` is still `std::fs::write`, the caller just gives it a different path. `vendor/editpe` was the wrong place to solve this.
+- **Tests:** 3 new. `a_failed_rebuild_leaves_the_previous_build_intact` **drives `build_exe` for real**, blocking the staging path with a directory so the write fails *after* the payload is assembled; mutation-verified — reverting to a direct write fails it and nothing else.
+- **⚠️ Worth recording that my first attempt at this test was worthless.** It asserted properties of `staged_output_path` and the filesystem but never called `build_exe`, so the mutation run passed 153/153 and proved nothing. The mutation check is what exposed it. A test that only exercises the helper is not a regression test for the call site.
+- **File:** `crates/snug-cli/src/build.rs:556-565` (`staged_output_path`), `:630-648` (the write)
 - **Trigger:** Disk full, an AV/file-indexer holding a handle, or Ctrl-C during the write.
 - **Impact:** `Image::write_file` is `std::fs::write` (`File::create` truncate + `write_all`), so a failed build replaces a good `App.exe` with a truncated one that won't load. `create_dir_all` at `:525-530` makes it worse for nested outputs: the parent survives, the file doesn't. *(Distinct from F-10, which is cache extraction in the launcher — this is the builder's own output.)*
 - **Fix:** Write to `<output>.tmp` in the same directory, then `fs::rename` over the target.

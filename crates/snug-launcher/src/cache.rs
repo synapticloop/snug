@@ -105,6 +105,62 @@ pub fn cached_jar_path(root: &Path, sha256: &[u8; 32]) -> PathBuf {
     root.join(hex).join(CACHED_JAR_NAME)
 }
 
+/// A sibling path to stage a write through, unique to this process.
+///
+/// Never the final name: a reader must see either the old file or the new
+/// one, never a half-written mixture.
+pub fn temp_sibling(path: &Path) -> PathBuf {
+    let mut name = path
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_default();
+    name.push(format!(".tmp-{}", std::process::id()));
+    path.with_file_name(name)
+}
+
+/// Write `bytes` to `dest`, atomically and only if needed.
+///
+/// Two properties, both learned from a cache that would not heal:
+///
+/// * **Atomic.** The previous shape was `dest.exists()` then `fs::write`,
+///   which truncates in place. An interrupted write -- a full disk, a kill,
+///   or simply two launches of the same app racing -- left a short
+///   `app.jar`, and every later run *accepted* it, because `exists()` was
+///   the only test. The app then failed with a `ZipException` (or "no
+///   Main-Class found") until the user deleted the cache by hand.
+///   Staging into a sibling and renaming means a reader sees either no
+///   file or a complete one.
+///
+/// * **Verified.** `exists()` said nothing about *which* file. Comparing
+///   the length turns a truncated entry from permanent breakage into a
+///   repair the next launch performs on its own.
+///
+/// The temp name carries the pid so two launches never stage through the
+/// same file; `rename` is atomic, so both succeed and the later one wins
+/// with identical content. A temp left by a hard kill is not reclaimed
+/// here -- `sweep` owns the cache's retention policy, and this is a single
+/// bounded file rather than an entry.
+pub fn ensure_cached_atomic(dest: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let already_correct = std::fs::metadata(dest)
+        .map(|m| m.len() == bytes.len() as u64)
+        .unwrap_or(false);
+    if already_correct {
+        return Ok(());
+    }
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = temp_sibling(dest);
+    match std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, dest)) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            // Don't leave our own staging file behind on a failed write.
+            let _ = std::fs::remove_file(&tmp);
+            Err(e)
+        }
+    }
+}
+
 /// Compute the path to the per-launch log file. Sits next to the
 /// cached JAR so a user reviewing an EXE's behaviour has one place
 /// to look.
@@ -782,6 +838,100 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    // --- Atomic extraction (F-10) ----------------------------------------
+
+    #[test]
+    fn a_correct_cached_jar_is_left_alone() {
+        let dir = tempdir();
+        let dest = dir.join(CACHED_JAR_NAME);
+        let bytes = b"PK\x03\x04 a perfectly good jar".to_vec();
+        ensure_cached_atomic(&dest, &bytes).unwrap();
+        let first = std::fs::read(&dest).unwrap();
+
+        // Second call must be a no-op, not a rewrite.
+        ensure_cached_atomic(&dest, &bytes).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), first);
+        assert!(
+            staging_files(&dir).is_empty(),
+            "nothing is staged once the write has landed: {:?}",
+            staging_files(&dir)
+        );
+    }
+
+    #[test]
+    fn a_truncated_cached_jar_is_repaired() {
+        // The bug this exists for. An interrupted `fs::write` left a short
+        // `app.jar`, `exists()` returned true, and every later launch
+        // accepted it -- so the app stayed broken with a ZipException until
+        // the user deleted the cache by hand. A length check turns that into
+        // a repair the next launch performs itself.
+        let dir = tempdir();
+        let dest = dir.join(CACHED_JAR_NAME);
+        let bytes = b"PK\x03\x04 the whole fat jar, all of it".to_vec();
+
+        // Exactly the state an interrupted write leaves behind.
+        std::fs::write(&dest, &bytes[..10]).unwrap();
+        assert_eq!(std::fs::metadata(&dest).unwrap().len(), 10);
+
+        ensure_cached_atomic(&dest, &bytes).unwrap();
+        assert_eq!(
+            std::fs::read(&dest).unwrap(),
+            bytes,
+            "the truncated entry must be rewritten in full"
+        );
+    }
+
+    #[test]
+    fn extraction_never_leaves_a_partial_file_at_the_canonical_path() {
+        // The atomicity property, stated as a test: whatever happens to the
+        // write, a reader looking at the canonical path sees a complete file
+        // or nothing -- never a mixture.
+        let dir = tempdir();
+        let dest = dir.join(CACHED_JAR_NAME);
+        let bytes = b"x".repeat(64 * 1024);
+
+        ensure_cached_atomic(&dest, &bytes).unwrap();
+        let seen = std::fs::read(&dest).unwrap();
+        assert_eq!(seen.len(), bytes.len());
+        assert_eq!(seen, bytes);
+
+        // And the staging file is not left behind on the happy path.
+        assert!(
+            staging_files(&dir).is_empty(),
+            "staging files must not survive a successful write: {:?}",
+            staging_files(&dir)
+        );
+    }
+
+    #[test]
+    fn a_failed_write_does_not_leave_its_staging_file() {
+        // A staging file left behind is dead weight the sweep has no policy
+        // for, so the helper cleans up its own.
+        let dir = tempdir();
+        // A directory where the file should go makes the rename fail.
+        let dest = dir.join("blocked");
+        std::fs::create_dir_all(&dest).unwrap();
+        assert!(ensure_cached_atomic(&dest, b"payload").is_err());
+        assert!(
+            staging_files(&dir).is_empty(),
+            "staging leaked: {:?}",
+            staging_files(&dir)
+        );
+    }
+
+    /// Staging files this helper leaves in `dir`, if any.
+    fn staging_files(dir: &Path) -> Vec<String> {
+        std::fs::read_dir(dir)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .filter(|n| n.contains(".tmp-"))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Create a cache entry whose `app.jar` is `size` bytes and was last

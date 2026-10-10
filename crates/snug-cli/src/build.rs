@@ -549,6 +549,21 @@ pub fn wants_app_bundle(cli: &Cli) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case("app"))
 }
 
+/// Where to stage the EXE before renaming it onto the real output path.
+///
+/// Suffix rather than extension replacement, so `App.exe` becomes
+/// `App.exe.tmp-<pid>` and keeps its own extension: anything watching the
+/// output directory (an editor, a sync client, Explorer) recognises the
+/// staging file as unfinished instead of as a competing build.
+fn staged_output_path(output: &std::path::Path) -> std::path::PathBuf {
+    let mut name = output
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_default();
+    name.push(format!(".tmp-{}", std::process::id()));
+    output.with_file_name(name)
+}
+
 /// Build the final Windows `.exe`.
 ///
 /// v2 (slice 4): the encoded payload is embedded as an `RT_RCDATA`
@@ -592,9 +607,25 @@ pub fn build_exe(cli: &Cli, payload: &SnugPayload) -> Result<PathBuf> {
     image
         .set_resource_directory(resources)
         .context("installing resource directory onto stub image")?;
-    image
-        .write_file(&output)
-        .with_context(|| format!("writing EXE to {}", output.display()))?;
+    // Write through a sibling temp and rename into place.
+    //
+    // `Image::write_file` is `std::fs::write`, i.e. `File::create` + `write_all`
+    // -- truncate in place. So a disk that fills, an AV scanner holding a
+    // handle, or a Ctrl-C at the wrong moment left a *truncated* `App.exe`
+    // where a working one had been a moment earlier, and the build reported
+    // the error without the user ever getting their previous artefact back.
+    // Everything up to here is in memory, so there is no other reason this
+    // has to touch the real output path.
+    let staged = staged_output_path(&output);
+    if let Err(e) = image.write_file(&staged) {
+        let _ = std::fs::remove_file(&staged);
+        return Err(e).with_context(|| format!("writing EXE to {}", output.display()));
+    }
+    if let Err(e) = std::fs::rename(&staged, &output) {
+        let _ = std::fs::remove_file(&staged);
+        return Err(anyhow::Error::new(e))
+            .with_context(|| format!("installing the EXE at {}", output.display()));
+    }
 
     let final_size = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
     eprintln!(
@@ -785,6 +816,85 @@ mod tests {
         assert!(guard_output_collision(&implicit).is_ok(), "default output refused");
     }
 
+
+    #[test]
+    fn the_staging_path_sits_beside_the_output_and_keeps_its_extension() {
+        // Suffix, not extension replacement: an editor or sync client
+        // watching the directory should recognise `App.exe.tmp-1234` as
+        // unfinished rather than as a competing `App.exe.tmp`.
+        assert_eq!(
+            staged_output_path(std::path::Path::new("C:/out/App.exe")),
+            std::path::Path::new(&format!("C:/out/App.exe.tmp-{}", std::process::id()))
+        );
+        // No extension at all is still handled.
+        let bare = staged_output_path(std::path::Path::new("App"));
+        assert!(bare.to_string_lossy().starts_with("App.tmp-"));
+        // A dotted release name keeps all of it.
+        let dotted = staged_output_path(std::path::Path::new("My.App.v1.2.exe"));
+        assert!(dotted.to_string_lossy().starts_with("My.App.v1.2.exe.tmp-"));
+    }
+
+    #[test]
+    fn a_failed_rebuild_leaves_the_previous_build_intact() {
+        // The regression this guards: `Image::write_file` is
+        // `std::fs::write`, i.e. truncate-in-place, so a write that failed
+        // part way through left a broken `App.exe` where a working one had
+        // been. Blocking the staging path makes the write fail *after* the
+        // payload is fully assembled, which is exactly when the old code
+        // had already truncated the output.
+        let dir = tempdir();
+        let jar = dir.join("demo.jar");
+        write_fake_jar(&jar, Some("com.example.Main"));
+        let exe = dir.join("App.exe");
+        std::fs::write(&exe, b"the previous, working build").unwrap();
+
+        let cli = Cli::parse_from([
+            "snug",
+            jar.to_str().unwrap(),
+            "-o",
+            exe.to_str().unwrap(),
+        ]);
+        let payload = build_payload(&cli).unwrap();
+
+        // Occupy the staging path with a directory so writing it must fail.
+        std::fs::create_dir_all(staged_output_path(&exe)).unwrap();
+
+        assert!(
+            build_exe(&cli, &payload).is_err(),
+            "the staged write should have failed"
+        );
+        assert_eq!(
+            std::fs::read(&exe).unwrap(),
+            b"the previous, working build",
+            "a failed rebuild must not damage the artefact that already worked"
+        );
+    }
+
+    #[test]
+    fn a_successful_build_stages_and_leaves_nothing_behind() {
+        let dir = tempdir();
+        let jar = dir.join("demo.jar");
+        write_fake_jar(&jar, Some("com.example.Main"));
+        let exe = dir.join("App.exe");
+        let cli = Cli::parse_from([
+            "snug",
+            jar.to_str().unwrap(),
+            "-o",
+            exe.to_str().unwrap(),
+        ]);
+        let payload = build_payload(&cli).unwrap();
+
+        let written = build_exe(&cli, &payload).expect("build");
+        assert_eq!(written, exe);
+        assert!(
+            !staged_output_path(&exe).exists(),
+            "the staging file must be renamed away, not left on disk"
+        );
+        assert!(
+            std::fs::metadata(&exe).unwrap().len() > 0,
+            "the renamed output is the real build"
+        );
+    }
 
     fn write_fake_jar(path: &std::path::Path, main_class: Option<&str>) {
         let file = std::fs::File::create(path).unwrap();

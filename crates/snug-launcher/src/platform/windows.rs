@@ -617,15 +617,16 @@ fn locate_jvm_dll(java_home: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Copy `bytes` to `dest` (and create parents) unless it already exists.
+/// Copy `bytes` to `dest` (and create parents) unless a correct copy is
+/// already there.
+///
+/// Delegates to [`crate::cache::ensure_cached_atomic`], which is where the
+/// atomicity and truncation-repair rules live. `platform/macos.rs` still
+/// carries its own copy of the old truncate-in-place version; it is
+/// byte-identical to what this replaced and should adopt the shared helper
+/// in one line whenever macOS is back in scope.
 fn ensure_cached(dest: &Path, bytes: &[u8]) -> Result<(), LauncherError> {
-    if dest.exists() {
-        return Ok(());
-    }
-    if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(dest, bytes)?;
+    crate::cache::ensure_cached_atomic(dest, bytes)?;
     Ok(())
 }
 
