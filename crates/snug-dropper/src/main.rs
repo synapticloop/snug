@@ -178,10 +178,9 @@ fn confirm_overwrite(invocation: &Invocation) -> bool {
         .output
         .file_name()
         .map_or_else(|| invocation.output.display().to_string(), |n| n.to_string_lossy().into());
-    ui::confirm(&format!(
-        "{file} already exists in {}.\r\n\r\nReplace it?",
-        invocation.cwd.display()
-    ))
+    // Title states the fact, body asks the question — the shape Windows
+    // itself uses for a replace prompt, so it reads as one.
+    ui::confirm(&format!("{file} exists"), "Overwrite?")
 }
 
 /// Non-Windows entry point. This binary is a Windows-only artefact (see

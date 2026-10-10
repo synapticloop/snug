@@ -80,11 +80,20 @@ pub fn error(text: &str) {
 }
 
 /// Yes/No dialog. `true` for Yes.
-pub fn confirm(text: &str) -> bool {
-    message_box(TITLE, text, MB_YESNO | MB_ICONQUESTION) == IDYES
+///
+/// Takes its own caption because the overwrite prompt names the file it is
+/// about to replace, which is more use in the title bar than the tool's
+/// name — "Build with Snug" is already on every other dialog here.
+pub fn confirm(caption: &str, text: &str) -> bool {
+    message_box(caption, text, MB_YESNO | MB_ICONQUESTION) == IDYES
 }
 
-fn message_box(text: &str, caption: &str, kind: u32) -> i32 {
+/// `caption` is the title bar, `text` the body.
+///
+/// The parameter order deliberately leads with the caption, the way the
+/// dialog reads on screen. `MessageBoxW` itself puts the body first, so the
+/// swap happens exactly once, here, rather than at three call sites.
+fn message_box(caption: &str, text: &str, kind: u32) -> i32 {
     unsafe {
         MessageBoxW(
             std::ptr::null_mut(),
