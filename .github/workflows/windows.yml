@@ -94,7 +94,8 @@ jobs:
         id: stub
         shell: pwsh
         run: |
-          $h = (Get-FileHash "bin\launcher-stub-windows-x86_64.exe" -Algorithm SHA256).Hash
+          . .\scripts\pe-stable-hash.ps1
+          $h = Get-PeStableHash "bin\launcher-stub-windows-x86_64.exe"
           "hash=$h" >> $env:GITHUB_OUTPUT
           Write-Host "committed stub: $h"
 
@@ -113,12 +114,21 @@ jobs:
       # refreshed, which is the exact state the committed stub exists to
       # prevent - a clone would otherwise build a launcher that silently
       # predates the source.
+      #
+      # `Get-PeStableHash`, not `Get-FileHash`: MSVC stamps wall-clock link
+      # time into the PE header and a fresh random GUID plus an absolute
+      # PDB path into the CodeView record, so two links of identical source
+      # never produce the same bytes and a raw hash could never match. The
+      # helper zeroes exactly those fields. Measured on this repo: two
+      # release links 44s apart differ in 20 raw bytes across three fields,
+      # and hash identically once normalised.
       - name: The committed stub matches a fresh build
         shell: pwsh
         run: |
+          . .\scripts\pe-stable-hash.ps1
           $fresh = "target\release\snug-launcher.exe"
           if (-not (Test-Path $fresh)) { throw "no fresh launcher at $fresh" }
-          $a = (Get-FileHash $fresh -Algorithm SHA256).Hash
+          $a = Get-PeStableHash $fresh
           $b = "${{ steps.stub.outputs.hash }}"
           if ($a -ne $b) {
             Write-Error @"
