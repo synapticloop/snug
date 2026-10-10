@@ -8,7 +8,9 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use snug_cli::build::{build_exe, build_payload, output_path, wants_app_bundle};
+use snug_cli::build::{
+    build_exe, build_payload, guard_output_collision, output_path, wants_app_bundle,
+};
 use snug_cli::cli::Cli;
 use snug_cli::{init_localizations, init_options};
 use snug_cli::options_file;
@@ -117,6 +119,12 @@ fn run() -> Result<()> {
     if cli.jar.is_none() && cli.input.is_none() {
         anyhow::bail!("no input JAR{}", missing_input_detail(&options_paths));
     }
+
+    // Before the (potentially slow) payload build, refuse an output that
+    // aliases an input. `--dry-run` and `--emit-payload` never reach the
+    // write, but they should still report the mistake rather than let the
+    // user believe the command line is sound.
+    guard_output_collision(&cli)?;
 
     let payload = build_payload(&cli).context("building snug payload")?;
     let embedded = SnugEmbedded::new(payload);

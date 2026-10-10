@@ -487,6 +487,50 @@ pub fn output_path(cli: &Cli) -> PathBuf {
     }
 }
 
+/// Refuse to write the launcher over one of the build's own inputs.
+///
+/// Every input is read into memory before anything touches the disk, so
+/// an output path that aliases a JAR, icon, splash or manifest is not a
+/// transient failure — the write *succeeds*, destroying the file, and the
+/// build reports success. `snug App.jar -o App.jar` exits 0 and leaves a
+/// PE where the user's source archive was.
+///
+/// Comparison is canonical rather than textual, so `App.jar`, `.\App.jar`
+/// and `App.JAR` are all recognised as the same file. A path that does not
+/// resolve yet (an output being created) falls back to itself, which is
+/// what makes a non-existent default output compare equal to itself and
+/// correctly *not* collide.
+pub fn guard_output_collision(cli: &Cli) -> Result<()> {
+    let canonical = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let output = output_path(cli);
+    let output_key = canonical(&output);
+
+    // Path-valued inputs, in the order a reader would guess at them.
+    let inputs = [
+        cli.jar.as_ref(),
+        cli.input.as_ref(),
+        cli.icon.as_ref(),
+        cli.splash.as_ref(),
+        cli.manifest.as_ref(),
+    ];
+
+    for input in inputs.into_iter().flatten() {
+        if canonical(input) == output_key {
+            anyhow::bail!(
+                "-o {} is also one of this build's input files.\n\
+                 snug reads every input into memory before writing anything, so \
+                 proceeding would destroy it with no backup.\n\
+                 hint: pass a different output path, e.g. -o {}",
+                // Echo the user's own spelling, not the canonicalised form —
+                // on Windows that carries a `\\?\` prefix they never typed.
+                output.display(),
+                output.with_extension(DEFAULT_OUTPUT_EXT).display()
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Did the user ask for a macOS application bundle?
 ///
 /// Deliberately platform-neutral, and deliberately a question about the
@@ -656,6 +700,89 @@ mod tests {
         let cli = Cli::parse_from(["snug", "app.jar", "-o", "Windows.exe"]);
         assert_eq!(output_path(&cli), PathBuf::from("Windows.exe"));
         assert!(!wants_app_bundle(&cli));
+    }
+
+    // --- output/input collision -----------------------------------------
+
+    #[test]
+    fn output_aliasing_the_input_jar_is_refused() {
+        // The data-loss case: every input is already in memory by the time
+        // the output is written, so this would succeed and eat the archive.
+        let dir = tempdir();
+        let jar = dir.join("demo.jar");
+        write_fake_jar(&jar, Some("com.example.Main"));
+        let cli = Cli::parse_from(["snug", jar.to_str().unwrap(), "-o", jar.to_str().unwrap()]);
+        let err = guard_output_collision(&cli).unwrap_err().to_string();
+        assert!(err.contains("input files"), "unhelpful error: {err}");
+        assert!(err.contains("demo.jar"), "error omits the path: {err}");
+    }
+
+    #[test]
+    fn output_aliasing_icon_splash_or_manifest_is_refused() {
+        let dir = tempdir();
+        let jar = dir.join("demo.jar");
+        write_fake_jar(&jar, Some("com.example.Main"));
+        let icon = dir.join("logo.png");
+        std::fs::write(&icon, b"png").unwrap();
+        let splash = dir.join("boot.png");
+        std::fs::write(&splash, b"png").unwrap();
+        let manifest = dir.join("app.manifest");
+        std::fs::write(&manifest, b"<assembly/>").unwrap();
+        let j = jar.to_str().unwrap();
+
+        for extra in [
+            vec!["--icon", icon.to_str().unwrap()],
+            vec!["--splash", splash.to_str().unwrap()],
+            vec!["--manifest", manifest.to_str().unwrap()],
+        ] {
+            let target = extra[1];
+            let mut argv = vec!["snug", j, "-o", target];
+            argv.extend(extra.clone());
+            let cli = Cli::parse_from(argv);
+            assert!(
+                guard_output_collision(&cli).is_err(),
+                "-o {target} should be refused as it is also {extra:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn collision_is_compared_canonically_not_textually() {
+        // `App.jar`, `.\App.jar` and a differently-cased drive path are the
+        // same file on Windows; a string compare would wave the last two
+        // straight through.
+        let dir = tempdir();
+        let jar = dir.join("demo.jar");
+        write_fake_jar(&jar, Some("com.example.Main"));
+        let spelled = dir.join(".").join("demo.jar");
+        let cli = Cli::parse_from(["snug", jar.to_str().unwrap(), "-o", spelled.to_str().unwrap()]);
+        assert!(
+            guard_output_collision(&cli).is_err(),
+            "an equivalent spelling of the input must still be refused"
+        );
+    }
+
+    #[test]
+    fn an_ordinary_output_is_not_refused() {
+        // The guard must not fire on the normal shapes, including the
+        // default output (which is derived from the input and is `.exe`,
+        // so it can never alias a `.jar`).
+        let dir = tempdir();
+        let jar = dir.join("demo.jar");
+        write_fake_jar(&jar, Some("com.example.Main"));
+
+        let plain = Cli::parse_from([
+            "snug",
+            jar.to_str().unwrap(),
+            "-o",
+            dir.join("demo.exe").to_str().unwrap(),
+        ]);
+        assert!(guard_output_collision(&plain).is_ok(), "distinct output refused");
+
+        // Also the no-`-o` default, resolved in a different CWD.
+        let implicit = Cli::parse_from(["snug", jar.to_str().unwrap()]);
+        assert_eq!(output_path(&implicit), jar.with_extension("exe"));
+        assert!(guard_output_collision(&implicit).is_ok(), "default output refused");
     }
 
 
