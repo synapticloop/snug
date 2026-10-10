@@ -30,6 +30,8 @@ Nothing in this review has been changed except items explicitly marked `DONE`.
 | ✅ `F-05` | Cancel during verify/extract — now honoured, and no longer overruled by the worker |
 | ✅ `F-06` | Windows JNI version follows the discovered JVM (ported from macOS) |
 | ✅ `F-07` | A too-old JDK no longer aborts the scan (ported from macOS, plus its diagnostic kept) |
+| ✅ `F-08` | `try_common` expanded to the JDKs inside each vendor directory |
+| ✅ `F-09` | A candidate without `jvm.dll` is rejected before it reaches the loader |
 | ✅ `F-29` | Concurrent JDK installs — staging + atomic publish + cross-process lock |
 
 ### Next action required before CI is green
@@ -145,15 +147,20 @@ git add bin\launcher-stub-windows-x86_64.exe
 - **Fix:** Port `scan_candidate` to `windows.rs`; step over too-old candidates, reporting the remembered one only if nothing qualifies.
 
 ### F-08 — `try_common` can never match — the scan stops at the parent directory
-- **Status:** `TODO`
-- **File:** `crates/snug-launcher/src/platform/windows.rs:885-895`
+- **Status:** `DONE`
+- **Fixed:** 2026-10-10. `common_install_paths()` returned *vendor* directories (`%ProgramFiles%\Java`, `%ProgramFiles%\Eclipse Adoptium`) while `check_candidate` requires `bin\java.exe` **directly** beneath, so every candidate failed `is_dir` and the step was dead code. Split the expansion into `expand_install_root`, which returns the root itself (a flat install is legal and costs one `is_dir`) plus each immediate child directory, sorted for determinism.
+- **Tests:** `a_vendor_directory_expands_to_the_jdks_inside_it` and `an_empty_vendor_directory_still_yields_itself`. Mutation-verified: reverting `expand_install_root` to `vec![root]` fails the first and nothing else.
+- **File:** `crates/snug-launcher/src/platform/windows.rs`
 - **Trigger:** A JDK under `C:\Program Files\Java\jdk-25.0.1\` on a machine with no `JAVA_HOME` and no registry entry for that vendor.
 - **Impact:** `common_install_paths()` returns *vendor* directories, but `check_candidate` requires `bin\java.exe` **directly** beneath, so every candidate fails `is_dir`. The step is dead code despite `snug-format/src/config.rs:223-225` promising `C:\Program Files\Java\…`.
 - **Fix:** Enumerate child directories of each vendor root (as the macOS version does) and test each as a candidate.
 
 ### F-09 — Discovery accepts a candidate the loader can't use
-- **Status:** `TODO`
-- **File:** `crates/snug-launcher/src/platform/windows.rs:695-703` vs `:598-613`
+- **Status:** `DONE`
+- **Fixed:** 2026-10-10. `check_candidate` asked only for `java.exe`, so a JRE-only or pruned install was returned as *the* discovery result and the run then died at `locate_jvm_dll` with a fatal `LibraryLoad` — never trying the registry or common-location candidates that would have worked. The check now also requires `locate_jvm_dll` to succeed, which is what turns that fatal end into "try the next one".
+- **Tests:** `a_jre_without_a_jvm_dll_is_not_accepted_as_a_candidate`, and `a_jvm_dll_anywhere_the_loader_looks_is_enough`, which walks all three layouts `locate_jvm_dll` probes (`bin\server`, `bin\client`, `bin\`) so the gate and the loader cannot drift apart. Mutation-verified: removing the gate fails only the first test.
+- **⚠️ Side effect worth knowing:** this changed the meaning of the `fake_jdk` test fixture, which planted `java.exe` but no `jvm.dll` — exactly the shape this finding rejects. Had the fixture not been updated, the F-07 tests would have started failing for the *wrong* reason while still passing. That is a useful reminder that a fixture can silently stop testing anything once a gate tightens.
+- **File:** `crates/snug-launcher/src/platform/windows.rs`
 - **Trigger:** `JAVA_HOME` pointing at a JRE-only or pruned JDK — has `bin\java.exe` and a new enough version, but no `bin\server\jvm.dll`.
 - **Impact:** Discovery accepts it and returns, so the scan stops. The failure only surfaces afterwards as a hard `LibraryLoad` error at `:281-290`, with no attempt to fall back to the registry or common-location candidates that would have worked.
 - **Fix:** Add the `locate_jvm_dll` existence test to the candidate check.
