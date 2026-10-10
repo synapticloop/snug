@@ -1,3 +1,140 @@
+# Windows release pipeline.
+#
+# The point of this workflow is not "it compiles" - that is what a
+# developer gets locally. It is catching the class of defect that only
+# shows up once the artefacts are real:
+#
+#   - **A full test run, with --no-fail-fast.** `cargo test` stops at the
+#     first failing test *target* by default, so one broken crate hides
+#     every crate after it. Three `snug-launcher` cache tests were failing
+#     on Windows for several slices without anyone noticing, purely
+#     because `snug-cli`'s options_file target failed first. Pass the flag
+#     and read the total.
+#   - **`scripts\build-windows.cmd` end to end**, which is the only place
+#     the launcher stub, the icon stamps and the staged `release\` folder
+#     are exercised together. Icon provenance in particular is checked by
+#     `verify_icons`, which re-derives each icon from its source PNG and
+#     compares pixels - so a stamp that silently does not apply fails here
+#     rather than shipping.
+#   - **The committed stub still matching a fresh build.** The stub exists
+#     so a fresh clone can `cargo build -p snug-cli` without building the
+#     launcher; it is only worth committing if it is what the pipeline
+#     produces, and nothing else in the build notices when it drifts.
+#
+# Signing is deliberately not here. Authenticode needs a certificate this
+# repository does not carry, and a workflow that cannot sign is better than
+# one that pretends to. Add it as a separate release-triggered workflow
+# once the cert exists.
+name: windows
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A new push to the same branch supersedes an in-flight run; the artefacts
+# are throwaway, so there is nothing to wait for.
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  windows:
+    # `windows-latest` rather than `windows-2022`: rc.exe and the MSVC
+    # toolchain come from the image, and the icons are stamped through
+    # editpe on the built PE, so a real link is required, not a `check`.
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # MSVC needs the host arch explicitly or the default toolchain can
+      # pick the host triple and miss the runner's installed SDK.
+      - name: Show the toolchain
+        run: rustc -vV
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          # The default `target\`, deliberately. An earlier draft pointed
+          # CARGO_TARGET_DIR at a temp path to keep the cache to one
+          # directory, but Actions sets `env:` values *literally* - there
+          # is no shell to expand a leading `~` in - so cargo and
+          # `$env:CARGO_TARGET_DIR` in PowerShell would have both seen a
+          # literal `~\AppData\...` and disagreed about where the launcher
+          # landed. Using `target\` keeps CI byte-for-byte identical to a
+          # local build, which is the point of the pipeline step below.
+          path: |
+            target
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: windows-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: windows-
+
+      - name: Build the workspace
+        run: cargo build --workspace --all-targets
+
+      # --all-targets above compiles the test binaries but does not run
+      # them. Kept as its own step so a failure reads as "a test failed"
+      # rather than "the build failed".
+      - name: Test (full run, no fail-fast)
+        run: cargo test --workspace --lib --bins --tests --no-fail-fast
+
+
+      # The real pipeline. This is what proves the stub, the three icon
+      # stamps and the staged release folder all agree - steps 1-10 of the
+      # script, including `verify_icons` and the embedded-stub check.
+      #
+      # It needs the packaged demo JAR, which is committed, and the
+      # `snug.options` + `snug.windows.options` pair, likewise.
+      - name: Run the Windows release pipeline
+        run: .\scripts\build-windows.cmd
+
+      # The committed stub must correspond to the *current* launcher source.
+      #
+      # This used to compare the stub's bytes against a fresh build, which
+      # cannot work: it spans two machines. This repo's Windows workstation
+      # and the `windows-latest` runner disagreed on rustc (1.95.0 vs 1.98.1,
+      # different LLVM), and the MSVC linker and Windows SDK are whatever
+      # each host happens to have. So it reported "out of date" on a
+      # correctly refreshed stub -- crying wolf, worse than no check. It had
+      # in fact never even run: a here-string's closing "@ must start in
+      # column 0 of the *generated* script, YAML decides that by stripping
+      # the block indent, and the step failed to parse.
+      #
+      # Staleness is a property of the source, so hash the source. Nothing
+      # outside the repository can make this disagree. It does not prove the
+      # stub *was* built from this source -- someone could update the
+      # recorded fingerprint by hand -- but the accident it prevents,
+      # editing platform\windows.rs and shipping last release's launcher, is
+      # the one that actually happens.
+      #
+      # No here-string here: see above.
+      - name: The committed stub matches the current launcher source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . .\scripts\launcher-source-fingerprint.ps1
+          $current = Get-LauncherSourceFingerprint -Repo (Get-Location).Path
+          $recordedPath = 'bin\launcher-stub.source'
+          if (-not (Test-Path $recordedPath)) {
+            Write-Error "no $recordedPath -- run scripts\refresh-stub.ps1 and commit it."
+            exit 1
+          }
+          $recorded = (Get-Content $recordedPath -Raw).Trim()
+          if ($current -ne $recorded) {
+            Write-Error "bin\launcher-stub-windows-x86_64.exe is stale.`n`n  launcher source now: $current`n  stub was built from: $recorded`n`nThe launcher source changed without the committed stub being rebuilt, so a`nclone would embed last release's launcher. Run scripts\refresh-stub.ps1 and`ncommit both files."
+            exit 1
+          }
+          Write-Host "committed stub matches the current launcher source: $current"
+
+      # Cheap, and it keeps a failure from being debugged through three
       # earlier steps first.
       #
       # This was `continue-on-error` from the day it was added, on the
@@ -6,3 +143,12 @@
       # too rather than being left behind to quietly absorb the next one.
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Upload the staged release folder
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snug-windows-x86_64
+          path: release/windows-x86_64/
+          if-no-files-found: error
+          retention-days: 14
