@@ -199,8 +199,8 @@ pub fn current_exe_dir() -> Option<PathBuf> {
 /// Returns the resolved path, or `None` if the flag wasn't supplied.
 /// Does not validate that the file exists; that's the caller's job.
 pub fn find_options_flag(raw_args: &[String]) -> Option<PathBuf> {
-    let mut iter = raw_args.iter().enumerate();
-    while let Some((i, arg)) = iter.next() {
+    let iter = raw_args.iter().enumerate();
+    for (i, arg) in iter {
         if arg == "--options" {
             return raw_args.get(i + 1).map(PathBuf::from);
         }
@@ -561,11 +561,9 @@ impl FlagSpec {
         // everything after it is that value rather than another flag.
         let mut last: Option<String> = None;
         for (idx, ch) in rest.char_indices() {
-            let canonical = match self.aliases.get(&ch.to_string()) {
-                Some(c) => c.clone(),
-                // An unrecognised short means this is not a flag we know.
-                // Stop rather than guess which prefix was meant.
-                None => return None,
+            let canonical = {
+                let c = self.aliases.get(&ch.to_string())?;
+                c.clone()
             };
             if self.takes_value.contains(&canonical) {
                 return Some((canonical, idx + ch.len_utf8() < rest.len()));

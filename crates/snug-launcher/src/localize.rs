@@ -362,7 +362,7 @@ mod tests {
     #[test]
     fn load_includes_built_in_baseline_when_no_payload() {
         let b = Bundles::load(&[]);
-        assert!(b.len() >= 1, "should always have built-in baseline");
+        assert!(!b.is_empty(), "should always have built-in baseline");
         // Baseline has the canonical runtime-error keys.
         assert_eq!(
             b.raw_lookup("err.jvm_not_found"),

@@ -411,6 +411,19 @@ pub struct ModalDialog<'a> {
 /// button fallbacks are resolved by each wrapper module since each
 /// reads a different TOML table (`failure` / `retry` /
 /// `metadata_failed`).
+/// # Safety
+///
+/// Must run on the thread that will own this dialog's message loop: the
+/// window is created and pumped here, and a window created on one thread
+/// cannot be pumped from another.
+///
+/// `parent` must be `NULL` or a live `HWND` belonging to that same thread.
+/// It is currently reserved (`let _ = parent;`), but passing a handle you
+/// do not own is a latent bug waiting for the parameter to be wired up.
+///
+/// `dlg.mascot_hbitmap`, when non-zero, must be a valid `HBITMAP` that
+/// stays alive for the whole call; the paint path dereferences it on
+/// every `WM_PAINT`.
 pub unsafe fn show<'a>(parent: HWND, dlg: &'a ModalDialog<'a>) -> i32 {
     let _ = parent; // Reserved for future owned-window parents.
 
@@ -722,7 +735,18 @@ const IDC_BUTTON_TERTIARY: i32 = 5009;
 const STATIC_CLASS: &str = "STATIC\0";
 const BUTTON_CLASS: &str = "BUTTON\0";
 
-unsafe extern "system" fn wndproc(
+// `needless_borrow` and `dangerous_implicit_autorefs` cannot both be
+// satisfied here, and clippy is wrong about which one wins.
+//
+// The explicit `(&(*state).field)` is *required*: it tells the compiler we
+// mean to borrow through the pointer rather than let it insert a reference
+// for a method call, which is exactly what `dangerous_implicit_autorefs`
+// forbids under edition 2024. Strip it and the crate does not compile.
+//
+// Left alone, `cargo clippy --fix` "fixes" this by removing the borrow,
+// which satisfies needless_borrow and then fails the build on the rustc
+// lint instead. Hence the allow rather than a fix.
+#[allow(clippy::needless_borrow)]unsafe extern "system" fn wndproc(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
@@ -1028,8 +1052,7 @@ unsafe extern "system" fn wndproc(
             // plus BUTTON_GAP, so the group is flush right whatever the
             // label widths turn out to be.
             let mut right = BUTTON_RIGHT;
-            for i in 0..button_count {
-                let (hwnd_button, w) = created[i];
+            for &(hwnd_button, w) in &created[..button_count] {
                 SetWindowPos(
                     hwnd_button,
                     std::ptr::null_mut(),
@@ -1488,7 +1511,7 @@ fn load_info_icon(kind: InfoIcon) -> HICON {
         InfoIcon::Warning => IDI_WARNING,
         InfoIcon::Error => IDI_ERROR,
     };
-    unsafe { LoadIconW(std::ptr::null_mut(), id as *const u16) }
+    unsafe { LoadIconW(std::ptr::null_mut(), id) }
 }
 
 /// Stretch-draw an existing DIB section (`HBITMAP`) into the mascot

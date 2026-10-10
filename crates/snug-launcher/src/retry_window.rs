@@ -38,6 +38,12 @@ pub struct RetryDialog<'a> {
 /// Show the dialog modally. Returns [`modal_window::IDYES_I32`]
 /// (primary = Try again) or [`modal_window::IDCANCEL_I32`] (X /
 /// secondary).
+/// # Safety
+///
+/// Thin wrapper over [`modal_window::show`]; see its `# Safety` section.
+/// In short: call on the dialog-owning thread, with `parent` either
+/// `NULL` or a live `HWND` owned by that thread, and with any non-zero
+/// `mascot_hbitmap` a live handle that outlives the call.
 pub unsafe fn show(parent: HWND, dlg: RetryDialog<'_>) -> i32 {
     let dialogs = crate::dialogs::dialogs();
     let retry = &dialogs.jdk_install.retry;

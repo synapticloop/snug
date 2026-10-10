@@ -365,7 +365,18 @@ unsafe fn register_class() -> u16 {
 //  Window procedure
 // ===========================================================================
 
-unsafe extern "system" fn progress_wndproc(
+// `needless_borrow` and `dangerous_implicit_autorefs` cannot both be
+// satisfied here, and clippy is wrong about which one wins.
+//
+// The explicit `(&(*state).field)` is *required*: it tells the compiler we
+// mean to borrow through the pointer rather than let it insert a reference
+// for a method call, which is exactly what `dangerous_implicit_autorefs`
+// forbids under edition 2024. Strip it and the crate does not compile.
+//
+// Left alone, `cargo clippy --fix` "fixes" this by removing the borrow,
+// which satisfies needless_borrow and then fails the build on the rustc
+// lint instead. Hence the allow rather than a fix.
+#[allow(clippy::needless_borrow)]unsafe extern "system" fn progress_wndproc(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
@@ -586,7 +597,7 @@ unsafe extern "system" fn progress_wndproc(
             // uses via `IDI_INFORMATION`.
             SendMessageW(
                 hwnd_info_icon,
-                STM_SETICON as u32,
+                STM_SETICON,
                 LoadIconW(std::ptr::null_mut(), IDI_INFORMATION) as WPARAM,
                 0,
             );
@@ -757,8 +768,7 @@ unsafe extern "system" fn progress_wndproc(
             }
 
             // Fill — same corner radius as the track at every pct.
-            let fill_w =
-                (PROGRESS_W as i32 * pct as i32 / 100).max(0).min(PROGRESS_W as i32);
+            let fill_w = (PROGRESS_W * pct as i32 / 100).clamp(0, PROGRESS_W);
             if fill_w > 0 {
                 let fill_rgn = CreateRoundRectRgn(
                     PROGRESS_X,
@@ -1094,7 +1104,7 @@ unsafe fn apply_font(hwnd: HWND, hfont: HFONT) {
         return;
     }
     unsafe {
-        SendMessageW(hwnd, WM_SETFONT as u32, hfont as WPARAM, 1);
+        SendMessageW(hwnd, WM_SETFONT, hfont as WPARAM, 1);
     }
 }
 
@@ -1323,6 +1333,16 @@ fn create_font_pt(point_size: i32, weight: i32, italic: bool, face: &str) -> HFO
 /// thread is updating. `title` becomes the window title-bar text;
 /// the body content is driven entirely from `shared` via the
 /// `format_view` helper.
+/// # Safety
+///
+/// Must run on the thread that will own this window's message loop.
+///
+/// `shared` must be the same `Arc` the worker thread updates, and must
+/// outlive this call: the `WM_TIMER` handler reads every field through a
+/// `GWLP_USERDATA` pointer captured at window-creation time, and the
+/// window is destroyed by the thread that pumped it.
+///
+/// `parent` must be `NULL` or a live `HWND` owned by that thread.
 pub unsafe fn show(
     parent: HWND,
     title: &str,

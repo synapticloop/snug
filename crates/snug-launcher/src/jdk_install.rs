@@ -603,7 +603,7 @@ pub(crate) fn find_best_icon_hicon(cx: i32, cy: i32) -> Option<HICON> {
         let name_w: Vec<u16> = "MAINICON".encode_utf16().chain(std::iter::once(0)).collect();
         let hres_named = FindResourceW(hinst, name_w.as_ptr(), RT_GROUP_ICON as *const u16);
         let hres = if hres_named.is_null() {
-            FindResourceW(hinst, 1usize as *const u16, RT_GROUP_ICON as *const u16)
+            FindResourceW(hinst, std::ptr::dangling::<u16>(), RT_GROUP_ICON as *const u16)
         } else {
             hres_named
         };
@@ -1253,9 +1253,9 @@ fn worker_thread(
 ///   invisible â€” silently returning the error leaves the user with
 ///   only the final `show_launcher_error` dialog and no chance to
 ///   recover. We pop a dedicated "could not reach Adoptium" dialog
-///   here instead, with
-///   an "Open the download page in my browser" button so the user
-///   can still install Temurin manually.
+///   here instead, with an "Open the download page in my browser"
+///   button so the user can still install Temurin manually.
+///
 /// Should this progress sample be logged?
 ///
 /// Split out because it is the whole bug. The first version reported only
@@ -2788,23 +2788,23 @@ mod tests {
         // Within phase 0, the download is a straight climb from 0 to
         // PHASE_0_PCT_MAX.
         assert_eq!(PHASE_0_PCT_MAX, 95);
-        assert!(PHASE_0_PCT_MAX > 0);
+        const { assert!(PHASE_0_PCT_MAX > 0); }
 
         // Phase 0 â†’ phase 1: no jump backwards.
-        assert!(PHASE_1_PCT_START >= PHASE_0_PCT_MAX);
+        const { assert!(PHASE_1_PCT_START >= PHASE_0_PCT_MAX); }
         // Phase 1 itself climbs.
-        assert!(PHASE_1_PCT_END > PHASE_1_PCT_START);
+        const { assert!(PHASE_1_PCT_END > PHASE_1_PCT_START); }
         assert_eq!(PHASE_1_PCT_END, 98);
 
         // Phase 1 â†’ phase 2: no jump backwards.
-        assert!(PHASE_2_PCT_START >= PHASE_1_PCT_END);
+        const { assert!(PHASE_2_PCT_START >= PHASE_1_PCT_END); }
         assert_eq!(PHASE_2_PCT_START, 99);
 
         // Phase 2 ends at 100.
         // (Verified indirectly: we don't have PHASE_2_PCT_END as a
         // const because we use a literal 100. Asserting against the
         // literal here keeps the invariant explicit.)
-        assert!(PHASE_2_PCT_START < 100);
+        const { assert!(PHASE_2_PCT_START < 100); }
     }
 
     #[test]

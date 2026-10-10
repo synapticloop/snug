@@ -48,6 +48,12 @@ pub struct MetadataFailedDialog<'a> {
 /// Show the dialog modally. Returns [`modal_window::IDYES_I32`]
 /// (primary = Open in browser) or [`modal_window::IDCANCEL_I32`]
 /// (X / secondary).
+/// # Safety
+///
+/// Thin wrapper over [`modal_window::show`]; see its `# Safety` section.
+/// In short: call on the dialog-owning thread, with `parent` either
+/// `NULL` or a live `HWND` owned by that thread, and with any non-zero
+/// `mascot_hbitmap` a live handle that outlives the call.
 pub unsafe fn show(parent: HWND, dlg: MetadataFailedDialog<'_>) -> i32 {
     let dialogs = crate::dialogs::dialogs();
     let mfd = &dialogs.jdk_install.metadata_failed;

@@ -35,7 +35,7 @@ fn main() {
         // when no name is associated.
         let hres_id1 = FindResourceW(
             hinst,
-            1usize as *const u16,
+            std::ptr::dangling::<u16>(),
             14usize as *const u16,
         );
         eprintln!(

@@ -70,6 +70,12 @@ pub struct ErrorDialog<'a> {
 /// [`modal_window::IDYES_I32`] when the user dismisses via the
 /// single button (or presses Enter / X). Preserves the legacy
 /// `IDOK_I32 = 1` semantic for callers that compare against `1`.
+/// # Safety
+///
+/// Thin wrapper over [`modal_window::show`]; see its `# Safety` section.
+/// In short: call on the dialog-owning thread, with `parent` either
+/// `NULL` or a live `HWND` owned by that thread, and with any non-zero
+/// `mascot_hbitmap` a live handle that outlives the call.
 pub unsafe fn show(parent: HWND, dlg: ErrorDialog<'_>) -> i32 {
     let dialogs = crate::dialogs::dialogs();
     let failure = &dialogs.jdk_install.failure;
@@ -175,6 +181,10 @@ pub unsafe fn show(parent: HWND, dlg: ErrorDialog<'_>) -> i32 {
 ///
 /// Blocks until the user dismisses the dialog. Returns the same
 /// `i32` that [`show`] does — `IDOK_I32` (=1) on primary dismissal.
+/// # Safety
+///
+/// As [`show`]: call on the thread that will own the dialog's message
+/// loop, and pass `parent` as `NULL` or a live `HWND` owned by it.
 pub unsafe fn show_launcher_error(
     parent: HWND,
     localized_error: &str,

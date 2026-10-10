@@ -1,10 +1,9 @@
 //! Per-launch file logger.
 //!
-//! The launcher writes a structured trace of the cache + JDK-install
-//! + JNI-load steps to a single file alongside the cached JAR, so a
-//! user can post-mortem a launch without re-running it. The file is
-//! truncated on every `init`, so each launch produces a self-contained
-//! record.
+//! The launcher writes a structured trace of the cache, JDK-install and
+//! JNI-load steps to a single file alongside the cached JAR, so a user can
+//! post-mortem a launch without re-running it. The file is truncated on
+//! every `init`, so each launch produces a self-contained record.
 //!
 //! Default location:
 //! ```text

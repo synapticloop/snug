@@ -236,7 +236,7 @@ fn load_exe_main_icons(
     // is by name. The numeric ID 1 fallback covers any future
     // upstream that switches to a numeric MAINICON.
     let mainicon_w: Vec<u16> = "MAINICON\0".encode_utf16().collect();
-    let id1: *const u16 = 1 as *const u16;
+    let id1: *const u16 = std::ptr::dangling::<u16>();
     unsafe {
         let by_name_big = LoadImageW(
             hinst,
@@ -703,7 +703,7 @@ fn hicon_from_image_via_gdiplus(path: &std::path::Path, px: i32) -> Result<HICON
         // clear them to fully transparent before drawing.
         let screen = GetDC(std::ptr::null_mut());
         let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
-        let mut bi = BITMAPINFO {
+        let bi = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
                 biWidth: px,
@@ -728,7 +728,7 @@ fn hicon_from_image_via_gdiplus(path: &std::path::Path, px: i32) -> Result<HICON
         };
         let color = CreateDIBSection(
             screen,
-            &mut bi,
+            &bi,
             DIB_RGB_COLORS,
             &mut bits,
             std::ptr::null_mut(),
@@ -1020,7 +1020,7 @@ fn help_text() -> String {
     out.push_str("        --localization <FILE|DIR>    from the Language dropdown. Repeatable.\n");
     out.push_str("            <FILE>  snug-localisations.<tag>.txt\n");
     out.push_str("            <DIR>   a directory of them, scanned top-level only\n");
-    out.push_str("\n");
+    out.push('\n');
     out.push_str("            Both spellings of the flag are accepted. The built-in\n");
     out.push_str("            English baseline is always in the dropdown; supplying\n");
     out.push_str("            your own snug-localisations.en.txt replaces it, the\n");
@@ -1029,20 +1029,20 @@ fn help_text() -> String {
     out.push_str("                                the EXE's MAINICON resource, which the\n");
     out.push_str("                                dialogs read for both the mascot image\n");
     out.push_str("                                and the title bar / taskbar.\n");
-    out.push_str("\n");
+    out.push('\n');
     out.push_str("                                <FILE>  a .png or .ico. .ico goes through\n");
     out.push_str("                                LoadImageW; a .png needs GDI+, because\n");
     out.push_str("                                Windows' LoadImageW does not decode\n");
     out.push_str("                                PNG from file despite being documented\n");
     out.push_str("                                to. Either way no Rust image crate is\n");
     out.push_str("                                linked into the launcher.\n");
-    out.push_str("\n");
+    out.push('\n');
     out.push_str("                                Preview-only: this tool never ships.\n\n");
     out.push_str("DIALOGS:\n");
     for (label, _) in DIALOG_BUTTONS {
         out.push_str(&format!("    {label}\n"));
     }
-    out.push_str("\n");
+    out.push('\n');
     out.push_str("NOTES:\n");
     out.push_str("    Each dialog is detached — they are top-level windows, so\n");
     out.push_str("    closing the launcher does not destroy them and you can open\n");
@@ -1283,7 +1283,7 @@ unsafe extern "system" fn wndproc(
                 // sides derive the index the same way, so the combo
                 // and the live bundle chain can't disagree.
                 let start = default_index(&bundles);
-                SendMessageW(combo, CB_SETCURSEL, start as usize, 0);
+                SendMessageW(combo, CB_SETCURSEL, start, 0);
                 let added = SendMessageW(combo, CB_GETCOUNT, 0, 0);
                 log(&format!(
                     "preview i18n: combo filled - CB_GETCOUNT={added}, CB_SETCURSEL={start} (tag `{}`); items: [{}]",
@@ -1444,8 +1444,8 @@ unsafe extern "system" fn wndproc(
         WM_COMMAND => unsafe {
             // LOWORD(wparam) is the control / menu id. Mask off
             // the notification code in the high word.
-            let id = (wparam & 0xFFFF) as usize;
-            let notification = ((wparam >> 16) & 0xFFFF) as usize;
+            let id = wparam & 0xFFFF;
+            let notification = (wparam >> 16) & 0xFFFF;
 
             // The dropdown only means something on a selection change
             // — `CBN_SELENDOK` and friends would be redundant work.
@@ -2033,7 +2033,7 @@ mod tests {
         )
         .unwrap();
 
-        let bundles = build_localisations(&[dir.clone()]).expect("two bundles");
+        let bundles = build_localisations(std::slice::from_ref(&dir)).expect("two bundles");
         let tags: Vec<&str> = bundles.iter().map(|b| b.tag.as_str()).collect();
         assert_eq!(tags, ["de", "ja", "en"]);
         // English last, so the fallback is the baseline the launcher ships.
@@ -2107,9 +2107,9 @@ mod tests {
         // The label must sit to the left of the combo, and the combo's
         // x must be derived from the label's reserved width so the two
         // can't overlap when the label text changes.
-        assert!(COMBO_X > COMBO_LABEL_X, "combo starts right of the label");
+        const { assert!(COMBO_X > COMBO_LABEL_X, "combo starts right of the label") };
         assert_eq!(COMBO_X, COMBO_LABEL_X + COMBO_LABEL_W);
-        assert!(COMBO_LABEL_W > 60, "must fit \"Language:\" at 10pt");
+        const { assert!(COMBO_LABEL_W > 60, "must fit \"Language:\" at 10pt") };
     }
 
     #[test]

@@ -154,7 +154,7 @@ pub fn build_payload(cli: &Cli) -> Result<SnugPayload> {
 /// in the file shouldn't reorder the rest of the chain.
 fn collect_localizations(cli: &Cli) -> Result<Vec<snug_format::Localization>> {
     let mut paths: Vec<std::path::PathBuf> = cli.localizations.clone();
-    paths.sort_by(|a, b| a.cmp(b));
+    paths.sort();
     let bundles = localization::collect(&paths)?;
     localization::ensure_unique_tags(&bundles).context("validating localization bundle tags")?;
     Ok(bundles)
@@ -699,7 +699,7 @@ mod tests {
         // that could quietly regress to a bare "App".
         let cli = Cli::parse_from(["snug"]);
         let out = output_path(&cli);
-        assert_eq!(out.extension().is_some(), true, "got {out:?}");
+        assert!(out.extension().is_some(), "got {out:?}");
     }
 
     #[test]

@@ -22,36 +22,28 @@
 //!
 //! `--kind` selects which dialog:
 //!
-//! - `progress`        — `progress_window::show` (the mockup-aligned
-//!                        download bar window). Accepts `--static`,
-//!                        `--pause`, `<size_mb>`, `<speed_mb_s>` like
-//!                        `progress_preview`. `--no-mascot` is
-//!                        accepted as a no-op for CLI compat.
+//! - `progress` — `progress_window::show`, the mockup-aligned download bar
+//!   window. Accepts `--static`, `--pause`, `<size_mb>`, `<speed_mb_s>` like
+//!   `progress_preview`. `--no-mascot` is accepted as a no-op for CLI
+//!   compat.
 //! - `metadata-failed` — `jdk_install::show_metadata_failed_dialog`.
-//!                        Renders the "Couldn't reach Adoptium" prompt
-//!                        with a fake network error in the expanded
-//!                        details.
-//! - `retry`           — `jdk_install::show_retry_dialog`. Renders
-//!                        the "Try again / Cancel" prompt with a fake
-//!                        transient-failure error.
-//! - `error`           — `jdk_install::show_error_dialog`. Renders the
-//!                        terminal post-install-failure dialog (single
-//!                        OK) with a fake fatal error.
-//! - `early-bail`      — `MessageBoxW` from `src/main.rs`. The fallback
-//!                        shown when the launcher can't even load its
-//!                        embedded payload.
-//! - `install-prompt`  — `prompt_window::show`. Custom-painted
-//!                        modal on the same paint path as the rest of
-//!                        the dialog family (replaced the previous
-//!                        `TaskDialogIndirect` + `MessageBoxW` mirror).
-//!                        Variant name kept as `install-prompt-v5` for
-//!                        backward-compat with any saved bookmarks.
-//! - `java-error`      — `error_window::show` invoked from `main.rs`
-//!                        when a [`LauncherError`] (Java stacktrace,
-//!                        `MainClassNotFound`, `JniCreate`, etc.)
-//!                        surfaces. Same window as `error`, but with
-//!                        copy from `[launcher.error]` in the localization bundle
-//!                        and the optional update-check link visible.
+//!   Renders the "Couldn't reach Adoptium" prompt with a fake network error
+//!   in the expanded details.
+//! - `retry` — `jdk_install::show_retry_dialog`. Renders the
+//!   "Try again / Cancel" prompt with a fake transient-failure error.
+//! - `error` — `jdk_install::show_error_dialog`. Renders the terminal
+//!   post-install-failure dialog (single OK) with a fake fatal error.
+//! - `early-bail` — `MessageBoxW` from `src/main.rs`. The fallback shown
+//!   when the launcher can't even load its embedded payload.
+//! - `install-prompt` — `prompt_window::show`. Custom-painted modal on the
+//!   same paint path as the rest of the dialog family (replaced the previous
+//!   `TaskDialogIndirect` + `MessageBoxW` mirror). Variant name kept as
+//!   `install-prompt-v5` for backward-compat with any saved bookmarks.
+//! - `java-error` — `error_window::show` invoked from `main.rs` when a
+//!   [`LauncherError`] (Java stacktrace, `MainClassNotFound`, `JniCreate`,
+//!   etc.) surfaces. Same window as `error`, but with copy from
+//!   `[launcher.error]` in the localization bundle and the optional
+//!   update-check link visible.
 //!
 //! `--icon normal|warning|error|info` overrides the icon-kind for the
 //! `error` kind. The other kinds pin to whatever the production code

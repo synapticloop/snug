@@ -255,12 +255,12 @@ fn compare_rgba(actual: &image::RgbaImage, expected: &image::RgbaImage) -> Resul
 /// declaration order. `None` when the group is absent or malformed.
 fn group_widths(resources: &editpe::ResourceDirectory) -> Option<Vec<u8>> {
     let editpe::ResourceEntry::Table(group_table) =
-        resources.root().get(&editpe::ResourceEntryName::ID(RT_GROUP_ICON))?
+        resources.root().get(editpe::ResourceEntryName::ID(RT_GROUP_ICON))?
     else {
         return None;
     };
     let editpe::ResourceEntry::Table(dir_table) =
-        group_table.get(&editpe::ResourceEntryName::from_string("MAINICON"))?
+        group_table.get(editpe::ResourceEntryName::from_string("MAINICON"))?
     else {
         return None;
     };
@@ -286,7 +286,7 @@ fn group_widths(resources: &editpe::ResourceDirectory) -> Option<Vec<u8>> {
 /// How many `RT_ICON` entries the file holds, referenced or not.
 fn icon_entry_count(resources: &editpe::ResourceDirectory) -> Option<usize> {
     let editpe::ResourceEntry::Table(table) =
-        resources.root().get(&editpe::ResourceEntryName::ID(RT_ICON))?
+        resources.root().get(editpe::ResourceEntryName::ID(RT_ICON))?
     else {
         return None;
     };

@@ -55,8 +55,7 @@ pub use snug_format::MAGIC;
 /// size.
 pub fn find_in_file(path: &Path) -> Result<Option<SnugEmbedded>, FormatError> {
     let image = Image::parse_file(path).map_err(|e| {
-        FormatError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        FormatError::Io(std::io::Error::other(
             format!("parse self as PE image: {e}"),
         ))
     })?;
@@ -70,8 +69,7 @@ pub fn find_in_file(path: &Path) -> Result<Option<SnugEmbedded>, FormatError> {
         Ok(Some(b)) => b,
         Ok(None) => return Ok(None),
         Err(e) => {
-            return Err(FormatError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            return Err(FormatError::Io(std::io::Error::other(
                 format!("read {PAYLOAD_RESOURCE_NAME} resource: {e}"),
             )))
         }

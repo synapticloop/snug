@@ -150,35 +150,6 @@ fn looks_like_raw_key(s: &str) -> bool {
     s.starts_with("err.") && s.contains('.') && !s.chars().any(char::is_whitespace)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// No `localize::init` has run, so `localize::lookup` returns the
-    /// raw key — we should fall back to the `#[error]` English
-    /// literal and never display `err.io` to the user.
-    #[test]
-    fn localize_falls_back_to_english_when_uninitialised() {
-        let err = LauncherError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "disk on fire",
-        ));
-        let out = localize_launcher_error(&err);
-        assert!(!out.starts_with("err."), "raw key leaked to user: {out:?}");
-        assert!(out.contains("disk on fire"), "fallback lost the source: {out:?}");
-    }
-
-    #[test]
-    fn looks_like_raw_key_distinguishes_keys_from_messages() {
-        assert!(looks_like_raw_key("err.foo"));
-        assert!(looks_like_raw_key("err.java_exception"));
-        // Real English messages start with capital letters and have
-        // spaces — never mistaken for a key.
-        assert!(!looks_like_raw_key("ZIP error: x"));
-        assert!(!looks_like_raw_key("I/O error: x"));
-    }
-}
-
 // These two impls exist for `JavaVM::attach_current_thread`, whose
 // signature requires the closure's error type to be `From<jni::errors::Error>`.
 // That is a bound on the *type*, so it cannot be satisfied by mapping the
@@ -196,5 +167,33 @@ impl From<jni::errors::Error> for LauncherError {
 impl From<jni::errors::StartJvmError> for LauncherError {
     fn from(e: jni::errors::StartJvmError) -> Self {
         LauncherError::JniCreate(e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// No `localize::init` has run, so `localize::lookup` returns the
+    /// raw key — we should fall back to the `#[error]` English
+    /// literal and never display `err.io` to the user.
+    #[test]
+    fn localize_falls_back_to_english_when_uninitialised() {
+        let err = LauncherError::Io(std::io::Error::other(
+            "disk on fire",
+        ));
+        let out = localize_launcher_error(&err);
+        assert!(!out.starts_with("err."), "raw key leaked to user: {out:?}");
+        assert!(out.contains("disk on fire"), "fallback lost the source: {out:?}");
+    }
+
+    #[test]
+    fn looks_like_raw_key_distinguishes_keys_from_messages() {
+        assert!(looks_like_raw_key("err.foo"));
+        assert!(looks_like_raw_key("err.java_exception"));
+        // Real English messages start with capital letters and have
+        // spaces — never mistaken for a key.
+        assert!(!looks_like_raw_key("ZIP error: x"));
+        assert!(!looks_like_raw_key("I/O error: x"));
     }
 }

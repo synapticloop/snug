@@ -36,7 +36,7 @@ pub struct LauncherConfig {
 }
 
 /// Windows version-resource metadata + cache-key identity.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AppMetadata {
     /// Display name (e.g. `"My App"`). Maps to `ProductName` and
     /// `FileDescription` in the version resource.
@@ -64,22 +64,7 @@ pub struct AppMetadata {
     /// latest" messages without forcing users to read the error text.
     #[serde(default)]
     pub update_check_url: Option<String>,
-}
-
-impl Default for AppMetadata {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            company: String::new(),
-            version: String::new(),
-            description: None,
-            copyright: None,
-            update_check_url: None,
-        }
-    }
-}
-
-/// Optional native splash shown by the launcher before the JVM is loaded.
+}/// Optional native splash shown by the launcher before the JVM is loaded.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SplashConfig {
     /// Minimum display duration in milliseconds. The splash is dismissed

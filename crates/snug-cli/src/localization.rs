@@ -369,7 +369,7 @@ mod tests {
         )
         .unwrap();
         write_full_bundle(&dir, "de");
-        let bundles = collect(&[dir.clone()]).unwrap();
+        let bundles = collect(std::slice::from_ref(&dir)).unwrap();
         let tags: std::collections::HashSet<&str> =
             bundles.iter().map(|b| b.tag.as_str()).collect();
         assert_eq!(tags, ["en", "de"].into_iter().collect());
@@ -527,7 +527,7 @@ mod tests {
         write_full_bundle(&dir, "de");
         write_full_bundle(&dir, "ja");
         write_full_bundle(&dir, "pt-BR");
-        let bundles = collect(&[dir.clone()]).unwrap();
+        let bundles = collect(std::slice::from_ref(&dir)).unwrap();
         // baseline + 3 expanded files
         assert_eq!(bundles.len(), 4);
         assert_eq!(bundles[0].tag, DEFAULT_EN_TAG);
@@ -545,7 +545,7 @@ mod tests {
         write_full_bundle(&dir, "de");
         // A stray README next to the canonical bundle must fail the build.
         std::fs::write(dir.join("README.md"), "hello\n").unwrap();
-        let err = collect(&[dir.clone()]).unwrap_err();
+        let err = collect(std::slice::from_ref(&dir)).unwrap_err();
         let msg = format!("{err:#}");
         assert!(
             msg.contains("non-matching file") && msg.contains("README.md"),
@@ -556,7 +556,7 @@ mod tests {
     #[test]
     fn collect_directory_errors_on_empty_directory() {
         let dir = tmpdir();
-        let err = collect(&[dir.clone()]).unwrap_err();
+        let err = collect(std::slice::from_ref(&dir)).unwrap_err();
         let msg = format!("{err:#}");
         assert!(
             msg.contains("contains no `snug-localisations"),
@@ -572,7 +572,7 @@ mod tests {
         let nested = dir.join("nested");
         std::fs::create_dir_all(&nested).unwrap();
         write_full_bundle(&nested, "de");
-        let err = collect(&[dir.clone()]).unwrap_err();
+        let err = collect(std::slice::from_ref(&dir)).unwrap_err();
         let msg = format!("{err:#}");
         assert!(
             msg.contains("contains no `snug-localisations"),

@@ -114,7 +114,7 @@ fn stamp_icon_version_and_manifest_then_roundtrip() {
 
     // --- subsystem --------------------------------------------------------
     // The launcher's GUI subsystem should be preserved (or set) after stamp.
-    assert_eq!(image.subsystem(), editpe::constants::IMAGE_SUBSYSTEM_WINDOWS_GUI as u16);
+    assert_eq!(image.subsystem(), editpe::constants::IMAGE_SUBSYSTEM_WINDOWS_GUI);
 }
 
 #[test]

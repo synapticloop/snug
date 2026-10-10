@@ -477,7 +477,7 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
                     // debugging in console runs. The GUI subsystem
                     // build swallows stderr, so this is best-effort.
                     if env.exception_check() {
-                        let _ = env.exception_describe();
+                        env.exception_describe();
                     }
 
                     // Extract just the user-facing detail message
@@ -578,7 +578,7 @@ fn take_exception_message(env: &mut jni::Env<'_>) -> Option<String> {
                 // the object isn't null. `to_string()` here is the
                 // `Display::to_string` blanket impl (returns owned
                 // `String`).
-                let jstring: JString = (&*env).cast_local::<JString>(obj).ok()?;
+                let jstring: JString = env.cast_local::<JString>(obj).ok()?;
                 Some(jstring.to_string())
             }
         })
@@ -587,7 +587,7 @@ fn take_exception_message(env: &mut jni::Env<'_>) -> Option<String> {
     // Always clear the pending exception so subsequent JNI calls
     // (including the `attach_current_thread` return path) aren't
     // poisoned.
-    (&*env).exception_clear();
+    env.exception_clear();
 
     let detail = detail_msg.unwrap_or_default();
     let trimmed = detail.trim();
@@ -1052,7 +1052,7 @@ fn collect_argv() -> Vec<String> {
             while *p.add(len) != 0 {
                 len += 1;
             }
-            let slice = std::slice::from_raw_parts(p, len as usize);
+            let slice = std::slice::from_raw_parts(p, len);
             out.push(String::from_utf16_lossy(slice));
         }
         LocalFree(argv_w as *mut _);
