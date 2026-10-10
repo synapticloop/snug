@@ -170,7 +170,7 @@ if "!CROSS_COMPILE!"=="1" (
     set "BUILD_PREVIEW_CMD=cargo zigbuild --target !TARGET_TRIPLE! --release -p snug-launcher --bin snug_preview"
     set "BUILT_DROPPER_EXE=target\!TARGET_TRIPLE!\release\snug-dropper.exe"
     set "BUILT_DROPPER_STAMP_EXE=target\!TARGET_TRIPLE!\release\stamp_dropper_icon.exe"
-    set "BUILD_DROPPER_CMD=cargo zigbuild --target !TARGET_TRIPLE! --release -p snug-dropper --bin stamp_dropper_icon"
+    set "BUILD_DROPPER_CMD=cargo zigbuild --target !TARGET_TRIPLE! --release -p snug-dropper"
     where cargo-zigbuild >nul 2>nul
     if errorlevel 1 (
         echo [build-windows] --CrossCompile requires cargo-zigbuild on PATH. Install with:
@@ -191,7 +191,15 @@ if "!CROSS_COMPILE!"=="1" (
     set "BUILD_PREVIEW_CMD=cargo build --release -p snug-launcher --bin snug_preview"
     set "BUILT_DROPPER_EXE=target\release\snug-dropper.exe"
     set "BUILT_DROPPER_STAMP_EXE=target\release\stamp_dropper_icon.exe"
-    set "BUILD_DROPPER_CMD=cargo build --release -p snug-dropper --bin stamp_dropper_icon"
+    REM No --bin here on purpose. snug-dropper has two bin targets: the
+    REM shipped shim (src\main.rs, the `[[bin]]`) and the post-build stamp
+    REM helper (src\bin\stamp_dropper_icon.rs, auto-discovered). Naming
+    REM only the helper builds only the helper, so BUILT_DROPPER_EXE was
+    REM never produced and this step exited 1 on any clean tree -- masked
+    REM locally by a stale target\release\snug-dropper.exe, never masked
+    REM in CI, where every earlier build is the debug profile. `-p` with no
+    REM --bin builds both, which is the set the checks below expect.
+    set "BUILD_DROPPER_CMD=cargo build --release -p snug-dropper"
 )
 
 REM Derived *after* the triple is chosen, because with delayed expansion
