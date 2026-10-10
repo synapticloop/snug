@@ -195,11 +195,6 @@ git add bin\launcher-stub-windows-x86_64.exe
 - **Why it matters more than it looks:** `--find-main` exists so its output can be copied into `--main-class`, and a name that is not a class cannot be pasted. `Helper`, which existed *only* in the overlay, was likewise offered as launchable.
 - **Test:** `multi_release_overlays_are_not_reported_as_entry_points` builds a JAR with a root `com/example/Main.class` plus two overlays. Mutation-verified: removing the skip fails it and nothing else.
 - **File:** `crates/snug-cli/src/classfile.rs:109-121`
-- **Status:** `TODO`
-- **File:** `crates/snug-cli/src/classfile.rs:109`, `:136`, `:289-294`
-- **Trigger:** Any JAR with `Multi-Release: true`.
-- **Impact:** The skip matches only the exact name `module-info.class`, so `META-INF/versions/<n>/…` entries are scanned and `/` → `.`, giving `--find-main` output like `META-INF.versions.17.com.example.Main`. That is the diagnostic users are told to copy into `--main-class`, producing a launcher that cannot start.
-- **Fix:** Skip entries under `META-INF/versions/` in `find_main_classes`.
 ### F-14 — A non-UTF-8 manifest aborts the entire build
 - **Status:** `DONE`
 - **Fixed:** 2026-10-10. `read_to_string` returns `Err` on invalid UTF-8 and the caller made that fatal, so a single Latin-1 byte in an unrelated `Name:` attribute made `snug` refuse a JAR that `java -jar` runs — with the error pointing at the archive, not the attribute. Now reads bytes and decodes with `from_utf8_lossy`.
@@ -207,11 +202,6 @@ git add bin\launcher-stub-windows-x86_64.exe
 - **Note:** `survey_main_classes` swallowed this same failure, so `--find-main` reported "no main class" where the build reported a hard error. Both now agree.
 - **Test:** drives the real `read_main_class_from_bytes` over a zip with a deliberately mis-encoded manifest. Mutation-verified — reverting to `read_to_string` fails it. A first draft called `String::from_utf8_lossy` directly and so tested the standard library rather than this change; rewritten after noticing.
 - **File:** `crates/snug-cli/src/manifest.rs:45-58`
-- **Status:** `TODO`
-- **File:** `crates/snug-cli/src/manifest.rs:45-48`, propagated at `crates/snug-cli/src/build.rs:52-53`
-- **Trigger:** A JAR whose `META-INF/MANIFEST.MF` contains any non-UTF-8 byte (e.g. a Latin-1 `Name:` section).
-- **Impact:** `read_to_string` fails and becomes a hard `?`, so `snug` refuses a JAR that `java -jar` runs happily, pointing at the JAR rather than the one bad attribute. One call away, `survey_main_classes` swallows the identical failure, so `--find-main` reports "no main class" instead.
-- **Fix:** `String::from_utf8_lossy` the bytes — the parser only ever looks for an ASCII `Main-Class:` header.
 ### F-15 — The terminal JDK-failure dialog renders no error text
 - **Status:** `DONE`
 - **Fixed:** 2026-10-10. `jdk_install.failure.content` was **empty**, and the caller substitutes `{version}` and `{error}` *into* it — so `fill("", …)` returned `""` and the substitution was dead code. It is now `Eclipse Temurin {version} could not be installed. Technical detail:\n{error}`, mirroring `jdk_install.retry.content = {error}` and `jdk_install.metadata_failed.content = Technical detail:\n{error}`.
@@ -231,11 +221,6 @@ git add bin\launcher-stub-windows-x86_64.exe
 - **Fixed:** 2026-10-10. `FlagSpec::from_cli` recorded every value-taking arg, but `require_equals` opts an arg out of consuming a *separate* token — `--download-jdk auto` leaves `auto` as a positional. The value-skip therefore ate whatever followed, so `snug App.jar --download-jdk --name "X"` consumed `--name`, the file's own `--name` was not stripped as overridden, and clap aborted with "cannot be used multiple times". Now gated on `!arg.is_require_equals_set()`.
 - **Test:** `a_require_equals_flag_does_not_swallow_the_next_token`, asserting the CLI value survives and the file's is the one dropped. Mutation-verified — the pre-fix failure output shows the old shape, with the file's `--name` *also* still present.
 - **File:** `crates/snug-cli/src/options_file.rs:532-543`
-- **Status:** `TODO`
-- **File:** `crates/snug-cli/src/cli.rs:308-317`, `crates/snug-cli/src/options_file.rs:532-535`, `:604-606`, `:687-691`
-- **Trigger:** `snug app.jar --download-jdk --name "CLI Name"`.
-- **Impact:** The arg is `require_equals = true, num_args = 0..=1`, so clap never consumes a following token — but `FlagSpec` derives `takes_value` from `ArgAction::takes_values()` and sets `skip_next`, eating `--name`. The file's `--name` is then not stripped and clap aborts with "the argument '--name <NAME>' cannot be used multiple times" — exactly what `FlagSpec` was written to eliminate. The attached `--download-jdk=auto` in your own `snug.options` is unaffected; the bare spelling is what `cli.rs:296-298` and `assets/snug.options.example:171` document.
-- **Fix:** Gate the `takes_value` insert on `!arg.is_require_equals_set()`.
 ### F-17 — A UTF-8 BOM turns the first option into an unknown argument
 - **Status:** `DONE`
 - **Fixed:** 2026-10-10. `load` now strips a leading `\u{feff}`. `String::trim()` does **not** remove it — U+FEFF is not Unicode whitespace — so the first token became `"\u{feff}--name"`, `long_flag_name` did not match, and clap reported an unknown argument with an invisible character in front of it.
@@ -243,11 +228,6 @@ git add bin\launcher-stub-windows-x86_64.exe
 - **Relevance:** Windows editors add a BOM silently, and PowerShell 5.1's `Out-File` / `Set-Content -Encoding UTF8` add one whether or not the author asked — which is exactly how these files get written here.
 - **Tests:** `load_skips_a_leading_utf8_bom` and `a_bom_only_file_yields_no_options`. Mutation-verified — removing the strip fails both and nothing else.
 - **File:** `crates/snug-cli/src/options_file.rs:220-233`
-- **Status:** `TODO`
-- **File:** `crates/snug-cli/src/options_file.rs:220-243`
-- **Trigger:** A `snug.options` saved with a BOM — PowerShell 5.1 `Out-File` / `Set-Content -Encoding UTF8`, or many Windows editors.
-- **Impact:** `read_to_string` keeps U+FEFF and `str::trim()` does not remove it (it isn't Unicode whitespace), so the first token becomes `"\u{feff}--name"`. `long_flag_name` fails to match, clap reports `unexpected argument '﻿--name' found` with an invisible character, and `cli_has_positional` (`:650`) counts it as a positional so the file's `--input` is stripped for the wrong reason — one bad byte, two misleading signals.
-- **Fix:** Strip a leading `\u{feff}` from `content` in `load`.
 ### F-18 — `SnugPayload.icon` is a dead field that doubles every EXE's icon bytes
 - **Status:** `TODO`
 - **File:** `crates/snug-format/src/payload.rs:42-50`, populated at `crates/snug-cli/src/build.rs:60-63`, stamped from `crates/snug-cli/src/resources.rs:50`
