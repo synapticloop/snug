@@ -91,6 +91,19 @@ if ($CheckOnly) {
     }
     Copy-Item $fresh $stub -Force
     Write-Host "[refresh-stub] copied $fresh -> $stub"
+
+    # Record which source this stub now corresponds to. CI checks this rather
+    # than the binary's bytes: a byte comparison spans two machines and can
+    # never hold (different rustc, linker and SDK), whereas "the launcher
+    # source has not moved since the stub was built" is true regardless of
+    # who built it. See launcher-source-fingerprint.ps1.
+    . (Join-Path $PSScriptRoot 'launcher-source-fingerprint.ps1')
+    $fingerprint = Get-LauncherSourceFingerprint -Repo $repo
+    [System.IO.File]::WriteAllText(
+        (Join-Path $repo 'bin\launcher-stub.source'),
+        "$fingerprint`r`n",
+        [System.Text.UTF8Encoding]::new($false))
+    Write-Host "[refresh-stub] launcher source fingerprint: $fingerprint"
 }
 
 $after = Get-StubState

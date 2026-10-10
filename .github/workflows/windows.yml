@@ -86,60 +86,47 @@ jobs:
       - name: Test (full run, no fail-fast)
         run: cargo test --workspace --lib --bins --tests --no-fail-fast
 
-      # The committed stub's hash, taken BEFORE the pipeline runs. That
-      # ordering is load-bearing: step 2 of build-windows.cmd copies the
-      # fresh launcher over bin\, so comparing afterwards would compare the
-      # file against itself and always pass.
-      - name: Record the committed stub's hash
-        id: stub
-        shell: pwsh
-        run: |
-          . .\scripts\pe-stable-hash.ps1
-          $h = Get-PeStableHash "bin\launcher-stub-windows-x86_64.exe"
-          "hash=$h" >> $env:GITHUB_OUTPUT
-          Write-Host "committed stub: $h"
 
       # The real pipeline. This is what proves the stub, the three icon
       # stamps and the staged release folder all agree - steps 1-10 of the
-      # script, including `verify_icons` and the embedded-stub sha256
-      # check.
+      # script, including `verify_icons` and the embedded-stub check.
       #
       # It needs the packaged demo JAR, which is committed, and the
       # `snug.options` + `snug.windows.options` pair, likewise.
       - name: Run the Windows release pipeline
         run: .\scripts\build-windows.cmd
 
-      # Compare the freshly built launcher against the hash recorded above.
-      # A difference means snug-launcher changed without bin\ being
-      # refreshed, which is the exact state the committed stub exists to
-      # prevent - a clone would otherwise build a launcher that silently
-      # predates the source.
+      # The committed stub must correspond to the *current* launcher source.
       #
-      # `Get-PeStableHash`, not `Get-FileHash`: MSVC stamps wall-clock link
-      # time into the PE header and a fresh random GUID plus an absolute
-      # PDB path into the CodeView record, so two links of identical source
-      # never produce the same bytes and a raw hash could never match. The
-      # helper zeroes exactly those fields. Measured on this repo: two
-      # release links 44s apart differ in 20 raw bytes across three fields,
-      # and hash identically once normalised.
-      - name: The committed stub matches a fresh build
+      # This used to compare the stub's bytes against a fresh build, which
+      # cannot work: it spans two machines. This repo's Windows workstation
+      # and the `windows-latest` runner disagreed on rustc (1.95.0 vs 1.98.1,
+      # different LLVM), and the MSVC linker and Windows SDK are whatever
+      # each host happens to have. So it reported "out of date" on a
+      # correctly refreshed stub -- crying wolf, worse than no check. It had
+      # in fact never even run: a here-string's closing "@ must start in
+      # column 0 of the *generated* script, YAML decides that by stripping
+      # the block indent, and the step failed to parse.
+      #
+      # Staleness is a property of the source, so hash the source. Nothing
+      # outside the repository can make this disagree. It does not prove the
+      # stub *was* built from this source -- someone could update the
+      # recorded fingerprint by hand -- but the accident it prevents,
+      # editing platform\windows.rs and shipping last release's launcher, is
+      # the one that actually happens.
+      #
+      # No here-string here: see above.
+      - name: The committed stub matches the current launcher source
         shell: pwsh
         run: |
-          . .\scripts\pe-stable-hash.ps1
-          $fresh = "target\release\snug-launcher.exe"
-          if (-not (Test-Path $fresh)) { throw "no fresh launcher at $fresh" }
-          $a = Get-PeStableHash $fresh
-          $b = "${{ steps.stub.outputs.hash }}"
-          if ($a -ne $b) {
-            # A here-string would be wrong here: its closing "@ has to start in
-            # column 0 of the *generated* script, and YAML decides that by
-            # stripping the block indent. Getting it wrong does not fail the
-            # comparison, it fails to parse -- which is what happened, for as
-            # long as this step existed.
-            Write-Error "bin\launcher-stub-windows-x86_64.exe is out of date.`n`n  committed: $b`n  fresh:     $a`n`nRun scripts\refresh-stub.ps1 and commit the refreshed stub.`nIt is a bootstrap convenience, not the source of truth, but a clone that`nbuilds a stale launcher is worse than one that fails loudly."
+          . .\scripts\launcher-source-fingerprint.ps1
+          $current = Get-LauncherSourceFingerprint -Repo (Get-Location).Path
+          $recorded = (Get-Content bin\launcher-stub.source -Raw).Trim()
+          if ($current -ne $recorded) {
+            Write-Error "bin\launcher-stub-windows-x86_64.exe is stale.`n`n  launcher source now: $current`n  stub was built from: $recorded`n`nThe launcher source changed without the committed stub being rebuilt, so a`nclone would embed last release's launcher. Run scripts\refresh-stub.ps1 and`ncommit both files."
             exit 1
           }
-          Write-Host "committed stub matches the fresh build: $a"
+          Write-Host "committed stub matches the current launcher source: $current"
 
       # Cheap, and it keeps a failure from being debugged through three
       # earlier steps first. `continue-on-error` because the workspace has

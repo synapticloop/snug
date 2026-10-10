@@ -1,0 +1,19 @@
+# Pin the compiler.
+#
+# `windows-latest` ships whatever stable the image was built with, and that
+# moves under us: the first attempt at the stub check compared rustc 1.95.0
+# on this workstation against 1.98.1 on the runner (different LLVM versions
+# too), so the two builds could never agree however correctly the stub was
+# refreshed. Nothing in the repository recorded that, which meant the build
+# silently changed whenever Microsoft updated the image.
+#
+# Channel is exact rather than "stable" for that reason. Bump it deliberately,
+# and refresh bin\launcher-stub-windows-x86_64.exe at the same time via
+# scripts\refresh-stub.ps1.
+#
+# This pins rustc only. The MSVC linker and Windows SDK still come from
+# whatever the host has, which is why the stub check now compares the
+# launcher *source* fingerprint rather than the built binary -- see
+# scripts\launcher-source-fingerprint.ps1.
+[toolchain]
+channel = "1.98.1"
