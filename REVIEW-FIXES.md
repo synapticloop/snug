@@ -1,7 +1,8 @@
 # snug — code review fix list
 
 Read-only code review of the workspace at `c94b3c9` (5 crates, ~28.5k lines).
-**28 findings**, ordered by priority. macOS-only findings are excluded by request.
+**29 findings** (28 from the review round, plus F-29 found while fixing F-05),
+ordered by priority. macOS-only findings are excluded by request.
 
 ## How to use this file
 
@@ -27,6 +28,8 @@ Nothing in this review has been changed except items explicitly marked `DONE`.
 | ✅ `F-03` | Stub-hash check — normalised via `scripts/pe-stable-hash.ps1`, verified reproducible |
 | ✅ `F-04` | Dropper dialogs — caption/body swap fixed (F-04) and the overwrite prompt reworded |
 | ✅ `F-05` | Cancel during verify/extract — now honoured, and no longer overruled by the worker |
+| ✅ `F-06` | Windows JNI version follows the discovered JVM (ported from macOS) |
+| ✅ `F-07` | A too-old JDK no longer aborts the scan (ported from macOS, plus its diagnostic kept) |
 | ✅ `F-29` | Concurrent JDK installs — staging + atomic publish + cross-process lock |
 
 ### Next action required before CI is green
@@ -122,15 +125,21 @@ git add bin\launcher-stub-windows-x86_64.exe
 ## P1 — Windows runtime correctness (the shipping platform)
 
 ### F-06 — Windows still pins `JNIVersion::V21`
-- **Status:** `TODO`
-- **File:** `crates/snug-launcher/src/platform/windows.rs:308`
+- **Status:** `DONE`
+- **Fixed:** 2026-10-10. Ported `jni_version_for` from `platform/macos.rs:875-891` (added in `8c32c1d`, never backported) and wired it at `windows.rs:308`, which now reads the discovered major via `read_java_major` and logs the JNI level it is requesting.
+- **Tests:** `jni_version_never_exceeds_the_discovered_jvm` — the two-sided invariant: never below the VM's floor, never above the spec's ceiling (`JNI_VERSION_21` is the highest `JNI_CreateJavaVM` accepts; there is no 22/23/24/25).
+- **Known coverage limit:** this test pins the *function*, not the wiring at `:308`. Re-pointing `create_vm_args.version(...)` back at a constant would not fail it. Asserting the wiring needs the launch path and a real JVM, so it stays a manual check — worth knowing rather than assuming.
+- **File:** `crates/snug-launcher/src/platform/windows.rs:308`, `:885-914`
 - **Trigger:** `snug App.jar -o App.exe --min-java 17`. Discovery accepts a Java 17, then `InitArgsBuilder` asks for a JNI 21 entry point that isn't in it.
 - **Impact:** `JavaVM::with_libjvm` fails with a useless `JNI_CreateJavaVM failed: …` on a machine discovery just reported as conforming.
 - **Fix:** Port `jni_version_for` from `platform/macos.rs:859-891` (self-contained, already has 9 tests). **The macOS twin was fixed and Windows was not.**
 
 ### F-07 — One too-old JDK aborts the entire Windows discovery scan
-- **Status:** `TODO`
-- **File:** `crates/snug-launcher/src/platform/windows.rs:695-712`, call sites `:636-690`
+- **Status:** `DONE`
+- **Fixed:** 2026-10-10. `check_candidate` returns `Err(JvmTooOld)` and every call site propagated it with `?`, so the first too-old candidate ended discovery. Ported `scan_candidate` from `macos.rs:977-992` and switched the three *survey* steps onto it — `PATH`, the registry walk, and `try_common`. The first three steps (`--jvm-home`, `JAVA_HOME`, `JDK_HOME`) deliberately keep `check_candidate`, because those are explicit choices and "you have Java 11, you need 25" is the answer the user wants rather than something to scan past.
+- **⚠️ Not a blind port — the macOS twin has a gap.** `macos.rs` records `too_old` and then returns `Ok(None)` at `:1068` without ever reading it, so the "you have Java 11, you need 25" message is silently lost; its test only asserts the *recording*. Windows keeps the diagnostic: `discover_jvm` returns `JvmTooOld` at the end if the scan found nothing and remembered something. Windows is therefore strictly better than the reference it was copied from. **The macOS gap is still there** — worth a follow-up if macOS is ever in scope.
+- **Tests:** 3 new, and mutation-verified. Reverting `scan_candidate` to propagate the error makes exactly the two F-07 tests fail, which is what makes them regression tests rather than assertions of current behaviour. `an_explicit_choice_of_a_too_old_jdk_is_still_an_error` is the deliberate complement: it proves `check_candidate` *does* reject the old JDK, which is why the scan must not use it.
+- **File:** `crates/snug-launcher/src/platform/windows.rs:695-712`, `:627-693`
 - **Trigger:** Oracle JDK 11 registered under `JavaSoft\JDK` (scanned first, `:672`) plus Adoptium 25. `check_candidate` returns `Err(LauncherError::JvmTooOld)` and every call site propagates with `?`.
 - **Impact:** Discovery stops at the old JDK; the user is told to fix `JAVA_HOME`/`PATH` or uninstall, despite a conforming Java 25 being installed. Commit `8c32c1d` fixed exactly this for macOS via `scan_candidate` (`macos.rs:977-992`) and never touched the Windows twin.
 - **Fix:** Port `scan_candidate` to `windows.rs`; step over too-old candidates, reporting the remembered one only if nothing qualifies.
