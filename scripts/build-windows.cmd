@@ -159,7 +159,7 @@ set "RELEASE_DIR=release"
 REM ---------------------------------------------------------------------------
 REM Every cargo call below goes through scripts\cargo-repro.ps1, which sets
 REM CARGO_ENCODED_RUSTFLAGS for the reproducible-build remapping. See
-REM scripts\reproducible-build.ps1 for why the launcher is not reproducible
+REM reproducible-build.ps1 for why the launcher is not reproducible
 REM across checkouts without it, and why the flag separator (\x1f) means this
 REM script cannot set the variable itself.
 REM
@@ -257,7 +257,7 @@ if "!SKIP_LAUNCHER_REBUILD!"=="1" goto skip_launcher_rebuild
 
 echo.
 echo ==^> cargo !CARGO_LAUNCHER_ARGS!
-powershell -NoProfile -ExecutionPolicy Bypass -File "!_SCRIPT_DIR!scripts\cargo-repro.ps1" !CARGO_LAUNCHER_ARGS!
+powershell -NoProfile -ExecutionPolicy Bypass -File "!_SCRIPT_DIR!cargo-repro.ps1" !CARGO_LAUNCHER_ARGS!
 if errorlevel 1 (
     echo [build-windows] launcher build failed with exit code %errorlevel%
     exit /b %errorlevel%
@@ -292,7 +292,7 @@ REM ---------------------------------------------------------------------------
 
 echo.
 echo ==^> cargo !CARGO_CLI_ARGS!
-powershell -NoProfile -ExecutionPolicy Bypass -File "!_SCRIPT_DIR!scripts\cargo-repro.ps1" !CARGO_CLI_ARGS!
+powershell -NoProfile -ExecutionPolicy Bypass -File "!_SCRIPT_DIR!cargo-repro.ps1" !CARGO_CLI_ARGS!
 if errorlevel 1 (
     echo [build-windows] CLI build failed with exit code %errorlevel%
     exit /b %errorlevel%
@@ -381,7 +381,7 @@ REM ---------------------------------------------------------------------------
 
 echo.
 echo ==^> cargo !CARGO_STAMP_ARGS!
-powershell -NoProfile -ExecutionPolicy Bypass -File "!_SCRIPT_DIR!scripts\cargo-repro.ps1" !CARGO_STAMP_ARGS!
+powershell -NoProfile -ExecutionPolicy Bypass -File "!_SCRIPT_DIR!cargo-repro.ps1" !CARGO_STAMP_ARGS!
 if errorlevel 1 (
     echo [build-windows] stamp_preview_icon build failed with exit code %errorlevel%
     exit /b %errorlevel%
@@ -422,7 +422,7 @@ if "!SKIP_DEV_TOOLS!"=="1" goto skip_dev_tools
 
 echo.
 echo ==^> cargo !CARGO_PREVIEW_ARGS!
-powershell -NoProfile -ExecutionPolicy Bypass -File "!_SCRIPT_DIR!scripts\cargo-repro.ps1" !CARGO_PREVIEW_ARGS!
+powershell -NoProfile -ExecutionPolicy Bypass -File "!_SCRIPT_DIR!cargo-repro.ps1" !CARGO_PREVIEW_ARGS!
 if errorlevel 1 (
     echo [build-windows] snug_preview build failed with exit code %errorlevel%
     exit /b %errorlevel%
@@ -470,7 +470,7 @@ if "!SKIP_DROPPER!"=="1" goto skip_dropper
 
 echo.
 echo ==^> cargo !CARGO_DROPPER_ARGS!
-powershell -NoProfile -ExecutionPolicy Bypass -File "!_SCRIPT_DIR!scripts\cargo-repro.ps1" !CARGO_DROPPER_ARGS!
+powershell -NoProfile -ExecutionPolicy Bypass -File "!_SCRIPT_DIR!cargo-repro.ps1" !CARGO_DROPPER_ARGS!
 if errorlevel 1 (
     echo [build-windows] dropper build failed with exit code %errorlevel%
     exit /b %errorlevel%
