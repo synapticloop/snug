@@ -131,17 +131,12 @@ jobs:
           $a = Get-PeStableHash $fresh
           $b = "${{ steps.stub.outputs.hash }}"
           if ($a -ne $b) {
-            Write-Error @"
-            bin\launcher-stub-windows-x86_64.exe is out of date.
-
-              committed: $b
-              fresh:     $a
-
-            Run scripts\build-windows.cmd on a Windows host and commit the
-            refreshed stub. It is a bootstrap convenience, not the source of
-            truth, but a clone that builds a stale launcher is worse than
-            one that fails loudly.
-            "@
+            # A here-string would be wrong here: its closing "@ has to start in
+            # column 0 of the *generated* script, and YAML decides that by
+            # stripping the block indent. Getting it wrong does not fail the
+            # comparison, it fails to parse -- which is what happened, for as
+            # long as this step existed.
+            Write-Error "bin\launcher-stub-windows-x86_64.exe is out of date.`n`n  committed: $b`n  fresh:     $a`n`nRun scripts\refresh-stub.ps1 and commit the refreshed stub.`nIt is a bootstrap convenience, not the source of truth, but a clone that`nbuilds a stale launcher is worse than one that fails loudly."
             exit 1
           }
           Write-Host "committed stub matches the fresh build: $a"
