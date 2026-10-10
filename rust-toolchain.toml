@@ -15,5 +15,12 @@
 # whatever the host has, which is why the stub check now compares the
 # launcher *source* fingerprint rather than the built binary -- see
 # scripts\launcher-source-fingerprint.ps1.
+#
+# `components` matters on its own account: pinning the channel makes rustup
+# install that toolchain on a fresh machine and in CI, and without this the
+# clippy step dies with "'cargo-clippy.exe' is not installed for the
+# toolchain '1.98.1-...'". Anyone cloning the repo gets clippy too, rather
+# than discovering the gap the first time they run it.
 [toolchain]
 channel = "1.98.1"
+components = ["clippy"]
