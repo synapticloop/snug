@@ -218,10 +218,22 @@ pub fn find_options_flag(raw_args: &[String]) -> Option<PathBuf> {
 /// skipped. Each remaining line is split by [`tokenise`], which honours
 /// double-quoted and single-quoted strings.
 pub fn load(path: &Path) -> Result<Vec<String>, OptionsFileError> {
-    let content = std::fs::read_to_string(path).map_err(|source| OptionsFileError::Io {
+    let mut content = std::fs::read_to_string(path).map_err(|source| OptionsFileError::Io {
         path: path.to_path_buf(),
         source,
     })?;
+    // Strip a UTF-8 BOM. Editors on Windows add one silently, and
+    // PowerShell 5.1's `Out-File`/`Set-Content -Encoding UTF8` add one
+    // even when the author never asked. `String::trim()` does not remove
+    // U+FEFF -- it is not Unicode whitespace -- so the first token became
+    // "\u{feff}--name", `long_flag_name` did not match it, and clap
+    // reported an unknown argument with an invisible character in front
+    // of it. It also slipped past the positional count, so the file's
+    // `--input` was stripped for the wrong reason: two misleading
+    // symptoms from one stray byte.
+    if let Some(rest) = content.strip_prefix('\u{feff}') {
+        content = rest.to_string();
+    }
     let mut tokens = Vec::new();
     for (idx, line) in content.lines().enumerate() {
         let trimmed = line.trim();
@@ -530,7 +542,17 @@ impl FlagSpec {
             // silently turns off the value-skipping below and lets a
             // flag's value survive as a stray positional.
             let action = arg.get_action();
-            if action.takes_values() {
+            // `require_equals` opts an arg out of consuming a following
+            // token: `--download-jdk auto` leaves `auto` as a positional,
+            // and only `--download-jdk=auto` carries a value. So such an
+            // arg must NOT be recorded as value-taking, or the value-skip
+            // below swallows whatever comes next. Without this,
+            // `snug App.jar --download-jdk --name "X"` ate `--name`, the
+            // file's own `--name` was then not stripped as overridden,
+            // and clap aborted with "cannot be used multiple times".
+            let consumes_separate_value =
+                action.takes_values() && !arg.is_require_equals_set();
+            if consumes_separate_value {
                 spec.takes_value.insert(canonical.clone());
             }
             if matches!(action, clap::ArgAction::Append) {
@@ -840,6 +862,78 @@ mod tests {
     fn find_options_flag_absent() {
         let a = args(&["snug", "app.jar", "--name", "Foo"]);
         assert_eq!(find_options_flag(&a), None);
+    }
+
+    #[test]
+    fn load_skips_a_leading_utf8_bom() {
+        // Windows editors add a BOM silently, and PowerShell 5.1's
+        // `Out-File`/`Set-Content -Encoding UTF8` add one even when the
+        // author never asked. `str::trim` does not remove U+FEFF -- it is
+        // not Unicode whitespace -- so without this the first token is
+        // "\u{feff}--name": clap reports an unknown argument with an
+        // invisible character in front of it, and the stray token also
+        // inflates the positional count so the file's `--input` gets
+        // stripped for the wrong reason. Two misleading symptoms from one
+        // byte.
+        let dir = tempdir();
+        let f = dir.join("snug.options");
+        let body = "--name \"My App\"\n--company Acme\n";
+        std::fs::write(&f, format!("\u{feff}{body}")).unwrap();
+
+        let tokens = load(&f).unwrap();
+        assert_eq!(
+            tokens,
+            vec!["--name".to_string(), "My App".to_string(), "--company".to_string(), "Acme".to_string()],
+            "a BOM must not survive into the first token"
+        );
+        // And the first token must still be recognised as a flag.
+        assert_eq!(
+            long_flag_name(&tokens[0]),
+            Some("name".to_string()),
+            "the first token is no longer a recognisable flag"
+        );
+    }
+
+    #[test]
+    fn a_bom_only_file_yields_no_options() {
+        let dir = tempdir();
+        let f = dir.join("snug.options");
+        std::fs::write(&f, "\u{feff}").unwrap();
+        assert!(load(&f).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_require_equals_flag_does_not_swallow_the_next_token() {
+        // `--download-jdk` is declared `require_equals`, so clap never
+        // consumes a following token: `--download-jdk auto` leaves `auto`
+        // as a positional. The FlagSpec built from the same definition
+        // must agree, or the value-skip in `merge` eats whatever comes
+        // next. Before this, `snug App.jar --download-jdk --name "X"` ate
+        // `--name`, the file's own `--name` was then not stripped as
+        // overridden, and clap aborted with "cannot be used multiple
+        // times".
+        let dir = tempdir();
+        let f = dir.join("snug.options");
+        std::fs::write(&f, "--name \"From File\"\n").unwrap();
+
+        let cli_tokens = args(&["snug", "App.jar", "--download-jdk", "--name", "From CLI"]);
+        let file_tokens = load(&f).unwrap();
+        let merged = merge(&cli_tokens, vec![file_tokens]);
+
+        // `long_flag_name` returns the bare name, without the `--`.
+        let name_count = merged.iter().filter(|t| long_flag_name(t).as_deref() == Some("name")).count();
+        assert_eq!(
+            name_count, 1,
+            "exactly one --name should survive the merge, got {merged:?}"
+        );
+        assert!(
+            merged.iter().any(|t| t == "From CLI"),
+            "the CLI's --name value must survive --download-jdk: {merged:?}"
+        );
+        assert!(
+            !merged.iter().any(|t| t == "From File"),
+            "the file's --name is the one that should be dropped: {merged:?}"
+        );
     }
 
     #[test]

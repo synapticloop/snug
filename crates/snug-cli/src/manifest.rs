@@ -42,10 +42,19 @@ fn read_main_class_from<R: Read + Seek>(reader: R) -> Result<Option<String>> {
         Err(e) => return Err(e).context("locating META-INF/MANIFEST.MF in the JAR"),
     };
 
-    let mut buf = String::new();
+    // Read the manifest as bytes and decode lossily. `read_to_string` fails
+    // the whole build on a single non-UTF-8 byte -- a Latin-1 `Name:`
+    // attribute is enough -- refusing a JAR that `java -jar` runs happily,
+    // with the error pointing at the JAR rather than at the one attribute.
+    // `from_utf8_lossy` substitutes U+FFFD for the offending byte and
+    // leaves everything else intact, which is all we need: the parser
+    // below only ever looks for an ASCII `Main-Class:` header, and a
+    // mangled attribute elsewhere cannot affect it.
+    let mut bytes = Vec::new();
     manifest
-        .read_to_string(&mut buf)
+        .read_to_end(&mut bytes)
         .context("reading manifest contents")?;
+    let buf = String::from_utf8_lossy(&bytes);
 
     Ok(parse_main_class(&buf))
 }
@@ -122,6 +131,31 @@ mod tests {
     fn ignores_other_attributes() {
         let mf = "Manifest-Version: 1.0\nBuilt-By: julian\nMain-Class: a.b.C\n";
         assert_eq!(parse_main_class(mf).as_deref(), Some("a.b.C"));
+    }
+
+    #[test]
+    fn a_non_utf8_attribute_does_not_lose_the_main_class() {
+        // Drives the real entry point, not `String::from_utf8_lossy` in
+        // isolation: the bug was that `read_to_string` returns `Err` on
+        // invalid UTF-8 and the caller turned that into a hard failure --
+        // so `snug` refused a JAR that `java -jar` runs, with the error
+        // pointing at the archive rather than at the one attribute that
+        // was mis-encoded.
+        let mut mf: Vec<u8> = b"Manifest-Version: 1.0\n".to_vec();
+        mf.extend_from_slice(b"Built-By: Andr\xe9\n"); // Latin-1 'e-acute'
+        mf.extend_from_slice(b"Main-Class: com.example.Main\n");
+
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        zip.start_file("META-INF/MANIFEST.MF", zip::write::SimpleFileOptions::default())
+            .expect("start manifest");
+        std::io::Write::write_all(&mut zip, &mf).expect("write manifest");
+        let bytes = zip.finish().expect("finish zip").into_inner();
+
+        assert_eq!(
+            read_main_class_from_bytes(&bytes).expect("a bad byte must not fail the read"),
+            Some("com.example.Main".to_string()),
+            "the Main-Class must survive an undecodable neighbour"
+        );
     }
 
     #[test]

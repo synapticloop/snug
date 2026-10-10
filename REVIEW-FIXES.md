@@ -22,6 +22,7 @@ run **P0 → P3**; within a group the order is the suggested sequence.
 Nothing in this review has been changed except items explicitly marked `DONE`.
 
 | Done | Item |
+|---|---|
 | ✅ `F-01` | `-o` overwriting the input JAR — guarded canonically, tested, verified end-to-end |
 | ✅ `F-02` | `build-windows.cmd` step 8 — builds both dropper targets now |
 | ✅ `F-03` | Stub-hash check — normalised via `scripts/pe-stable-hash.ps1`, verified reproducible |
@@ -34,10 +35,13 @@ Nothing in this review has been changed except items explicitly marked `DONE`.
 | ✅ `F-10` | Cache extraction is atomic, and a truncated `app.jar` self-repairs |
 | ✅ `F-11` | The built EXE is staged and renamed, so a failed rebuild keeps the old one |
 | ✅ `F-12` | The documented `\#` escape now survives comment stripping |
+| ✅ `F-13` | Multi-release overlays are no longer offered as entry points |
+| ✅ `F-14` | A mis-encoded manifest attribute no longer fails the build |
 | ✅ `F-15` | The terminal JDK-failure dialog finally shows what went wrong |
+| ✅ `F-16` | `--require_equals` flags no longer swallow the next token |
+| ✅ `F-17` | A UTF-8 BOM no longer corrupts the first option |
 | ✅ `F-29` | Concurrent JDK installs — staging + atomic publish + cross-process lock |
 | ✅ `F-30` | `failure.heading` rendered, instead of repeating the window title |
-|---|---|
 ### Next action required before CI is green
 `F-03` made the stub check work, and it immediately found real drift. Refresh the
 committed stub and commit it:
@@ -186,12 +190,23 @@ git add bin\launcher-stub-windows-x86_64.exe
 ---
 ## P2 — user-facing correctness and diagnostics
 ### F-13 — Multi-release JAR entries reported as launchable entry points
+- **Status:** `DONE`
+- **Fixed:** 2026-10-10. `find_main_classes` skipped only an exact `module-info.class`, so every versioned copy under `META-INF/versions/<n>/` was scanned, and `class_name_from_entry` folds `/` to `.` — the report read `META-INF.versions.17.com.example.Main`. Now skipped by prefix.
+- **Why it matters more than it looks:** `--find-main` exists so its output can be copied into `--main-class`, and a name that is not a class cannot be pasted. `Helper`, which existed *only* in the overlay, was likewise offered as launchable.
+- **Test:** `multi_release_overlays_are_not_reported_as_entry_points` builds a JAR with a root `com/example/Main.class` plus two overlays. Mutation-verified: removing the skip fails it and nothing else.
+- **File:** `crates/snug-cli/src/classfile.rs:109-121`
 - **Status:** `TODO`
 - **File:** `crates/snug-cli/src/classfile.rs:109`, `:136`, `:289-294`
 - **Trigger:** Any JAR with `Multi-Release: true`.
 - **Impact:** The skip matches only the exact name `module-info.class`, so `META-INF/versions/<n>/…` entries are scanned and `/` → `.`, giving `--find-main` output like `META-INF.versions.17.com.example.Main`. That is the diagnostic users are told to copy into `--main-class`, producing a launcher that cannot start.
 - **Fix:** Skip entries under `META-INF/versions/` in `find_main_classes`.
 ### F-14 — A non-UTF-8 manifest aborts the entire build
+- **Status:** `DONE`
+- **Fixed:** 2026-10-10. `read_to_string` returns `Err` on invalid UTF-8 and the caller made that fatal, so a single Latin-1 byte in an unrelated `Name:` attribute made `snug` refuse a JAR that `java -jar` runs — with the error pointing at the archive, not the attribute. Now reads bytes and decodes with `from_utf8_lossy`.
+- **Safe because** the parser only ever looks for an ASCII `Main-Class:` header; a mangled neighbour cannot affect it.
+- **Note:** `survey_main_classes` swallowed this same failure, so `--find-main` reported "no main class" where the build reported a hard error. Both now agree.
+- **Test:** drives the real `read_main_class_from_bytes` over a zip with a deliberately mis-encoded manifest. Mutation-verified — reverting to `read_to_string` fails it. A first draft called `String::from_utf8_lossy` directly and so tested the standard library rather than this change; rewritten after noticing.
+- **File:** `crates/snug-cli/src/manifest.rs:45-58`
 - **Status:** `TODO`
 - **File:** `crates/snug-cli/src/manifest.rs:45-48`, propagated at `crates/snug-cli/src/build.rs:52-53`
 - **Trigger:** A JAR whose `META-INF/MANIFEST.MF` contains any non-UTF-8 byte (e.g. a Latin-1 `Name:` section).
@@ -212,12 +227,22 @@ git add bin\launcher-stub-windows-x86_64.exe
 - **Fix:** pass `&dlg.jdk_install.failure.heading` for `main`. Recorded separately rather than folded silently into F-15 — different defect, different cause.
 - **File:** `crates/snug-launcher/src/jdk_install.rs:1599-1604`
 ### F-16 — Bare `--download-jdk` swallows the next token
+- **Status:** `DONE`
+- **Fixed:** 2026-10-10. `FlagSpec::from_cli` recorded every value-taking arg, but `require_equals` opts an arg out of consuming a *separate* token — `--download-jdk auto` leaves `auto` as a positional. The value-skip therefore ate whatever followed, so `snug App.jar --download-jdk --name "X"` consumed `--name`, the file's own `--name` was not stripped as overridden, and clap aborted with "cannot be used multiple times". Now gated on `!arg.is_require_equals_set()`.
+- **Test:** `a_require_equals_flag_does_not_swallow_the_next_token`, asserting the CLI value survives and the file's is the one dropped. Mutation-verified — the pre-fix failure output shows the old shape, with the file's `--name` *also* still present.
+- **File:** `crates/snug-cli/src/options_file.rs:532-543`
 - **Status:** `TODO`
 - **File:** `crates/snug-cli/src/cli.rs:308-317`, `crates/snug-cli/src/options_file.rs:532-535`, `:604-606`, `:687-691`
 - **Trigger:** `snug app.jar --download-jdk --name "CLI Name"`.
 - **Impact:** The arg is `require_equals = true, num_args = 0..=1`, so clap never consumes a following token — but `FlagSpec` derives `takes_value` from `ArgAction::takes_values()` and sets `skip_next`, eating `--name`. The file's `--name` is then not stripped and clap aborts with "the argument '--name <NAME>' cannot be used multiple times" — exactly what `FlagSpec` was written to eliminate. The attached `--download-jdk=auto` in your own `snug.options` is unaffected; the bare spelling is what `cli.rs:296-298` and `assets/snug.options.example:171` document.
 - **Fix:** Gate the `takes_value` insert on `!arg.is_require_equals_set()`.
 ### F-17 — A UTF-8 BOM turns the first option into an unknown argument
+- **Status:** `DONE`
+- **Fixed:** 2026-10-10. `load` now strips a leading `\u{feff}`. `String::trim()` does **not** remove it — U+FEFF is not Unicode whitespace — so the first token became `"\u{feff}--name"`, `long_flag_name` did not match, and clap reported an unknown argument with an invisible character in front of it.
+- **Two misleading symptoms from one byte:** the stray token also inflated the positional count, so a command-line positional made `cli_has_positional` true and the file's `--input` was stripped for the wrong reason.
+- **Relevance:** Windows editors add a BOM silently, and PowerShell 5.1's `Out-File` / `Set-Content -Encoding UTF8` add one whether or not the author asked — which is exactly how these files get written here.
+- **Tests:** `load_skips_a_leading_utf8_bom` and `a_bom_only_file_yields_no_options`. Mutation-verified — removing the strip fails both and nothing else.
+- **File:** `crates/snug-cli/src/options_file.rs:220-233`
 - **Status:** `TODO`
 - **File:** `crates/snug-cli/src/options_file.rs:220-243`
 - **Trigger:** A `snug.options` saved with a BOM — PowerShell 5.1 `Out-File` / `Set-Content -Encoding UTF8`, or many Windows editors.

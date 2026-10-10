@@ -109,6 +109,17 @@ pub fn find_main_classes(jar_path: &Path) -> Result<MainScan> {
         if !name.ends_with(".class") || name == "module-info.class" {
             continue;
         }
+        // Skip multi-release overlays. A JAR with `Multi-Release: true`
+        // carries versioned copies of ordinary classes under
+        // `META-INF/versions/<n>/`, and this used to report every one of
+        // them as a launchable entry point -- after `class_name_from_entry`
+        // folded `/` to `.`, as `META-INF.versions.17.com.example.Main`.
+        // That is not a name anyone can pass to `--main-class`, and it is
+        // precisely the diagnostic `--find-main` exists to print for
+        // someone to copy and paste. Only the root copy is launchable.
+        if name.starts_with("META-INF/versions/") {
+            continue;
+        }
 
         let full_size = entry.size();
         let truncated = full_size > MAX_CLASS_PREFIX as u64;

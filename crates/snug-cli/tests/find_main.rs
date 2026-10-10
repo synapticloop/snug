@@ -305,6 +305,49 @@ fn mismatched_main_class_warns_but_does_not_fail() {
 /// The JavaFX case: the manifest names an `Application` subclass, which
 /// has no `main` and must not be reported as a problem.
 #[test]
+fn multi_release_overlays_are_not_reported_as_entry_points() {
+    // A `Multi-Release: true` JAR carries versioned copies of ordinary
+    // classes under `META-INF/versions/<n>/`. Those used to be reported as
+    // launchable entry points, and `class_name_from_entry` folds `/` to `.`,
+    // so the report read `META-INF.versions.17.com.example.Main`. Nobody can
+    // pass that to `--main-class`, and `--find-main` exists precisely so its
+    // output can be copied and pasted.
+    let dir = tempdir();
+    let jar = dir.join("mr.jar");
+    write_jar(
+        &jar,
+        Some("com.example.Main"),
+        &[
+            ("com/example/Main.class", class_with_main("com/example/Main")),
+            (
+                "META-INF/versions/17/com/example/Main.class",
+                class_with_main("com/example/Main"),
+            ),
+            (
+                "META-INF/versions/21/com/example/Helper.class",
+                class_with_main("com/example/Helper"),
+            ),
+        ],
+    );
+
+    let (code, stdout) = run_snug(&[jar.to_str().expect("utf-8 path"), "--find-main"]);
+
+    assert_eq!(code, 0, "stdout was:\n{stdout}");
+    assert!(
+        !stdout.contains("META-INF.versions"),
+        "versioned overlays must not be offered as entry points, got:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("com.example.Helper"),
+        "Helper only exists in the versioned overlay, so it must not appear, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("com.example.Main"),
+        "the root copy is still the launchable one, got:\n{stdout}"
+    );
+}
+
+#[test]
 fn javafx_manifest_class_is_not_reported_as_a_defect() {
     let dir = tempdir();
     let jar = dir.join("fx.jar");
