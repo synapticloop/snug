@@ -568,11 +568,30 @@ fn staged_output_path(output: &std::path::Path) -> std::path::PathBuf {
 /// The launcher locates the payload at runtime via
 /// [`crate::payload_locator::find_in_file`], which parses the running
 /// EXE's resource directory and reads the `RT_RCDATA` entry.
-pub fn build_exe(cli: &Cli, payload: &SnugPayload) -> Result<PathBuf> {
+pub fn build_exe(cli: &Cli, embedded: &SnugEmbedded) -> Result<PathBuf> {
     let output = output_path(cli);
 
-    let embedded = SnugEmbedded::new(payload.clone());
-    let encoded = encode(&embedded).context("encoding snug payload")?;
+    // One encode, not two, and no second copy of every JAR byte.
+    //
+    // This used to take `&SnugPayload` and do
+    //     let embedded = SnugEmbedded::new(payload.clone());
+    //     let encoded = encode(&embedded);
+    // — but `main.rs` had *already* built exactly that `SnugEmbedded` a few
+    // lines earlier, purely to satisfy this signature. So every build
+    // cloned the whole payload (a second full copy of a 200 MB fat JAR,
+    // live at the same time as the first) and serialised it a second time
+    // to produce a value the caller was already holding. The caller now
+    // passes it in.
+    //
+    // `SnugEmbedded::new` still encodes once, for `payload_len` /
+    // `payload_crc32`. Caching those bytes on the struct would save that
+    // too, but `payload` is a public field: a cached copy would go stale the
+    // moment anyone mutated it, and a silently-wrong payload is worse than
+    // one redundant pass. Left alone deliberately.
+    let encoded = encode(embedded).context("encoding snug payload")?;
+    // Taken now because `set_rcdata` consumes the vector below; the log line
+    // at the end wants the length. Cheaper than cloning it back.
+    let payload_len = encoded.len();
 
     if let Some(parent) = output.parent() {
         if !parent.as_os_str().is_empty() {
@@ -589,12 +608,12 @@ pub fn build_exe(cli: &Cli, payload: &SnugPayload) -> Result<PathBuf> {
 
     // Embed the snug payload as an RT_RCDATA resource entry.
     resources
-        .set_rcdata(PAYLOAD_RESOURCE_NAME, encoded.clone())
+        .set_rcdata(PAYLOAD_RESOURCE_NAME, encoded)
         .context("embedding snug payload as RT_RCDATA resource")?;
 
     // Stamp icon / manifest / version from CLI args.
     let plan = ResourcePlan::from_cli(cli);
-    plan.apply(&mut resources, &embedded)
+    plan.apply(&mut resources, embedded)
         .context("stamping icon / manifest / version resources")?;
 
     image
@@ -632,7 +651,7 @@ pub fn build_exe(cli: &Cli, payload: &SnugPayload) -> Result<PathBuf> {
         "snug: wrote {} ({} bytes; payload {} as RT_RCDATA)",
         output.display(),
         final_size,
-        encoded.len(),
+        payload_len,
     );
 
     Ok(output)
@@ -860,7 +879,7 @@ mod tests {
         std::fs::create_dir_all(staged_output_path(&exe)).unwrap();
 
         assert!(
-            build_exe(&cli, &payload).is_err(),
+            build_exe(&cli, &snug_format::SnugEmbedded::new(payload.clone())).is_err(),
             "the staged write should have failed"
         );
         assert_eq!(
@@ -868,6 +887,43 @@ mod tests {
             b"the previous, working build",
             "a failed rebuild must not damage the artefact that already worked"
         );
+    }
+
+    #[test]
+    fn build_exe_encodes_the_payload_it_is_given_rather_than_rebuilding_it() {
+        // The regression this guards is a signature, not a value: `build_exe`
+        // used to take `&SnugPayload` and do `SnugEmbedded::new(payload
+        // .clone())` internally, while `main.rs` had already built exactly
+        // that value one line earlier to satisfy the call. Every build
+        // therefore cloned the entire payload -- a second full copy of a
+        // 200 MB fat JAR, live alongside the first -- and serialised it a
+        // second time, to hand back something the caller was holding.
+        //
+        // Taking `&SnugEmbedded` makes that structurally impossible: there
+        // is no `SnugPayload` left inside to clone, and no second `encode`.
+        // A regression would have to change this parameter back, which is
+        // exactly what a compile error should catch.
+        let dir = tempdir();
+        let jar = dir.join("demo.jar");
+        write_fake_jar(&jar, Some("com.example.Main"));
+        let cli = Cli::parse_from(["snug", jar.to_str().unwrap(), "-o",
+            dir.join("demo.exe").to_str().unwrap()]);
+
+        let payload = build_payload(&cli).unwrap();
+        let embedded = SnugEmbedded::new(payload);
+        let exe = build_exe(&cli, &embedded).expect("build");
+
+        // The embedded value is used verbatim, not re-derived: the written
+        // EXE's payload must match the caller's `payload_len` exactly.
+        let found = snug_payload::find_in_file(&exe)
+            .expect("locate")
+            .expect("payload present");
+        assert_eq!(
+            found.payload_len,
+            embedded.payload_len,
+            "the EXE must carry the caller's encoded payload, not a rebuilt one"
+        );
+        assert_eq!(found.payload_crc32, embedded.payload_crc32);
     }
 
     #[test]
@@ -884,7 +940,8 @@ mod tests {
         ]);
         let payload = build_payload(&cli).unwrap();
 
-        let written = build_exe(&cli, &payload).expect("build");
+        let embedded = SnugEmbedded::new(payload);
+        let written = build_exe(&cli, &embedded).expect("build");
         assert_eq!(written, exe);
         assert!(
             !staged_output_path(&exe).exists(),

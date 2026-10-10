@@ -36,7 +36,8 @@ fn stamp_icon_version_and_manifest_then_roundtrip() {
     // Build the EXE through the production code path (stub + payload).
     let cli = construct_cli(&jar, &exe_path, "Demo", &icon_path, &manifest_path);
     let payload = build_payload_for_test(&cli);
-    let exe = build_exe(&cli, &payload).expect("build_exe");
+    let embedded = snug_format::SnugEmbedded::new(payload.clone());
+    let exe = build_exe(&cli, &embedded).expect("build_exe");
     assert_eq!(exe, exe_path);
 
     // Stamp additional resources on top via editpe.
@@ -130,7 +131,8 @@ fn stamp_runs_without_icon_or_manifest_too() {
     assert!(cli.manifest.is_none());
 
     let payload = build_payload_for_test(&cli);
-    let exe = build_exe(&cli, &payload).expect("build_exe");
+    let embedded = snug_format::SnugEmbedded::new(payload.clone());
+    let exe = build_exe(&cli, &embedded).expect("build_exe");
 
     let plan = ResourcePlan::default();
     assert!(plan.should_run(), "version-info stamping is always on");

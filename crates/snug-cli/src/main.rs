@@ -172,8 +172,7 @@ fn run() -> Result<()> {
         );
     }
 
-    let output = build_exe(&cli, &embedded.payload)
-        .context("building the Windows EXE")?;
+    let output = build_exe(&cli, &embedded).context("building the Windows EXE")?;
     eprintln!("snug: built {}", output.display());
     Ok(())
 }

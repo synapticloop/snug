@@ -28,7 +28,8 @@ fn builds_real_windows_exe_and_locator_finds_payload() {
 
     // Build the payload via the same code path the binary uses.
     let payload = build_payload_for_test(&cli);
-    let exe = build_exe(&cli, &payload).expect("build_exe");
+    let embedded = snug_format::SnugEmbedded::new(payload.clone());
+    let exe = build_exe(&cli, &embedded).expect("build_exe");
     assert_eq!(exe, exe_path);
     assert!(exe_path.exists(), "exe must be written");
 
