@@ -119,9 +119,15 @@ jobs:
       - name: The committed stub matches the current launcher source
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           . .\scripts\launcher-source-fingerprint.ps1
           $current = Get-LauncherSourceFingerprint -Repo (Get-Location).Path
-          $recorded = (Get-Content bin\launcher-stub.source -Raw).Trim()
+          $recordedPath = 'bin\launcher-stub.source'
+          if (-not (Test-Path $recordedPath)) {
+            Write-Error "no $recordedPath -- run scripts\refresh-stub.ps1 and commit it."
+            exit 1
+          }
+          $recorded = (Get-Content $recordedPath -Raw).Trim()
           if ($current -ne $recorded) {
             Write-Error "bin\launcher-stub-windows-x86_64.exe is stale.`n`n  launcher source now: $current`n  stub was built from: $recorded`n`nThe launcher source changed without the committed stub being rebuilt, so a`nclone would embed last release's launcher. Run scripts\refresh-stub.ps1 and`ncommit both files."
             exit 1

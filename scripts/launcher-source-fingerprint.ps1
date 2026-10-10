@@ -51,27 +51,47 @@ function Get-LauncherSourceFingerprint {
         throw "no snug-launcher crate at $root"
     }
 
-    $files = @(Get-ChildItem -LiteralPath $root -Recurse -File |
+    # Extensions whose line endings are normalised below. Everything else --
+    # notably assets\snug-icon.png, which build.rs embeds with
+    # include_bytes! -- is hashed byte for byte, because folding CRLF inside a
+    # PNG would quietly rewrite its contents and make the fingerprint depend
+    # on a transformation that has no business touching binary data.
+    $textExtensions = @('.rs', '.toml', '.md', '.txt', '.yml', '.yaml', '.json', '.xml', '.html', '.css', '.ps1', '.cmd')
+
+    $entries = @(Get-ChildItem -LiteralPath $root -Recurse -File |
             ForEach-Object {
                 $relative = $_.FullName.Substring($Repo.Length + 1).Replace('\', '/')
-                [PSCustomObject]@{ Path = $relative; Full = $_.FullName }
+                [PSCustomObject]@{
+                    Path = $relative
+                    Full = $_.FullName
+                    # A collation key that makes ordinary comparison ordinal:
+                    # every character becomes a fixed-width hex field, so no
+                    # culture rule (case folding, ignoring '-' or '_') can
+                    # reorder two paths. Sort-Object's own ordinalness is not
+                    # guaranteed across PowerShell versions or locales.
+                    Key = -join ($relative.ToCharArray() | ForEach-Object { '{0:x4}' -f [int]$_ })
+                }
             } |
-            Sort-Object -Property Path)   # ordinal
+            Sort-Object -Property Key)
 
-    if ($files.Count -eq 0) { throw "no source files found under $root" }
+    if ($entries.Count -eq 0) { throw "no source files found under $root" }
 
     $outer = [System.Security.Cryptography.SHA256]::Create()
     $inner = [System.Security.Cryptography.SHA256]::Create()
     try {
-        foreach ($f in $files) {
+        foreach ($f in $entries) {
             $bytes = [System.IO.File]::ReadAllBytes($f.Full)
-            $normalised = [System.Collections.Generic.List[byte]]::new($bytes.Length)
-            for ($i = 0; $i -lt $bytes.Length; $i++) {
-                # Fold CRLF to LF: skip the CR when a LF follows it.
-                if ($bytes[$i] -eq 0x0D -and ($i + 1) -lt $bytes.Length -and $bytes[$i + 1] -eq 0x0A) { continue }
-                $normalised.Add($bytes[$i])
+            $isText = $textExtensions -contains [System.IO.Path]::GetExtension($f.Path).ToLowerInvariant()
+            if ($isText) {
+                $normalised = [System.Collections.Generic.List[byte]]::new($bytes.Length)
+                for ($i = 0; $i -lt $bytes.Length; $i++) {
+                    # Fold CRLF to LF: skip the CR when a LF follows it.
+                    if ($bytes[$i] -eq 0x0D -and ($i + 1) -lt $bytes.Length -and $bytes[$i + 1] -eq 0x0A) { continue }
+                    $normalised.Add($bytes[$i])
+                }
+                $bytes = $normalised.ToArray()
             }
-            $contentHash = $inner.ComputeHash($normalised.ToArray())
+            $contentHash = $inner.ComputeHash($bytes)
 
             # Path + content hash. The path is length-prefixed so a rename
             # cannot collide with a content change of the same shape.
