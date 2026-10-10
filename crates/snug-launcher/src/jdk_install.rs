@@ -1599,7 +1599,11 @@ pub fn maybe_install(
                     ui::failure(
                         parent,
                         &dlg.jdk_install.failure.title,
-                        &dlg.jdk_install.failure.title,
+                        // The heading, not the title again: the signature is
+                        // (parent, title, main, content), and passing
+                        // `title` twice left `failure.heading` unreferenced
+                        // and the dialog's heading identical to its title.
+                        &dlg.jdk_install.failure.heading,
                         &content,
                     );
                     return Ok(None);

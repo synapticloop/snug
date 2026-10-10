@@ -482,12 +482,31 @@ mod tests {
     }
 
     #[test]
-    fn failure_content_is_intentionally_empty() {
-        // `error_window` treats an empty body as "fall back to the
-        // module default". If this ever stops being empty, that
-        // fallback path goes quiet — so pin it deliberately rather
-        // than by accident.
-        assert_eq!(dialogs().jdk_install.failure.content, "");
+    fn failure_content_carries_the_actual_error() {
+        // This used to be deliberately empty, on the belief that
+        // `error_window` treats an empty body as "use the module default".
+        // No such fallback existed -- `error_window::show` documents content
+        // as "always caller-supplied" and passes it straight through -- so
+        // every user who exhausted the download attempts got a dialog
+        // titled "Runtime Installation Failure" with a blank body and no
+        // clue what had failed. Worse, it was silent: the key existed, so
+        // the missing-key guard had nothing to report.
+        //
+        // The text lives here rather than as a hard-coded fallback in
+        // `error_window` so that a `--localization` bundle can translate it
+        // by default, the same as every other key in the dialog.
+        let content = crate::dialogs::fill(
+            dialogs().jdk_install.failure.content.as_str(),
+            &[("version", "25.0.1+9"), ("error", "HTTP 503 from api.adoptium.net")],
+        );
+        assert!(
+            content.contains("HTTP 503 from api.adoptium.net"),
+            "the terminal failure dialog must show what went wrong, got {content:?}"
+        );
+        assert!(
+            content.contains("25.0.1+9"),
+            "and which runtime it was trying to install, got {content:?}"
+        );
     }
 
     #[test]
