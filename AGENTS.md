@@ -628,6 +628,12 @@ by accident.
   builds and stages a release, which is not needed between ordinary commits.
   The script takes `-CheckOnly`, which compares without building and exits 1
   if the committed stub is stale — usable as a pre-commit gate.
+- **A plain `cargo build` does NOT reproduce the stub.** The stub is only
+  reproducible because `CARGO_ENCODED_RUSTFLAGS` remaps the machine-specific
+  roots out of `file!()`; see `scripts\reproducible-build.ps1`. Both
+  `refresh-stub.ps1` and `build-windows.cmd` (via `scripts\cargo-repro.ps1`)
+  set it, so the two agree by construction rather than by convention. Build
+  the stub with one of those two, never with bare cargo.
 - **Default increment is the micro (patch) number:**
   `0.2.0` → `0.2.1` → `0.2.2`. Use this for fixes, copy changes,
   refactors, and anything that doesn't alter the CLI surface or the

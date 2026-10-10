@@ -56,6 +56,18 @@ $fresh = Join-Path $repo 'target\release\snug-launcher.exe'
 
 . (Join-Path $PSScriptRoot 'pe-stable-hash.ps1')
 
+# --- Reproducible-build flags -------------------------------------------
+#
+# The committed stub is compared byte-for-byte against a fresh build, so the
+# build has to be reproducible across checkouts -- see the long explanation in
+# reproducible-build.ps1. `scripts/build-windows.cmd` sets the identical flags
+# (via cargo-repro.ps1); the two must agree or the CI check fails again.
+function Enable-ReproducibleBuild {
+    . (Join-Path $PSScriptRoot 'reproducible-build.ps1')
+    Set-ReproducibleRustflags
+    Write-Host "[refresh-stub] CARGO_ENCODED_RUSTFLAGS: $env:CARGO_ENCODED_RUSTFLAGS"
+}
+
 function Get-StubState {
     if (-not (Test-Path $stub)) { return 'missing' }
     if (-not (Test-Path $fresh)) { return 'no-fresh-build' }
@@ -69,6 +81,7 @@ if ($CheckOnly) {
     Write-Host "[refresh-stub] check-only: committed stub is $before"
 } else {
     Write-Host "[refresh-stub] building snug-launcher (release)..."
+    Enable-ReproducibleBuild
     cargo build --release --manifest-path (Join-Path $repo 'Cargo.toml') -p snug-launcher
     if ($LASTEXITCODE -ne 0) {
         throw "cargo build -p snug-launcher failed with exit code $LASTEXITCODE"

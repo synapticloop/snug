@@ -156,6 +156,17 @@ set "DROPPER_PNG=assets\snug-dropper.png"
 set "DROPPER_SHIPPED=Build with Snug.exe"
 set "RELEASE_DIR=release"
 
+REM ---------------------------------------------------------------------------
+REM Every cargo call below goes through scripts\cargo-repro.ps1, which sets
+REM CARGO_ENCODED_RUSTFLAGS for the reproducible-build remapping. See
+REM scripts\reproducible-build.ps1 for why the launcher is not reproducible
+REM across checkouts without it, and why the flag separator (\x1f) means this
+REM script cannot set the variable itself.
+REM
+REM The flags must match what scripts\refresh-stub.ps1 uses, or the CI stub
+REM check fails on a correctly-refreshed stub.
+REM ---------------------------------------------------------------------------
+
 if "!CROSS_COMPILE!"=="1" (
     set "TARGET_TRIPLE=x86_64-pc-windows-gnu"
     set "TARGET_ARCH=x86_64"
@@ -164,13 +175,13 @@ if "!CROSS_COMPILE!"=="1" (
     set "BUILT_PREVIEW_EXE=target\!TARGET_TRIPLE!\release\snug_preview.exe"
     set "BUILT_STAMP_EXE=target\!TARGET_TRIPLE!\release\stamp_preview_icon.exe"
     set "BUILT_VERIFY_EXE=target\!TARGET_TRIPLE!\release\verify_icons.exe"
-    set "BUILD_LAUNCHER_CMD=cargo zigbuild --target !TARGET_TRIPLE! --release -p snug-launcher"
-    set "BUILD_CLI_CMD=cargo zigbuild --target !TARGET_TRIPLE! --release -p snug-cli --bin snug --bin verify_icons"
-    set "BUILD_STAMP_CMD=cargo zigbuild --target !TARGET_TRIPLE! --release -p snug-launcher --bin stamp_preview_icon"
-    set "BUILD_PREVIEW_CMD=cargo zigbuild --target !TARGET_TRIPLE! --release -p snug-launcher --bin snug_preview"
+    set "CARGO_LAUNCHER_ARGS=zigbuild --target !TARGET_TRIPLE! --release -p snug-launcher"
+    set "CARGO_CLI_ARGS=zigbuild --target !TARGET_TRIPLE! --release -p snug-cli --bin snug --bin verify_icons"
+    set "CARGO_STAMP_ARGS=zigbuild --target !TARGET_TRIPLE! --release -p snug-launcher --bin stamp_preview_icon"
+    set "CARGO_PREVIEW_ARGS=zigbuild --target !TARGET_TRIPLE! --release -p snug-launcher --bin snug_preview"
     set "BUILT_DROPPER_EXE=target\!TARGET_TRIPLE!\release\snug-dropper.exe"
     set "BUILT_DROPPER_STAMP_EXE=target\!TARGET_TRIPLE!\release\stamp_dropper_icon.exe"
-    set "BUILD_DROPPER_CMD=cargo zigbuild --target !TARGET_TRIPLE! --release -p snug-dropper"
+    set "CARGO_DROPPER_ARGS=zigbuild --target !TARGET_TRIPLE! --release -p snug-dropper"
     where cargo-zigbuild >nul 2>nul
     if errorlevel 1 (
         echo [build-windows] --CrossCompile requires cargo-zigbuild on PATH. Install with:
@@ -185,10 +196,10 @@ if "!CROSS_COMPILE!"=="1" (
     set "BUILT_PREVIEW_EXE=target\release\snug_preview.exe"
     set "BUILT_STAMP_EXE=target\release\stamp_preview_icon.exe"
     set "BUILT_VERIFY_EXE=target\release\verify_icons.exe"
-    set "BUILD_LAUNCHER_CMD=cargo build --release -p snug-launcher"
-    set "BUILD_CLI_CMD=cargo build --release -p snug-cli --bin snug --bin verify_icons"
-    set "BUILD_STAMP_CMD=cargo build --release -p snug-launcher --bin stamp_preview_icon"
-    set "BUILD_PREVIEW_CMD=cargo build --release -p snug-launcher --bin snug_preview"
+    set "CARGO_LAUNCHER_ARGS=build --release -p snug-launcher"
+    set "CARGO_CLI_ARGS=build --release -p snug-cli --bin snug --bin verify_icons"
+    set "CARGO_STAMP_ARGS=build --release -p snug-launcher --bin stamp_preview_icon"
+    set "CARGO_PREVIEW_ARGS=build --release -p snug-launcher --bin snug_preview"
     set "BUILT_DROPPER_EXE=target\release\snug-dropper.exe"
     set "BUILT_DROPPER_STAMP_EXE=target\release\stamp_dropper_icon.exe"
     REM No --bin here on purpose. snug-dropper has two bin targets: the
@@ -199,7 +210,7 @@ if "!CROSS_COMPILE!"=="1" (
     REM locally by a stale target\release\snug-dropper.exe, never masked
     REM in CI, where every earlier build is the debug profile. `-p` with no
     REM --bin builds both, which is the set the checks below expect.
-    set "BUILD_DROPPER_CMD=cargo build --release -p snug-dropper"
+    set "CARGO_DROPPER_ARGS=build --release -p snug-dropper"
 )
 
 REM Derived *after* the triple is chosen, because with delayed expansion
@@ -245,8 +256,8 @@ REM ---------------------------------------------------------------------------
 if "!SKIP_LAUNCHER_REBUILD!"=="1" goto skip_launcher_rebuild
 
 echo.
-echo ==^> !BUILD_LAUNCHER_CMD!
-call !BUILD_LAUNCHER_CMD!
+echo ==^> cargo !CARGO_LAUNCHER_ARGS!
+powershell -NoProfile -ExecutionPolicy Bypass -File "!_SCRIPT_DIR!scripts\cargo-repro.ps1" !CARGO_LAUNCHER_ARGS!
 if errorlevel 1 (
     echo [build-windows] launcher build failed with exit code %errorlevel%
     exit /b %errorlevel%
@@ -280,8 +291,8 @@ REM 3. Release build of the CLI, plus the verify_icons build tool.
 REM ---------------------------------------------------------------------------
 
 echo.
-echo ==^> !BUILD_CLI_CMD!
-call !BUILD_CLI_CMD!
+echo ==^> cargo !CARGO_CLI_ARGS!
+powershell -NoProfile -ExecutionPolicy Bypass -File "!_SCRIPT_DIR!scripts\cargo-repro.ps1" !CARGO_CLI_ARGS!
 if errorlevel 1 (
     echo [build-windows] CLI build failed with exit code %errorlevel%
     exit /b %errorlevel%
@@ -369,8 +380,8 @@ REM    primary bin.
 REM ---------------------------------------------------------------------------
 
 echo.
-echo ==^> !BUILD_STAMP_CMD!
-call !BUILD_STAMP_CMD!
+echo ==^> cargo !CARGO_STAMP_ARGS!
+powershell -NoProfile -ExecutionPolicy Bypass -File "!_SCRIPT_DIR!scripts\cargo-repro.ps1" !CARGO_STAMP_ARGS!
 if errorlevel 1 (
     echo [build-windows] stamp_preview_icon build failed with exit code %errorlevel%
     exit /b %errorlevel%
@@ -410,8 +421,8 @@ REM ---------------------------------------------------------------------------
 if "!SKIP_DEV_TOOLS!"=="1" goto skip_dev_tools
 
 echo.
-echo ==^> !BUILD_PREVIEW_CMD!
-call !BUILD_PREVIEW_CMD!
+echo ==^> cargo !CARGO_PREVIEW_ARGS!
+powershell -NoProfile -ExecutionPolicy Bypass -File "!_SCRIPT_DIR!scripts\cargo-repro.ps1" !CARGO_PREVIEW_ARGS!
 if errorlevel 1 (
     echo [build-windows] snug_preview build failed with exit code %errorlevel%
     exit /b %errorlevel%
@@ -458,8 +469,8 @@ REM ---------------------------------------------------------------------------
 if "!SKIP_DROPPER!"=="1" goto skip_dropper
 
 echo.
-echo ==^> !BUILD_DROPPER_CMD!
-call !BUILD_DROPPER_CMD!
+echo ==^> cargo !CARGO_DROPPER_ARGS!
+powershell -NoProfile -ExecutionPolicy Bypass -File "!_SCRIPT_DIR!scripts\cargo-repro.ps1" !CARGO_DROPPER_ARGS!
 if errorlevel 1 (
     echo [build-windows] dropper build failed with exit code %errorlevel%
     exit /b %errorlevel%
