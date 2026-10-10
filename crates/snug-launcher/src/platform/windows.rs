@@ -756,6 +756,15 @@ fn check_candidate(dir: &Path, min_java: u16) -> Result<Option<PathBuf>, Launche
     if !has_java {
         return Ok(None);
     }
+    // `java.exe` does not imply a *loadable* VM. A JRE-only or pruned install
+    // has no `jvm.dll` under `bin\server` or `bin\client`, and accepting it
+    // meant discovery returned a candidate the loader then could not use:
+    // the run died at `locate_jvm_dll` with a fatal `LibraryLoad` and no
+    // attempt at the registry or common-location candidates that would have
+    // worked. Rejecting here is what turns that into "try the next one".
+    if locate_jvm_dll(dir).is_none() {
+        return Ok(None);
+    }
     match read_java_major(dir)? {
         Some(major) if major >= min_java => Ok(Some(dir.to_path_buf())),
         Some(found) => Err(LauncherError::JvmTooOld {
@@ -971,15 +980,49 @@ fn jni_version_for(major: Option<u16>) -> (&'static str, JNIVersion) {
     }
 }
 
+/// The well-known Windows JDK install locations.
+///
+/// These are *vendor* directories, not JDK homes. A current machine has
+/// `C:\Program Files\Java\jdk-25.0.1\bin\java.exe` -- one level down from
+/// where this used to stop -- so returning the vendor directory alone meant
+/// `check_candidate`, which requires `bin\java.exe` *directly* beneath,
+/// could never match. The whole `try_common` step was dead code, while
+/// `snug-format/src/config.rs` promised the step worked.
+///
+/// Each root is expanded by [`expand_install_root`].
 fn common_install_paths() -> Vec<PathBuf> {
-    let mut out = Vec::new();
+    let mut roots = Vec::new();
     if let Some(pf) = read_env_var("ProgramFiles") {
-        out.push(pf.join("Java"));
-        out.push(pf.join("Eclipse Adoptium"));
+        roots.push(pf.join("Java"));
+        roots.push(pf.join("Eclipse Adoptium"));
     }
     if let Some(pf86) = read_env_var("ProgramFiles(x86)") {
-        out.push(pf86.join("Java"));
+        roots.push(pf86.join("Java"));
     }
+    roots.iter().flat_map(|r| expand_install_root(r)).collect()
+}
+
+/// Candidates under one vendor directory: the directory itself, then each
+/// immediate child.
+///
+/// The root is kept because a flat install (`...\Java\bin\java.exe`) is
+/// unusual but legal, and probing it costs one `is_dir`.
+///
+/// Children are sorted so the scan is deterministic across runs and
+/// machines. `check_candidate` rejects anything under `min_java` anyway, so
+/// ordering only affects which of several *valid* JDKs wins.
+fn expand_install_root(root: &Path) -> Vec<PathBuf> {
+    let mut out = vec![root.to_path_buf()];
+    let Ok(entries) = fs::read_dir(root) else {
+        return out;
+    };
+    let mut children: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    children.sort();
+    out.extend(children);
     out
 }
 
@@ -1079,15 +1122,23 @@ mod tests {
     // ---- F-07: a too-old JDK must not abort a scan -----------------------
 
     /// Build a fake JDK home whose `release` file advertises `version`.
+    ///
+    /// Also plants a `jvm.dll`, because `check_candidate` requires one: a
+    /// home with `java.exe` but no loadable VM is exactly the shape F-09
+    /// rejects, so a fixture without it would silently stop testing anything.
     fn fake_jdk(root: &Path, version: &str) -> PathBuf {
         let home = root.join(format!("jdk{version}"));
-        std::fs::create_dir_all(home.join("bin")).unwrap();
+        std::fs::create_dir_all(home.join("bin").join("server")).unwrap();
         std::fs::write(home.join("bin").join("java.exe"), b"").unwrap();
         std::fs::write(home.join("bin").join("javaw.exe"), b"").unwrap();
+        std::fs::write(
+            home.join("bin").join("server").join("jvm.dll"),
+            b"",
+        )
+        .unwrap();
         std::fs::write(home.join("release"), format!("JAVA_VERSION=\"{version}\"\n")).unwrap();
         home
     }
-
     fn tempdir() -> PathBuf {
         let base = std::env::temp_dir();
         // Counter is load-bearing: pid + nanos is not unique under parallel
@@ -1164,5 +1215,102 @@ mod tests {
         let mut too_old = None;
         assert!(scan_candidate(&mut too_old, &home, 25).unwrap().is_none());
         assert_eq!(too_old, Some((home, 11)));
+    }
+
+    // ---- F-08: vendor directories must be expanded ----------------------
+
+    #[test]
+    fn a_vendor_directory_expands_to_the_jdks_inside_it() {
+        // The bug: `common_install_paths` returned `...\Program Files\Java`
+        // and `check_candidate` wants `bin\java.exe` *directly* beneath, so
+        // the whole `try_common` step could never match anything.
+        let vendor = tempdir();
+        let jdk_a = fake_jdk(&vendor, "17");
+        let jdk_b = fake_jdk(&vendor, "25");
+        std::fs::write(vendor.join("not-a-dir.txt"), b"x").unwrap();
+
+        let candidates = expand_install_root(&vendor);
+        let names: Vec<String> = candidates
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+
+        assert_eq!(
+            names.first().map(String::as_str),
+            Some(vendor.file_name().unwrap().to_string_lossy().as_ref()),
+            "the root itself is probed too, for a flat install"
+        );
+        assert!(
+            candidates.contains(&jdk_a) && candidates.contains(&jdk_b),
+            "both installed JDKs must be reachable, got {names:?}"
+        );
+        assert!(
+            !names.contains(&"not-a-dir.txt".to_string()),
+            "files are not JDK homes"
+        );
+        // Deterministic: children sorted, so two runs agree on which of
+        // several valid JDKs wins.
+        let tail = &names[1..];
+        let mut sorted = tail.to_vec();
+        sorted.sort();
+        assert_eq!(tail, &sorted[..], "children must be sorted: {names:?}");
+    }
+
+    #[test]
+    fn an_empty_vendor_directory_still_yields_itself() {
+        // A vendor directory with nothing in it is not an error; it just has
+        // no JDKs. Returning the root keeps a flat install possible and
+        // makes the "read_dir failed" path indistinguishable from "empty".
+        let vendor = tempdir();
+        let absent = vendor.join("absent");
+        assert_eq!(expand_install_root(&vendor), vec![vendor.clone()]);
+        assert_eq!(expand_install_root(&absent), vec![absent]);
+    }
+
+    // ---- F-09: a candidate must be loadable ----------------------------
+
+    #[test]
+    fn a_jre_without_a_jvm_dll_is_not_accepted_as_a_candidate() {
+        // The bug: `check_candidate` only asked for `java.exe`, so a JRE-only
+        // install was returned as the discovery result and the run then died
+        // at `locate_jvm_dll` with no attempt at any later candidate.
+        let dir = tempdir();
+        let jre = dir.join("jre-25");
+        std::fs::create_dir_all(jre.join("bin")).unwrap();
+        std::fs::write(jre.join("bin").join("java.exe"), b"").unwrap();
+        std::fs::write(jre.join("release"), "JAVA_VERSION=\"25\"\n").unwrap();
+        // Note: no bin\server, bin\client or bin\jvm.dll.
+
+        assert_eq!(
+            check_candidate(&jre, 25).expect("not an error, just not a candidate"),
+            None,
+            "a java.exe with no jvm.dll must not be offered to the loader"
+        );
+    }
+
+    #[test]
+    fn a_jvm_dll_anywhere_the_loader_looks_is_enough() {
+        // The three layouts `locate_jvm_dll` probes must all satisfy the
+        // check -- otherwise the gate and the loader disagree, which is the
+        // same class of bug this finding is about.
+        for layout in [
+            ["bin", "server", "jvm.dll"].as_slice(),
+            ["bin", "client", "jvm.dll"].as_slice(),
+            ["bin", "jvm.dll"].as_slice(),
+        ] {
+            let dir = tempdir();
+            let home = fake_jdk(&dir, "25");
+            std::fs::remove_dir_all(home.join("bin").join("server")).unwrap();
+            // One file, at the path the layout spells out.
+            let p = layout.iter().fold(home.clone(), |acc, s| acc.join(s));
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, b"")
+                .unwrap_or_else(|e| panic!("layout {layout:?}, path {p:?}: {e}"));
+            assert_eq!(
+                check_candidate(&home, 25).expect("no error"),
+                Some(home),
+                "layout {layout:?} should be accepted"
+            );
+        }
     }
 }

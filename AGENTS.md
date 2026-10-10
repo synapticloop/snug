@@ -610,10 +610,19 @@ by accident.
   `version.workspace = true`, so that one line is the only thing to
   edit. `snug --snug-version` and `cargo metadata` read the compiled
   value via `env!("CARGO_PKG_VERSION")` in `snug-cli` (both the clap
-  `version` attribute and the `--snug-version` flag). **`snug-launcher`
-  does not embed the version at all** — which is why a version bump never
-  invalidates `bin/launcher-stub-windows-x86_64.exe`, and why refreshing the stub is
-  hygiene rather than a consequence of a release.
+  `version` attribute and the `--snug-version` flag). **A version bump
+  *does* invalidate `bin/launcher-stub-windows-x86_64.exe`**, so the stub
+  must be refreshed after bumping — see the note below.
+- **Why a bump moves the stub, despite the launcher not reading its own
+  version.** `snug-launcher` embeds no version *string* of its own, but
+  every workspace crate's version is part of the rustc crate metadata that
+  feeds symbol mangling and MIR identity, so changing it relocates code
+  throughout the binary. Measured here: 0.9.11 → 0.9.19 changes 653,904
+  bytes across 32,737 regions of an identically-sized executable, while two
+  builds of the *same* version are byte-identical once the link timestamp,
+  checksum and RSDS record are normalised (see `scripts/pe-stable-hash.ps1`).
+  So the stub is a genuine function of the version, and refreshing it is a
+  consequence of a release, not just hygiene.
 - **Default increment is the micro (patch) number:**
   `0.2.0` → `0.2.1` → `0.2.2`. Use this for fixes, copy changes,
   refactors, and anything that doesn't alter the CLI surface or the
