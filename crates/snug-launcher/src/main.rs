@@ -60,8 +60,38 @@ fn run() -> Result<u32, LauncherError> {
     // call resolves against the merged user + built-in bundle list.
     localize::init(&payload.payload.localizations);
 
+    // Stash the update-check URL now, while the payload is decoded and in
+    // hand. `show_launcher_error` used to re-run `find_in_file` to get it,
+    // which re-read the EXE and re-decoded the whole payload -- every JAR
+    // byte copied into fresh Vecs -- purely to read one string. On a 300 MB
+    // fat jar that re-reads 300 MB and roughly doubles peak memory, on
+    // precisely the path where the machine is already struggling.
+    //
+    // Left unset when the payload never decoded, which is exactly the set of
+    // cases where the dialog has no URL to show: `SelfPath` / `Format`
+    // errors, a bare stub, a corrupt RCDATA resource. `show_launcher_error`
+    // falls back to `None` there, as it always did.
+    let _ = UPDATE_CHECK_URL.set(update_check_url(&payload.payload));
+
     platform::run(&self_path, &payload)
 }
+
+/// The payload's `update_check_url`, trimmed, with an empty value treated
+/// as absent.
+fn update_check_url(payload: &snug_format::SnugPayload) -> Option<String> {
+    payload
+        .config
+        .app
+        .update_check_url
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Set once, immediately after a successful payload decode. `None` means
+/// "never decoded", not "decoded but has no URL" -- the two look identical
+/// to the error dialog, and both render without the link row.
+static UPDATE_CHECK_URL: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
 
 /// Surface a [`LauncherError`] to the user via the custom-painted
 /// `error_window::show_launcher_error` dialog — the same window the
@@ -77,43 +107,23 @@ fn run() -> Result<u32, LauncherError> {
 /// via [`crate::dialogs::dialogs`], so a `--localization <tag>` build
 /// localizes the whole window rather than just its contents.
 ///
-/// Two narrow cases fall back to `MessageBoxW`:
-/// 1. The error happened *before* the payload was decoded (e.g.
-///    `SelfPath`, `Format`) — there's no `AppMetadata` to read a URL
-///    from, so we can't paint the link row.
-/// 2. The error happened *during* `find_in_file` itself (a corrupt
-///    RCDATA resource). Same reason.
+/// Two narrow cases have no update-check URL to offer, because the payload
+/// never decoded: the error happened *before* `locate_payload` succeeded
+/// (`SelfPath`, `Format`), or *during* it (a corrupt RCDATA resource).
+/// Those still get the full window, just without the link row.
 ///
-/// In those cases we keep the old fallback. Everything else
-/// (`JvmNotFound`, `JniCreate`, `JniInvoke`, `MainClassNotFound`,
-/// `JavaException`, etc.) lands in the rich window.
+/// There used to be a stock `MessageBoxW` fallback for exactly those cases,
+/// reachable only because reading the URL required resolving our own path.
+/// The URL is now captured at decode time, so there is nothing left that
+/// needs the path -- and no reason to degrade the window when it is
+/// unavailable. `show_error_box` went with it.
 #[cfg(windows)]
 fn show_launcher_error(err: &LauncherError) {
-    use snug_format::SnugEmbedded;
-
-    let self_path = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(_) => {
-            // Can't even find ourselves — fall back to MessageBoxW.
-            show_error_box(&error::localize_launcher_error(err));
-            return;
-        }
-    };
-
-    // Best-effort payload decode: if we can still read the embedded
-    // payload we want the `update_check_url` for the link row. If
-    // this fails (e.g. the error happened during decode) we just
-    // skip the link and pass `None`.
-    let update_url: Option<String> = match snug_launcher::find_in_file(&self_path) {
-        Ok(Some(SnugEmbedded { payload, .. })) => payload
-            .config
-            .app
-            .update_check_url
-            .as_ref()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty()),
-        _ => None,
-    };
+    // The update-check URL, captured once at decode time. `None` covers both
+    // "the payload never decoded" and "it had no URL"; either way there is
+    // nothing to render in the link row, and neither is worth re-reading
+    // 300 MB to discover.
+    let update_url: Option<String> = UPDATE_CHECK_URL.get().cloned().flatten();
 
     let localized_error = error::localize_launcher_error(err);
     let update_url_ref = update_url.as_deref();
@@ -130,43 +140,5 @@ fn show_launcher_error(err: &LauncherError) {
             &localized_error,
             update_url_ref,
         );
-    }
-}
-
-/// Plain `MessageBoxW` fallback for the two narrow cases where we
-/// can't reach the custom error window — no payload available, or
-/// even finding the current EXE failed.
-///
-/// Intentionally *not* custom-painted. By the time we get here the
-/// process is already in a bad state (can't read its own path, or
-/// the embedded payload is corrupt), and building the full
-/// `modal_window` chrome — font creation, window-class registration,
-/// mascot bitmaps — during that path trades a real robustness win
-/// for polish nobody will ever see. A stock `MessageBoxW` is the
-/// right call for a broken-build diagnostic.
-///
-/// Title comes from the `launcher.fallback_messagebox.title`
-/// localization key, but note that `localize::init()` has not run
-/// yet on either call site (see the comment on that key in
-/// `snug-localisations.en.txt`) — so this always renders the
-/// built-in English baseline. The *body* text does localize, because
-/// it comes through `error::localize_launcher_error`, which falls
-/// back to the same baseline.
-#[cfg(windows)]
-fn show_error_box(msg: &str) {
-    use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        MessageBoxW, MB_ICONERROR, MB_OK,
-    };
-
-    let title_str = localize::lookup("launcher.fallback_messagebox.title");
-    let title: Vec<u16> = OsStr::new(&title_str)
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
-    let body: Vec<u16> = OsStr::new(msg).encode_wide().chain(Some(0)).collect();
-    unsafe {
-        MessageBoxW(std::ptr::null_mut(), body.as_ptr(), title.as_ptr(), MB_OK | MB_ICONERROR);
     }
 }

@@ -39,15 +39,22 @@ pub struct SnugPayload {
     /// from the **first** entry; the CLI's `--main-class` flag
     /// always overrides this.
     pub jars: Vec<EmbeddedFile>,
-    /// Optional `.ico` to use as the Windows Explorer icon.
-    ///
-    /// This is consumed by the **builder** when stamping the version
-    /// resource into the EXE; the launcher itself does not need to read it.
-    /// Storing it in the payload keeps the builder self-contained and
-    /// avoids needing the original `.ico` at build time when the stub
-    /// mode is used.
-    #[serde(default)]
-    pub icon: Option<EmbeddedFile>,
+    // NOTE: this struct used to carry `icon: Option<EmbeddedFile>` -- the
+    // bytes of `--icon`, read off disk at build time. Nothing ever read
+    // them: the builder re-read `cli.icon` from disk to stamp the PE, and
+    // the launcher reads Explorer's resource, not the payload. So every
+    // built EXE carried the icon twice, uncompressed, once to stamp with
+    // and once for nothing.
+    //
+    // Removed rather than made live. Stamping from `payload.icon` reads
+    // well but only works for ICO: `editpe`'s `ToIcon for &[u8]` parses an
+    // ICO directory and rejects a PNG outright, where the path-based route
+    // went through `image::ImageReader` and took either. Dropping the field
+    // actually removes the bytes, which is the cost that was reported.
+    //
+    // `#[serde(default)]` on every remaining field, so an older payload
+    // blob still decodes (extra trailing fields are skipped by postcard),
+    // and this is a wire-layout change per AGENTS.md's versioning rules.
 
     /// Localization bundles for the launcher's runtime strings
     /// (error dialogs, splash errors, JDK-install errors, bare-stub

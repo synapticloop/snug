@@ -11,6 +11,7 @@ use crate::cli::Cli;
 use crate::localization;
 use crate::manifest::{read_main_class_from_bytes, survey_main_classes};
 use crate::resources::ResourcePlan;
+use editpe::constants::IMAGE_SUBSYSTEM_WINDOWS_GUI;
 use crate::stub::STUB_BYTES;
 use snug_format::{
     AppMetadata, EmbeddedFile, LauncherBehavior, LauncherConfig, SnugEmbedded, SnugPayload,
@@ -56,11 +57,13 @@ pub fn build_payload(cli: &Cli) -> Result<SnugPayload> {
 
     warn_on_ambiguous_manifests(&jars, &labels, &main_class, cli.main_class.is_some());
 
-    // --- Optional icon ---------------------------------------------------
-    let icon = match &cli.icon {
-        Some(path) => Some(load_embedded_file(path, "icon")?),
-        None => None,
-    };
+    // The icon is *not* read here. It used to be: `build_payload` loaded it
+    // into `SnugPayload::icon` for the builder to stamp, while
+    // `ResourcePlan` re-read the same file from disk -- so every built EXE
+    // carried the icon twice, uncompressed, and only the second copy was
+    // ever used. The payload field is gone (see `snug-format::payload`);
+    // `ResourcePlan` still stamps from `cli.icon` at the PE-writing stage,
+    // which is the only read that ever mattered.
 
     // --- Optional splash -------------------------------------------------
     // At build time we decode the user's PNG, validate its size, and
@@ -140,7 +143,6 @@ pub fn build_payload(cli: &Cli) -> Result<SnugPayload> {
     Ok(SnugPayload {
         config,
         jars,
-        icon,
         localizations: collect_localizations(cli)?,
     })
 }
@@ -368,15 +370,6 @@ fn warn_on_ambiguous_manifests(
          --main-class {}",
         declarations[0].main_class
     );
-}
-
-fn load_embedded_file(path: &std::path::Path, label: &str) -> Result<EmbeddedFile> {
-    let bytes = std::fs::read(path)
-        .with_context(|| format!("reading {} file {}", label, path.display()))?;
-    if bytes.is_empty() {
-        bail!("{} file {} is empty", label, path.display());
-    }
-    Ok(embedded_file(bytes))
 }
 
 fn default_name_from_input(path: &std::path::Path) -> Option<String> {
@@ -607,6 +600,13 @@ pub fn build_exe(cli: &Cli, payload: &SnugPayload) -> Result<PathBuf> {
     image
         .set_resource_directory(resources)
         .context("installing resource directory onto stub image")?;
+    // Defensive, and now actually on the production path. This lived only
+    // in `ResourcePlan::run`, which `build_exe` does not call -- so the one
+    // place that ships an EXE never applied it, and the comment claimed a
+    // guarantee nothing enforced. `stub::tests::stub_is_a_pe32_plus_gui_exe`
+    // now checks the same three facts on the committed stub, so the guard
+    // and the test agree about what "GUI" means.
+    image.set_subsystem(IMAGE_SUBSYSTEM_WINDOWS_GUI);
     // Write through a sibling temp and rename into place.
     //
     // `Image::write_file` is `std::fs::write`, i.e. `File::create` + `write_all`

@@ -143,7 +143,6 @@ mod tests {
                 behavior: Default::default(),
             },
             jars: vec![jar],
-            icon: None,
             localizations: Vec::new(),
         }
     }

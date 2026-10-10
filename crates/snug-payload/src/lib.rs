@@ -105,7 +105,6 @@ mod tests {
                 behavior: LauncherBehavior::default(),
             },
             jars: vec![embedded_file(b"jar-bytes".to_vec())],
-            icon: None,
             localizations: Vec::new(),
         };
         let embedded = SnugEmbedded::new(payload);

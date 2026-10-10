@@ -228,26 +228,24 @@ git add bin\launcher-stub-windows-x86_64.exe
 - **Relevance:** Windows editors add a BOM silently, and PowerShell 5.1's `Out-File` / `Set-Content -Encoding UTF8` add one whether or not the author asked — which is exactly how these files get written here.
 - **Tests:** `load_skips_a_leading_utf8_bom` and `a_bom_only_file_yields_no_options`. Mutation-verified — removing the strip fails both and nothing else.
 - **File:** `crates/snug-cli/src/options_file.rs:220-233`
-### F-18 — `SnugPayload.icon` is a dead field that doubles every EXE's icon bytes
-- **Status:** `TODO`
-- **File:** `crates/snug-format/src/payload.rs:42-50`, populated at `crates/snug-cli/src/build.rs:60-63`, stamped from `crates/snug-cli/src/resources.rs:50`
-- **Trigger:** Any `--icon` build.
-- **Impact:** The builder reads the icon into the payload, and `resources.rs:50` re-reads `cli.icon` from disk to stamp the PE. Nothing reads `payload.icon` anywhere. Postcard is uncompressed, so every EXE grows by the full icon size (a multi-resolution `.ico` is easily hundreds of KB) for bytes never consumed. The field's doc comment justifies itself with the opposite of what the code does.
-- **Fix:** Either stamp from `payload.icon`, or drop the field (safe — it's `#[serde(default)]` and read by no launcher) and correct the doc.
+### F-18 — `SnugPayload.icon` is a dead field that doubles every EXE icon bytes
+- **Status:** `DONE`
+- **Fixed:** 2026-10-10. `SnugPayload::icon` (the `--icon` bytes) is removed. Nothing read it: the builder re-read `cli.icon` from disk to stamp the PE, and the launcher reads Explorer's resource, not the payload. Every built EXE therefore carried the icon twice, uncompressed, once to stamp with and once for nothing.
+- **Why removed rather than made live.** Stamping from `payload.icon` reads better and honours the field's own doc — but `editpe`'s `ToIcon for &[u8]` parses an **ICO** directory and rejects a PNG outright (`invalid bytes: icon data is not an icon`), where the path-based `set_main_icon_file` goes through `image::ImageReader` and takes either. Making the field live that way would have broken `--icon logo.png`. Dropping it removes the bytes, which is the cost that was actually reported.
+- **Wire-layout change, so a minor bump** (0.9.23 -> 0.10.0) per AGENTS.md. Safe in practice: the payload is embedded by `snug-cli` and read by the `snug-launcher` in the same EXE, so a mismatched pair is not a supported flow, and postcard skips trailing fields when decoding an older blob.
+- **File:** `crates/snug-format/src/payload.rs`, `crates/snug-cli/src/build.rs`; fixtures in `codec.rs`, `roundtrip.rs`, `stub_payload_roundtrip.rs`, `end_to_end.rs`, `snug-payload`
 ### F-19 — GUI-subsystem guarantee lives only in a path nothing calls
-- **Status:** `TODO`
-- **File:** `crates/snug-cli/src/resources.rs:139-141`, `crates/snug-cli/src/stub.rs:41-57`
-- **Trigger:** Any future change that drops `windows_subsystem` in `crates/snug-launcher/src/main.rs:13-16`, or a stub built with `debug_assertions` on.
-- **Impact:** `image.set_subsystem(IMAGE_SUBSYSTEM_WINDOWS_GUI)` — commented "Defensive: ensure the produced binary stays a Windows GUI app" — is reachable only from `tests/editpe_roundtrip.rs:48,138`; production `build_exe` calls `plan.apply()` and never stamps it. And `stub.rs:41-57` is named `stub_is_a_pe32_plus_gui_exe` while asserting only `MZ` and `PE\0\0` — neither machine nor subsystem. Not a live bug today, but the guard is a test and the test over-promises.
-- **Fix:** Stamp the subsystem in `build_exe`, or make the stub test assert `IMAGE_FILE_MACHINE_AMD64` and `Subsystem == 2`.
+- **Status:** `DONE`
+- **Fixed:** 2026-10-10, both halves. `build_exe` now stamps `IMAGE_SUBSYSTEM_WINDOWS_GUI` — previously it lived only in `ResourcePlan::run`, which production never calls, so the comment promised a guarantee nothing enforced. And `stub_is_a_pe32_plus_gui_exe` now asserts what its name says: `IMAGE_FILE_MACHINE_AMD64` (0x8664), PE32+ optional-header magic (0x20B), and `Subsystem == 2`. It previously checked only `MZ` and `PE\0\0`, so "PE32+" and "GUI" were decoration — a 32-bit or console-subsystem stub would have passed it.
+- **The three facts check out** against the committed stub, so the test is a real guard rather than a name.
+- **File:** `crates/snug-cli/src/build.rs` (stamp in `build_exe`), `crates/snug-cli/src/stub.rs:41-84`
 ### F-20 — Every launcher error re-decodes the whole payload for one URL
-- **Status:** `TODO`
-- **File:** `crates/snug-launcher/src/main.rs:107-116`
-- **Trigger:** Any post-decode failure — `JvmNotFound`, `JavaException`, `MainClassNotFound`.
-- **Impact:** `show_launcher_error` re-runs `find_in_file` + `decode`, copying every JAR byte into new `Vec`s, purely to read `update_check_url`. On a 300 MB fat JAR the error path re-reads 300 MB and roughly doubles peak memory — on exactly the `JvmNotFound` path where the machine is already struggling. The payload was already decoded in `run()` at `:43`.
-- **Fix:** Carry the URL (or the decoded payload) out of `run()` into the error window.
----
-## P3 — lower severity / polish
+- **Status:** `DONE`
+- **Fixed:** 2026-10-10. `run()` already had the decoded payload but discarded it on failure, so `show_launcher_error` re-ran `find_in_file` and re-decoded it — every JAR byte copied into fresh `Vec`s — purely to read `update_check_url`. The URL is now captured once into a `OnceLock` at decode time and read back.
+- **Impact:** on a 300 MB fat jar the error path re-read 300 MB and roughly doubled peak memory, on exactly the `JvmNotFound` path where the machine is already struggling.
+- **Removed `show_error_box` as a side effect.** That `MessageBoxW` fallback existed only because reading the URL required resolving `current_exe()`, and it degraded the window when that failed. With the URL captured up front nothing needs the path, so the branch — and the function — went with it. Its doc described two fallback cases that no longer exist, which is the same shape as F-30's dead key.
+- **The localisation key survives.** `launcher.fallback_messagebox.title` is still used by `snug_preview --kind early-bail` and `dialogs_preview`, so removing the function orphans nothing.
+- **File:** `crates/snug-launcher/src/main.rs`
 ### F-21 — A `--options` with no value is silently discarded
 - **Status:** `TODO`
 - **File:** `crates/snug-cli/src/options_file.rs:204-206`, `:448-450`

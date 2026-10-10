@@ -1,7 +1,7 @@
 //! Integration roundtrip test for snug-format.
 
 use snug_format::{
-    decode, embedded_file, encode, AppMetadata, DownloadJdkMode, EmbeddedFile, JvmDiscovery,
+    decode, embedded_file, encode, AppMetadata, DownloadJdkMode, JvmDiscovery,
     LauncherBehavior, LauncherConfig, SnugEmbedded, SnugPayload, SplashConfig,
     SplashImage, FORMAT_VERSION, MAGIC,
 };
@@ -58,10 +58,6 @@ fn sample_payload() -> SnugPayload {
     SnugPayload {
         config: sample_config(),
         jars: vec![embedded_file(b"PK\x03\x04fake-fat-jar".to_vec())],
-        icon: Some(EmbeddedFile {
-            sha256: [0u8; 32],
-            bytes: b"\x00\x00\x01\x00fake-ico".to_vec(),
-        }),
         localizations: Vec::new(),
     }
 }

@@ -54,6 +54,36 @@ mod tests {
             b"PE\0\0",
             "stub must contain a PE\\0\\0 signature at the header offset"
         );
+
+        // The rest of what the name promises. This test used to assert only
+        // `MZ` and `PE\0\0`, so "PE32+" and "GUI" were decoration -- a stub
+        // that was 32-bit or console-subsystem would have passed it, and
+        // `Image::parse` in `build_exe` would then fail (or produce a
+        // console app that flashes a window on every launch).
+        let coff = pe_offset + 4;
+        // IMAGE_FILE_HEADER: Machine(2) NumberOfSections(2) ...
+        assert_eq!(
+            u16::from_le_bytes([STUB_BYTES[coff], STUB_BYTES[coff + 1]]),
+            0x8664,
+            "stub must be IMAGE_FILE_MACHINE_AMD64 (PE32+)"
+        );
+
+        let opt = coff + 20; // start of IMAGE_OPTIONAL_HEADER
+        let opt_magic = u16::from_le_bytes([STUB_BYTES[opt], STUB_BYTES[opt + 1]]);
+        assert_eq!(
+            opt_magic, 0x20B,
+            "stub's optional header must be PE32+ (0x20B), not PE32 (0x10B)"
+        );
+
+        // Subsystem sits at offset 68 in IMAGE_OPTIONAL_HEADER, for both
+        // PE32 and PE32+ -- the data directories differ in offset, but the
+        // fixed fields up to and including Subsystem do not.
+        let subsystem = u16::from_le_bytes([STUB_BYTES[opt + 68], STUB_BYTES[opt + 69]]);
+        assert_eq!(
+            subsystem, 2,
+            "stub must be IMAGE_SUBSYSTEM_WINDOWS_GUI (2), not CONSOLE (3) -- \
+             a console subsystem flashes a window on every launch"
+        );
     }
 
     #[test]

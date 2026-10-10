@@ -44,7 +44,6 @@ fn finds_payload_as_rcdata_resource_on_real_stub() {
             behavior: LauncherBehavior::default(),
         },
         jars: vec![embedded_file(b"fake jar body".to_vec())],
-        icon: None,
         localizations: Vec::new(),
     };
     let embedded = SnugEmbedded::new(payload);
