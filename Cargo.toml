@@ -15,7 +15,7 @@ members = [
 # the pre-1.0 ceiling). Micro-only: the project sits at 0.9.x, and
 # AGENTS.md says to keep incrementing the patch rather than roll over
 # to 1.0.0.
-version = "0.9.16"
+version = "0.9.17"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
@@ -39,6 +39,9 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Environment",
     "Win32_System_Registry",
     "Win32_System_Console",
+    # `LockFileEx`/`UnlockFileEx` (the cross-process JDK install lock) take an
+    # `*mut OVERLAPPED`, which windows-sys gates behind this feature.
+    "Win32_System_IO",
     "Win32_System_Threading",
     "Win32_Storage_FileSystem",
     "Win32_UI_Controls",

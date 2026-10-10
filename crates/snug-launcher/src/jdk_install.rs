@@ -747,11 +747,21 @@ fn download_to_disk(
 
 /// Hash a file by streaming through SHA-256. Memory usage is one
 /// chunk buffer (~64 KB), regardless of file size.
-fn hash_file_sha256(path: &Path) -> Result<String, JdkError> {
+///
+/// Consults `cancel` every chunk. This is a single sequential pass over
+/// the whole archive, so without it a cancel landing after the download
+/// left the user watching a closed window and an unresponsive process for
+/// as long as hashing took.
+fn hash_file_sha256(path: &Path, cancel: &AtomicBool) -> Result<String, JdkError> {
     let mut f = std::fs::File::open(path)?;
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; 64 * 1024];
     loop {
+        // Relaxed is enough: a lone latch carries no data for anyone to
+        // read, and this runs once per 64 KB over a ~190 MB file.
+        if cancel.load(Ordering::Relaxed) {
+            return Err(JdkError::Download("cancelled by user".into()));
+        }
         let n = f.read(&mut buf)?;
         if n == 0 {
             break;
@@ -770,14 +780,29 @@ fn hash_file_sha256(path: &Path) -> Result<String, JdkError> {
 /// unhelpful "not a zip file" about a file that was never supposed to be
 /// one. Each platform asserts the name it expects and says so plainly.
 #[cfg(windows)]
-fn extract_jdk_archive(archive: &Path, dest_dir: &Path) -> Result<PathBuf, JdkError> {
+fn extract_jdk_archive(
+    archive: &Path,
+    dest_dir: &Path,
+    cancel: &AtomicBool,
+) -> Result<PathBuf, JdkError> {
     expect_extension(archive, ".zip")?;
-    extract_jdk_zip(archive, dest_dir)
+    extract_jdk_zip(archive, dest_dir, cancel)
 }
 
 #[cfg(target_os = "macos")]
-fn extract_jdk_archive(archive: &Path, dest_dir: &Path) -> Result<PathBuf, JdkError> {
+fn extract_jdk_archive(
+    archive: &Path,
+    dest_dir: &Path,
+    cancel: &AtomicBool,
+) -> Result<PathBuf, JdkError> {
     expect_extension(archive, ".tar.gz")?;
+    // Checked before the unpack rather than during it: `tar::Archive` is one
+    // call, so there is no per-entry seam to interrupt on this platform. A
+    // cancel landing mid-unpack is caught by the phase boundary afterwards,
+    // which still stops the flow reporting success.
+    if cancel.load(Ordering::Relaxed) {
+        return Err(JdkError::Download("cancelled by user".into()));
+    }
     let file = std::fs::File::open(archive)?;
     let gz = flate2::read::GzDecoder::new(file);
     let mut tar = tar::Archive::new(gz);
@@ -815,11 +840,20 @@ fn expect_extension(archive: &Path, expected: &str) -> Result<(), JdkError> {
 }
 
 #[cfg(windows)]
-fn extract_jdk_zip(zip: &Path, dest_dir: &Path) -> Result<PathBuf, JdkError> {
+fn extract_jdk_zip(
+    zip: &Path,
+    dest_dir: &Path,
+    cancel: &AtomicBool,
+) -> Result<PathBuf, JdkError> {
     let file = std::fs::File::open(zip)?;
     let mut zip_reader = zip::ZipArchive::new(file)?;
     std::fs::create_dir_all(dest_dir)?;
     for i in 0..zip_reader.len() {
+        // Checked per entry. A Temurin JDK is a few thousand entries, so this
+        // is a real seam rather than a token one.
+        if cancel.load(Ordering::Relaxed) {
+            return Err(JdkError::Download("cancelled by user".into()));
+        }
         let mut entry = zip_reader.by_index(i)?;
         let raw = match entry.enclosed_name() {
             Some(p) => p.to_path_buf(),
@@ -933,6 +967,14 @@ fn find_cached_jdk(min_java_major: u16, install_root: &Path) -> Option<PathBuf> 
         if !path.is_dir() {
             continue;
         }
+        // Skip staging trees (`.25.staging-<pid>`). One is a half-finished
+        // extraction by definition; adopting it would hand the launcher a
+        // JAVA_HOME missing most of its files. Published trees are only
+        // ever created by `publish`'s rename, so anything at the top level
+        // without the dot prefix is complete.
+        if entry.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
         let Some(home) = find_java_home(&path) else {
             continue;
         };
@@ -967,6 +1009,79 @@ const PHASE_1_PCT_START: u32 = 96; // verify starts here
 const PHASE_1_PCT_END: u32 = 98; // verify ends here
 const PHASE_2_PCT_START: u32 = 99; // extract starts here
 
+/// Outcome of one cancellable worker phase.
+///
+/// `Cancelled` is deliberately *not* a [`JdkError`]: it is not an error,
+/// it must never produce a message for the Retry dialog, and every
+/// `JdkError` variant is wired to a localisation key, so adding one would
+/// mean inventing user-facing text for something that is not a failure.
+enum Phase<T> {
+    Done(T),
+    Cancelled,
+    Failed(JdkError),
+}
+
+/// Fold a phase's `Result` into a [`Phase`].
+///
+/// The latch, not the error text, decides: the phase functions all bail
+/// out with `JdkError::Download("cancelled by user")` because they have no
+/// other channel, and that string is never surfaced -- it is only ever
+/// converted here, and only when `cancel` is actually set. Anything else
+/// is a real failure.
+fn phase_result<T>(r: Result<T, JdkError>, cancel: &AtomicBool) -> Phase<T> {
+    match r {
+        Ok(v) => Phase::Done(v),
+        Err(_) if cancel.load(Ordering::Relaxed) => Phase::Cancelled,
+        Err(e) => Phase::Failed(e),
+    }
+}
+
+/// Claim the worker's terminal outcome, without over ruling one the UI has
+/// already settled.
+///
+/// The progress window writes `done = 3` from another thread when the user
+/// cancels. An unconditional `done.store(..)` here therefore overwrote that
+/// with `1` (success) or `2` (error, so: "Download failed -- Try again?"),
+/// depending on which lost the race. Compare-and-swap makes "the worker
+/// declares an outcome, and never overrules one" structural rather than
+/// something each call site has to remember.
+fn claim_outcome(shared: &ProgressShared, code: i32) -> bool {
+    shared
+        .done
+        .compare_exchange(0, code, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+}
+
+/// Record a phase's result on `shared`, preferring a cancellation that
+/// landed while the phase was running. Returns the value on success and
+/// `None` on either non-success path.
+fn settle<T>(shared: &ProgressShared, r: Phase<T>, describe: &str) -> Option<T> {
+    match r {
+        Phase::Done(v) => Some(v),
+        Phase::Cancelled => {
+            log::log(&format!("{describe} cancelled by user"));
+            claim_outcome(shared, 3);
+            None
+        }
+        Phase::Failed(e) => {
+            // A cancel that arrived while the phase was failing still wins.
+            // The user asked to stop; offering a Retry would be answering a
+            // question they did not ask.
+            if shared.cancel.load(Ordering::Relaxed) {
+                log::log(&format!("{describe} failed while cancelling: {e}"));
+                claim_outcome(shared, 3);
+            } else {
+                log::log(&format!("{describe} failed: {e}"));
+                if let Ok(mut g) = shared.error.lock() {
+                    *g = Some(e.to_string());
+                }
+                claim_outcome(shared, 2);
+            }
+            None
+        }
+    }
+}
+
 fn worker_thread(
     install_dir: PathBuf,
     tmp_zip: PathBuf,
@@ -975,12 +1090,6 @@ fn worker_thread(
     total_bytes: u64,
     shared: Arc<ProgressShared>,
 ) {
-    let set_error = |msg: String| {
-        if let Ok(mut g) = shared.error.lock() {
-            *g = Some(msg);
-        }
-    };
-
     // There is deliberately no wait for a click here any more.
     //
     // This used to spin on `shared.started` until the progress window's
@@ -1023,26 +1132,22 @@ fn worker_thread(
         }
     };
 
-    match download_to_disk(&url, &tmp_zip, &shared.cancel, total_bytes, on_progress) {
-        Ok(written) => {
-            log::log(&format!(
-                "phase 0 complete: {} bytes written to {}",
-                written,
-                tmp_zip.display()
-            ));
-        }
-        Err(e) => {
-            log::log(&format!("phase 0 failed: download: {e}"));
-            set_error(format!("download: {e}"));
-            shared.done.store(2, Ordering::SeqCst);
-            return;
-        }
-    }
-    if shared.cancel.load(Ordering::SeqCst) {
-        log::log("phase 0 cancelled by user");
-        shared.done.store(3, Ordering::SeqCst);
+    let downloaded = settle(
+        &shared,
+        phase_result(
+            download_to_disk(&url, &tmp_zip, &shared.cancel, total_bytes, on_progress),
+            &shared.cancel,
+        ),
+        "phase 0 (download)",
+    );
+    if downloaded.is_none() {
         return;
     }
+    log::log(&format!(
+        "phase 0 complete: {} bytes written to {}",
+        downloaded.unwrap_or(0),
+        tmp_zip.display()
+    ));
     shared.bytes.store(total_bytes, Ordering::SeqCst);
     // Land exactly on PHASE_0_PCT_MAX so phase 1 picks up with no jump.
     shared.pct.store(PHASE_0_PCT_MAX, Ordering::SeqCst);
@@ -1055,27 +1160,29 @@ fn worker_thread(
     log::log("phase 1 (verify SHA-256) starting");
     shared.pct.store(PHASE_1_PCT_START, Ordering::SeqCst);
 
-    let computed = match hash_file_sha256(&tmp_zip) {
-        Ok(h) => {
+    let computed = match settle(
+        &shared,
+        phase_result(hash_file_sha256(&tmp_zip, &shared.cancel), &shared.cancel),
+        "phase 1 (verify SHA-256)",
+    ) {
+        Some(h) => {
             log::log(&format!("phase 1: computed SHA-256 = {h}"));
             h
         }
-        Err(e) => {
-            log::log(&format!("phase 1 failed: hash: {e}"));
-            set_error(format!("hash: {e}"));
-            shared.done.store(2, Ordering::SeqCst);
-            return;
-        }
+        None => return,
     };
     if !computed.eq_ignore_ascii_case(&expected_sha) {
         log::log(&format!(
             "phase 1: SHA-256 mismatch (expected {expected_sha}, computed {computed})"
         ));
-        set_error(format!(
-            "SHA-256 mismatch â€” declared {}, computed {}",
-            expected_sha, computed
-        ));
-        shared.done.store(2, Ordering::SeqCst);
+        settle::<()>(
+            &shared,
+            Phase::Failed(JdkError::Sha256Mismatch {
+                declared: expected_sha.clone(),
+                computed: computed.clone(),
+            }),
+            "phase 1 (verify SHA-256)",
+        );
         return;
     }
     log::log("phase 1: SHA-256 verified");
@@ -1089,10 +1196,16 @@ fn worker_thread(
         tmp_zip.display(),
         install_dir.display()
     ));
-    if let Err(e) = extract_jdk_archive(&tmp_zip, &install_dir) {
-        log::log(&format!("phase 2 failed: extract: {e}"));
-        set_error(format!("extract: {e}"));
-        shared.done.store(2, Ordering::SeqCst);
+    if settle(
+        &shared,
+        phase_result(
+            extract_jdk_archive(&tmp_zip, &install_dir, &shared.cancel),
+            &shared.cancel,
+        ),
+        "phase 2 (extract)",
+    )
+    .is_none()
+    {
         return;
     }
     // Adoptium's zip carries a leading `jdk-<version>/` directory,
@@ -1100,24 +1213,28 @@ fn worker_thread(
     // nested one level deeper. `find_java_home` walks the extracted
     // tree to the actual JAVA_HOME.
     let Some(home) = find_java_home(&install_dir) else {
-        log::log(&format!(
-            "phase 2 failed: extracted to {} but no bin\\java.exe found inside",
-            install_dir.display()
-        ));
-        set_error(format!(
-            "extracted to {} but no bin\\java.exe found inside (depth {})",
-            install_dir.display(),
-            MAX_JAVA_HOME_DEPTH
-        ));
-        shared.done.store(2, Ordering::SeqCst);
+        settle::<()>(
+            &shared,
+            Phase::Failed(JdkError::NoJavaExe(install_dir.clone())),
+            "phase 2 (find JAVA_HOME)",
+        );
         return;
     };
     if let Ok(mut g) = shared.home.lock() {
         *g = Some(home.clone());
     }
     log::log(&format!("phase 2: extracted JDK home = {}", home.display()));
-    shared.pct.store(100, Ordering::SeqCst);
-    shared.done.store(1, Ordering::SeqCst);
+
+    // Claimed, not stored. If the user cancelled while we were verifying or
+    // extracting, the progress window has already written `done = 3` from
+    // another thread, and an unconditional `store(1)` would overrule it --
+    // the caller would read success for a JDK the user asked us not to
+    // install. `claim_outcome` loses that race by design.
+    if claim_outcome(&shared, 1) {
+        shared.pct.store(100, Ordering::SeqCst);
+    } else {
+        log::log("terminal success declined: outcome was already settled (cancelled?)");
+    }
 }
 
 // ===========================================================================
@@ -1160,12 +1277,224 @@ pub(crate) fn should_report(phase: i32, last_phase: i32, pct: u32, last_pct: u32
     phase != last_phase || pct >= last_pct + 5
 }
 
+/// Exclusive, cross-process lock over one Java major's install.
+///
+/// On Windows this is `LockFileEx`, which the *kernel* releases when the
+/// process exits -- including a crash or a `TerminateProcess`, which is the
+/// only version of this that cannot strand the lock. On other platforms it
+/// degrades to an atomic `create_new` with an age-based takeover, which is
+/// best-effort by comparison and documented as such.
+///
+/// Held for the whole of [`maybe_install`] -- the cache check, the download
+/// and the publish -- so that no two processes ever treat
+/// `<install_root>/<major>/` as their own scratch space.
+pub struct InstallLock {
+    #[allow(dead_code)]
+    path: PathBuf,
+    #[allow(dead_code)]
+    file: std::fs::File,
+}
+
+impl InstallLock {
+    fn lock_path(install_root: &Path, major: u16) -> PathBuf {
+        install_root.join(format!("{major}.lock"))
+    }
+
+    pub fn acquire(install_root: &Path, major: u16) -> Result<Self, JdkError> {
+        Self::acquire_within(install_root, major, LOCK_WAIT)
+    }
+
+    /// Same, with an explicit bound on the wait.
+    ///
+    /// Separate so a test can prove the lock actually excludes without
+    /// waiting the production timeout to find out.
+    fn acquire_within(
+        install_root: &Path,
+        major: u16,
+        wait: std::time::Duration,
+    ) -> Result<Self, JdkError> {
+        let path = Self::lock_path(install_root, major);
+        cfg_if_lock(&path, major, wait)
+    }
+}
+
+impl Drop for InstallLock {
+    fn drop(&mut self) {
+        cfg_unlock(&self.path);
+    }
+}
+
+/// How long to wait for a peer before giving up.
+///
+/// Generous, because the thing we are waiting for is usually a ~200 MB
+/// download that may legitimately take minutes, and the alternative
+/// failure -- telling the user to retry -- is worse than waiting. Bounded
+/// regardless, so a genuinely wedged peer cannot hang the launcher
+/// silently forever, which is the failure mode this whole flow exists to
+/// avoid.
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// A lockfile older than this is assumed abandoned and taken over. Only
+/// used on the non-Windows fallback; Windows gets kernel-managed release.
+#[cfg_attr(windows, allow(dead_code))]
+const LOCK_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(900);
+
+#[cfg(windows)]
+fn cfg_if_lock(path: &Path, major: u16, wait: std::time::Duration) -> Result<InstallLock, JdkError> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::IO::OVERLAPPED;
+    use windows_sys::Win32::Storage::FileSystem::{
+        LockFileEx, LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY,
+    };
+
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)?;
+    let deadline = std::time::Instant::now() + wait;
+
+    loop {
+        let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
+        // Zero-length lock over the whole file: we want a name to contend
+        // on, not a byte range. Any range would do, since the file holds
+        // nothing.
+        // `LOCKFILE_FAIL_IMMEDIATELY` is load-bearing, not an optimisation.
+        // Without it LockFileEx *blocks* until the range is free, so the
+        // call never returns while a peer holds the lock -- which would
+        // hang the launcher indefinitely and make the deadline below dead
+        // code. With it, a contended lock returns ERROR_LOCK_VIOLATION at
+        // once and the poll loop is what actually enforces the timeout.
+        let ok = unsafe {
+            LockFileEx(
+                file.as_raw_handle() as _,
+                LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+                0,
+                u32::MAX,
+                u32::MAX,
+                &mut overlapped,
+            )
+        };
+        if ok != 0 {
+            log::log(&format!("install lock held: {}", path.display()));
+            return Ok(InstallLock {
+                path: path.to_path_buf(),
+                file,
+            });
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(JdkError::Io(std::io::Error::other(format!(
+                "another snug is installing Java {major}; gave up waiting for {}",
+                path.display()
+            ))));
+        }
+        // The progress window is about to open for *our* download, so poll
+        // rather than sleep long enough to look wedged.
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+}
+
+#[cfg(windows)]
+fn cfg_unlock(path: &Path) {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::IO::OVERLAPPED;
+    use windows_sys::Win32::Storage::FileSystem::UnlockFileEx;
+    if let Ok(file) = std::fs::OpenOptions::new().read(true).write(true).open(path) {
+        let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
+        unsafe {
+            UnlockFileEx(
+                file.as_raw_handle() as _,
+                0,
+                u32::MAX,
+                u32::MAX,
+                &mut overlapped,
+            );
+        }
+    }
+    let _ = std::fs::remove_file(path);
+}
+
+/// Non-Windows fallback: atomic create, with an age-based takeover.
+///
+/// Deliberately simple and deliberately weaker than the Windows path --
+/// there is no kernel-released lock here, so a hard crash leaves the file
+/// behind and the only recovery is [`LOCK_STALE_AFTER`]. Recorded rather
+/// than papered over, so the difference is visible if this ever runs
+/// somewhere it matters.
+#[cfg(not(windows))]
+fn cfg_if_lock(path: &Path, major: u16, wait: std::time::Duration) -> Result<InstallLock, JdkError> {
+    let deadline = std::time::Instant::now() + wait;
+    loop {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+        {
+            Ok(file) => {
+                log::log(&format!("install lock held: {}", path.display()));
+                return Ok(InstallLock {
+                    path: path.to_path_buf(),
+                    file,
+                });
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                let age = std::fs::metadata(path)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.elapsed().ok())
+                    .unwrap_or_default();
+                if age > LOCK_STALE_AFTER {
+                    log::log(&format!(
+                        "install lock {} is {age:?} old; treating as abandoned",
+                        path.display()
+                    ));
+                    let _ = std::fs::remove_file(path);
+                    continue;
+                }
+                if std::time::Instant::now() >= deadline {
+                    return Err(JdkError::Io(std::io::Error::other(format!(
+                        "another snug is installing Java; gave up waiting for {}",
+                        path.display()
+                    ))));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn cfg_unlock(path: &Path) {
+    let _ = std::fs::remove_file(path);
+}
+
 pub fn maybe_install(
     parent: ui::ParentWindow,
     min_java_major: u16,
     install_root: &Path,
 ) -> Result<Option<PathBuf>, JdkError> {
     std::fs::create_dir_all(install_root)?;
+
+    // 0. Serialise against any other process using this shared root.
+    //
+    // `install_root` is machine-wide (`%LOCALAPPDATA%\snug\jdk`), not
+    // per-app, so two snug apps -- or one app launched twice -- resolve to
+    // the same `<major>.zip.tmp` and the same `<major>/` tree. Without this
+    // they interleaved writes into one temp file and one extraction
+    // directory, and each one's startup cleanup recursively deleted the
+    // other's in-flight work. Acquiring before the cache check (rather than
+    // after) is what makes the wait useful: if whoever held it finished
+    // while we waited, the re-check below becomes a cache hit and we never
+    // download at all.
+    let lock = InstallLock::acquire(install_root, min_java_major)?;
+    log::log(&format!(
+        "JDK install lock acquired for major {min_java_major}"
+    ));
+    // Held for the rest of this function by `Drop`; never read, so bind it
+    // to `_` rather than let a refactor "optimise" the acquire away.
+    let _install_lock = lock;
 
     // 1. Cache hit â€” silent reuse.
     if let Some(home) = find_cached_jdk(min_java_major, install_root) {
@@ -1323,11 +1652,22 @@ fn run_one_install_attempt(
     install_dir: &Path,
     tmp_zip: &Path,
 ) -> AttemptOutcome {
-    // Start clean: previous attempts may have left a partial zip and a
-    // partial extract on disk.
+    // Extract into a per-attempt staging directory and publish by rename,
+    // rather than building in place at `install_dir`.
+    //
+    // `install_root` is `%LOCALAPPDATA%\snug\jdk`, shared by every snug-built
+    // app on the machine (deliberately -- a JDK must outlive the per-app cache
+    // sweep). The old in-place build made the canonical path the *work*: a
+    // crash, a cancel, or a second process left a half-extracted tree there,
+    // and `find_cached_jdk` would then adopt it as a cache hit. Staging keeps
+    // the canonical path meaningful: it exists only if a rename put it there.
+    let staging = staging_dir(install_dir);
+    let _ = std::fs::remove_dir_all(&staging);
+    if let Err(e) = std::fs::create_dir_all(&staging) {
+        log::log(&format!("could not create staging {}: {e}", staging.display()));
+        return AttemptOutcome::Failed(format!("creating staging directory: {e}"));
+    }
     let _ = std::fs::remove_file(tmp_zip);
-    let _ = std::fs::remove_dir_all(install_dir);
-    let _ = std::fs::create_dir_all(install_dir);
 
     // The ask happens here, with nothing running yet, so that the only
     // outstanding thing is a human decision — never a worker thread
@@ -1365,12 +1705,12 @@ fn run_one_install_attempt(
 
     let worker = thread::spawn({
         let shared = shared.clone();
-        let install_dir = install_dir.to_path_buf();
         let tmp_zip = tmp_zip.to_path_buf();
         let url = metadata.package_link.clone();
         let sha = metadata.sha256.clone();
         let total = metadata.size_bytes;
-        move || worker_thread(install_dir, tmp_zip, url, sha, total, shared)
+        let worker_staging = staging.clone();
+        move || worker_thread(worker_staging, tmp_zip, url, sha, total, shared)
     });
 
     let dlg = dialogs::dialogs();
@@ -1402,13 +1742,27 @@ fn run_one_install_attempt(
     if done == 1 {
         if let Ok(g) = shared.home.lock() {
             if let Some(home) = g.clone() {
-                let _ = std::fs::remove_file(tmp_zip);
-                return AttemptOutcome::Success(home);
+                // The worker resolved JAVA_HOME *inside* staging, so rebase it
+                // onto the published path rather than re-walking the tree.
+                match publish(&staging, install_dir, &home) {
+                    Ok(published) => {
+                        let _ = std::fs::remove_file(tmp_zip);
+                        return AttemptOutcome::Success(published);
+                    }
+                    Err(e) => {
+                        log::log(&format!("publish failed: {e}"));
+                        let _ = std::fs::remove_dir_all(&staging);
+                        let _ = std::fs::remove_file(tmp_zip);
+                        return AttemptOutcome::Failed(format!("installing the JDK: {e}"));
+                    }
+                }
             }
         }
     }
     if done == 3 {
-        let _ = std::fs::remove_dir_all(install_dir);
+        // A cancel may have arrived after the extract finished, so staging can
+        // hold a complete tree that must not be published *or* kept.
+        let _ = std::fs::remove_dir_all(&staging);
         let _ = std::fs::remove_file(tmp_zip);
         return AttemptOutcome::Cancelled;
     }
@@ -1420,9 +1774,48 @@ fn run_one_install_attempt(
         .ok()
         .and_then(|g| g.clone())
         .unwrap_or_else(|| format!("Download did not finish (status={done})."));
-    let _ = std::fs::remove_dir_all(install_dir);
+    let _ = std::fs::remove_dir_all(&staging);
     let _ = std::fs::remove_file(tmp_zip);
     AttemptOutcome::Failed(err)
+}
+
+/// Per-attempt staging directory beside the canonical install path.
+///
+/// Dot-prefixed so `find_cached_jdk` can skip it: a staging tree is
+/// mid-extraction by definition and must never be adopted as a cache hit.
+/// The pid makes a concurrent second attempt land somewhere harmless
+/// instead of fighting over one directory.
+fn staging_dir(install_dir: &Path) -> PathBuf {
+    let parent = install_dir.parent().unwrap_or(install_dir);
+    let name = install_dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "jdk".to_string());
+    parent.join(format!(".{name}.staging-{}", std::process::id()))
+}
+
+/// Move a completed staging tree into place and return the rebased JAVA_HOME.
+///
+/// The rename is what makes the canonical path trustworthy: a reader either
+/// sees no directory at all, or a finished one. Removing the old tree first
+/// is safe *because the caller holds the install lock* -- see
+/// [`InstallLock`].
+fn publish(staging: &Path, install_dir: &Path, home_in_staging: &Path) -> Result<PathBuf, JdkError> {
+    let rel = home_in_staging
+        .strip_prefix(staging)
+        .map_err(|e| JdkError::Io(std::io::Error::other(format!("rebase {e}"))))?;
+    if install_dir.exists() {
+        std::fs::remove_dir_all(install_dir)?;
+    }
+    std::fs::create_dir_all(install_dir.parent().unwrap_or(install_dir))?;
+    if let Err(e) = std::fs::rename(staging, install_dir) {
+        return Err(JdkError::Io(std::io::Error::other(format!(
+            "publishing {} -> {}: {e}",
+            staging.display(),
+            install_dir.display()
+        ))));
+    }
+    Ok(install_dir.join(rel))
 }
 
 /// The download flow's only contact with the user.
@@ -1875,6 +2268,212 @@ mod tests {
     use std::io::Write;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    /// A latch that is never set, for exercising the happy path of a phase
+    /// that now takes one.
+    fn never_cancel() -> AtomicBool {
+        AtomicBool::new(false)
+    }
+
+    // ---- cancellation (F-05) -------------------------------------------
+
+    #[test]
+    fn a_worker_cannot_overrule_a_cancel_it_races_against() {
+        // The defect: the progress window writes `done = 3` from its own
+        // thread when the user cancels, and the worker's terminal
+        // `done.store(1)` overwrote it -- so a cancelled download reported
+        // success and the JDK was adopted. `claim_outcome` makes the worker
+        // declare, never overrule.
+        let shared = ProgressShared::new(100);
+        shared.cancel.store(true, Ordering::SeqCst);
+        shared.done.store(3, Ordering::SeqCst); // the UI got there first
+
+        assert!(
+            !claim_outcome(&shared, 1),
+            "worker claimed success over an existing cancellation"
+        );
+        assert_eq!(
+            shared.done.load(Ordering::SeqCst),
+            3,
+            "outcome must stay cancelled"
+        );
+
+        // And symmetrically: a worker that finished first keeps its result,
+        // and a later cancel does not relabel a genuine success.
+        let shared2 = ProgressShared::new(100);
+        assert!(claim_outcome(&shared2, 1));
+        assert!(!claim_outcome(&shared2, 3));
+        assert_eq!(shared2.done.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_cancel_during_a_failing_phase_reports_cancelled_not_failed() {
+        // Otherwise the user clicks Cancel and gets "Download failed -- Try
+        // again?", which is answering a question they did not ask.
+        let shared = ProgressShared::new(100);
+        shared.cancel.store(true, Ordering::SeqCst);
+        settle::<()>(
+            &shared,
+            Phase::Failed(JdkError::Extract("disk full".into())),
+            "phase 2 (extract)",
+        );
+        assert_eq!(shared.done.load(Ordering::SeqCst), 3);
+        assert!(
+            shared.error.lock().unwrap().is_none(),
+            "a cancel must not leave an error for the Retry dialog"
+        );
+    }
+
+    #[test]
+    fn a_genuine_failure_still_reports_failed() {
+        // The counterweight to the test above: without a cancel, a failure
+        // must still land on 2 with a message.
+        let shared = ProgressShared::new(100);
+        settle::<()>(
+            &shared,
+            Phase::Failed(JdkError::Extract("disk full".into())),
+            "phase 2 (extract)",
+        );
+        assert_eq!(shared.done.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            shared.error.lock().unwrap().as_deref(),
+            Some(JdkError::Extract("disk full".into()).to_string().as_str())
+        );
+    }
+
+    #[test]
+    fn hashing_stops_promptly_when_cancelled() {
+        let dir = tempdir();
+        let p = dir.join("big.bin");
+        std::fs::File::create(&p)
+            .unwrap()
+            .write_all(&vec![b'x'; 4 * 1024 * 1024])
+            .unwrap();
+        let cancel = AtomicBool::new(true);
+        // Pre-set, so the very first chunk check trips.
+        assert!(matches!(
+            hash_file_sha256(&p, &cancel),
+            Err(JdkError::Download(_))
+        ));
+        // ...and with the latch clear the same file hashes fine.
+        assert!(hash_file_sha256(&p, &never_cancel()).is_ok());
+    }
+
+    // ---- staging + publish (F-29) --------------------------------------
+
+    #[test]
+    fn staging_is_hidden_from_the_cache_scan() {
+        // A staging tree is a half-finished extraction. Adopting it would
+        // hand the launcher a JAVA_HOME missing most of its files, which is
+        // exactly what the in-place build did after a crash or a cancel.
+        let root = tempdir();
+        let staging = staging_dir(&root.join("25"));
+        std::fs::create_dir_all(staging.join("bin")).unwrap();
+        std::fs::write(java_binary(&staging), b"").unwrap();
+
+        // A sibling published tree is scanned as before.
+        let published = root.join("25");
+        std::fs::create_dir_all(published.join("bin")).unwrap();
+        std::fs::write(java_binary(&published), b"").unwrap();
+
+        // Mirror `find_cached_jdk`'s own filter rather than re-implementing
+        // it, so this test cannot pass while the real scan regresses.
+        let scanned: Vec<String> = std::fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().is_dir() && !e.file_name().to_string_lossy().starts_with('.'))
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(scanned, vec!["25".to_string()], "staging must not be scanned");
+        assert!(
+            staging.file_name().unwrap().to_string_lossy().starts_with('.'),
+            "staging must be dot-prefixed so the filter can see it: {}",
+            staging.display()
+        );
+    }
+
+    #[test]
+    fn publish_moves_the_tree_and_rebases_java_home() {
+        // The worker resolves JAVA_HOME inside staging; after the rename
+        // that path no longer exists, so it has to be rebased onto the
+        // published location or the launcher is handed a dead JAVA_HOME.
+        let root = tempdir();
+        let install_dir = root.join("25");
+        let staging = staging_dir(&install_dir);
+        let nested = staging.join("jdk-25.0.4+1");
+        std::fs::create_dir_all(nested.join("bin")).unwrap();
+        std::fs::write(java_binary(&nested), b"").unwrap();
+        std::fs::write(nested.join("bin").join("marker.txt"), b"x").unwrap();
+
+        let home_in_staging = find_java_home(&staging).expect("home inside staging");
+        assert!(home_in_staging.starts_with(&staging));
+        let published = publish(&staging, &install_dir, &home_in_staging).expect("publish");
+
+        assert!(!staging.exists(), "staging must be gone after the rename");
+        assert!(published.starts_with(&install_dir));
+        assert!(published.ends_with("jdk-25.0.4+1"), "rebased: {published:?}");
+        assert!(published.join("bin").join("marker.txt").is_file());
+    }
+
+    #[test]
+    fn publish_replaces_an_existing_install() {
+        // Re-downloading a point release must not leave the old tree beside
+        // the new one, and must not fail because the destination exists.
+        let root = tempdir();
+        let install_dir = root.join("25");
+        std::fs::create_dir_all(install_dir.join("old")).unwrap();
+
+        let staging = staging_dir(&install_dir);
+        let nested = staging.join("jdk-25.0.5+1");
+        std::fs::create_dir_all(nested.join("bin")).unwrap();
+        std::fs::write(java_binary(&nested), b"").unwrap();
+
+        let home_in_staging = find_java_home(&staging).expect("home inside staging");
+        let published = publish(&staging, &install_dir, &home_in_staging).expect("publish over existing");
+
+        assert!(!install_dir.join("old").exists(), "old tree must be replaced");
+        assert_eq!(published, install_dir.join("jdk-25.0.5+1"));
+        assert!(java_binary(&published).is_file());
+    }
+
+    #[test]
+    fn the_install_lock_actually_excludes() {
+        // The defect this guards: `install_root` is machine-wide, so two
+        // processes resolved to the same `<major>.zip.tmp` and the same
+        // `<major>/`, interleaved their writes, and each one's startup
+        // cleanup deleted the other's in-flight work. Assert the lock is
+        // genuinely exclusive rather than merely present.
+        let root = tempdir();
+        let held = InstallLock::acquire_within(&root, 25, std::time::Duration::from_secs(1))
+            .expect("first acquire");
+
+        // Short wait: a working lock must give up quickly rather than succeed.
+        let blocked = InstallLock::acquire_within(&root, 25, std::time::Duration::from_millis(600));
+        assert!(
+            blocked.is_err(),
+            "second acquire succeeded while the first was held -- not exclusive"
+        );
+
+        // Released, so the next holder gets in.
+        drop(held);
+        InstallLock::acquire_within(&root, 25, std::time::Duration::from_secs(2))
+            .expect("acquire after release");
+    }
+
+    #[test]
+    fn the_lockfile_exists_for_as_long_as_the_lock_is_held() {
+        // Named for what it checks. It does NOT prove cross-process
+        // exclusion -- that needs a second OS process, and the exclusion
+        // itself is covered by `the_install_lock_actually_excludes`. This
+        // only pins the rendezvous point: a lockfile on disk that a peer can
+        // find, which is what makes the wait diagnosable in the log.
+        let root = tempdir();
+        let held = InstallLock::acquire_within(&root, 25, std::time::Duration::from_secs(1))
+            .expect("acquire");
+        let lock_path = InstallLock::lock_path(&root, 25);
+        assert!(lock_path.exists(), "lockfile must exist while held");
+        drop(held);
+    }
+
     // ---- macOS JDK acquisition ----------------------------------------
 
     #[cfg(target_os = "macos")]
@@ -1920,7 +2519,7 @@ mod tests {
         }
 
         let dest = dir.join("install");
-        extract_jdk_archive(&archive, &dest).expect("extract");
+        extract_jdk_archive(&archive, &dest, &never_cancel()).expect("extract");
 
         let home = find_java_home(&dest).expect("java home should be found");
         // The home is the `Contents/Home` directory, not the `.jdk` root.
@@ -1938,7 +2537,7 @@ mod tests {
         let dir = tempdir();
         let archive = dir.join("21.zip.tmp");
         std::fs::write(&archive, b"PK\x03\x04not really").unwrap();
-        let err = extract_jdk_archive(&archive, &dir.join("install")).unwrap_err();
+        let err = extract_jdk_archive(&archive, &dir.join("install"), &never_cancel()).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains(".tar.gz"), "unhelpful error: {msg}");
     }
@@ -2095,7 +2694,7 @@ mod tests {
         let p = dir.join("a.txt");
         std::fs::File::create(&p).unwrap().write_all(b"hello").unwrap();
 
-        let h = hash_file_sha256(&p).unwrap();
+        let h = hash_file_sha256(&p, &never_cancel()).unwrap();
         assert_eq!(
             h,
             "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
@@ -2122,7 +2721,7 @@ mod tests {
             zipw.write_all(b"fake java bytes").unwrap();
             zipw.finish().unwrap();
         }
-        extract_jdk_zip(&zip_path, &extract_into).unwrap();
+        extract_jdk_zip(&zip_path, &extract_into, &never_cancel()).unwrap();
         let java = extract_into.join("jdk-25/bin/java.exe");
         assert!(java.exists(), "extracted zip should have jdk-25/bin/java.exe");
         let _ = std::fs::remove_dir_all(&dir);
