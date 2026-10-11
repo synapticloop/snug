@@ -296,11 +296,13 @@ git add bin\launcher-stub-windows-x86_64.exe
 - **Tests:** 4, including `a_continuation_does_not_swallow_the_next_header`, which guards the failure mode a naive join introduces.
 - **File:** `crates/snug-cli/src/manifest.rs`
 ### F-27 — Each build serialises the whole payload three times
-- **Status:** `TODO`
-- **File:** `crates/snug-cli/src/main.rs:121-122`, `crates/snug-cli/src/build.rs:522-523`
+- **Status:** `DONE`
+- **File:** `crates/snug-cli/src/{build,main}.rs`
 - **Trigger:** Any normal build.
 - **Impact:** `main.rs:122` builds a `SnugEmbedded` (full postcard encode for len + CRC), then `build.rs:522` builds a *second* from `payload.clone()` — a full copy of every JAR byte plus another encode — and `:523` encodes a third time. Peak memory runs at roughly 3-4× the JAR size on the 200 MB case the code itself cites.
-- **Fix:** Pass the `&SnugEmbedded` already built in `main.rs` into `build_exe`.
+- **Fixed:** 2026-10-10. `build_exe` took `payload: SnugEmbedded` **by value**, so it could not see the encode the caller had already done — it cloned the whole thing and re-encoded to recover `len` and `crc`. Now it takes `&SnugEmbedded` and reads those fields directly. The clone and the second full encode are gone; one build is one encode.
+- **Deliberately left:** one redundant encode remains (the caller builds the payload, the builder encodes it again). Caching the bytes on `SnugEmbedded` would remove it, but `payload` is a public field a caller can mutate, so a cache would go stale silently — the exact failure F-22/F-25 were about. Not worth it.
+- **Test:** existing `end_to_end` / `editpe_roundtrip` cases re-pointed at `&embedded`; the guard is that `build_exe` no longer accepts ownership, so the clone cannot come back without failing the signature.
 ### F-28 — The exe-dir options tier doesn't carry relative paths, despite the documented promise
 - **Status:** `DONE` (doc, not behaviour — deliberate)
 - **Decided against implementing it.** The module doc claimed a portable `snug.exe` "carries its defaults wherever it is invoked from", but a relative path in an options file resolves against the **CWD**, not the directory the file was found in. Fixing the behaviour means deciding which flags are path-valued and rebasing only those; guessing wrong would silently mangle `--jvm-arg`. The doc now states the real behaviour and records why the fuller fix was not taken.
