@@ -17,13 +17,12 @@
 //! `snug.exe` binary lives in. `cd ~/work/myapp && snug/snug.exe
 //! --init-localizations` writes `~/work/myapp/localisations/`.
 //!
-//! This is deliberately the opposite of the `snug.options` *read*
-//! order, which prefers the executable's own directory (see
-//! [`crate::options_file::resolve`]) so a shipped `snug.exe` carries
-//! its defaults wherever it runs from. Translations are per-project
-//! source, not a shipped artefact: they belong in the project you are
-//! standing in. `--init-options` also defaults to a CWD-relative
-//! path, so both init modes agree with each other.
+//! This matches how `snug.options` is read (see
+//! [`crate::options_file::resolve_all`]) and where `--init-options`
+//! scaffolds its file: everything resolves against the directory you are
+//! standing in. Translations are per-project source, not a shipped
+//! artefact — they belong in the project you are building — so writing
+//! them beside the binary would be the wrong home for them.
 //!
 //! ## What gets written
 //!

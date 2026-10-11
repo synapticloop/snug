@@ -68,11 +68,9 @@ fn run() -> Result<()> {
     // file is opt-in, so looking for one and finding nothing must stay
     // silent.
     let cwd = std::env::current_dir().context("reading current working directory")?;
-    let exe_dir = options_file::current_exe_dir();
     let options_paths = options_file::resolve_all(
         &raw_args,
         &cwd,
-        exe_dir.as_deref(),
         std::env::consts::OS,
     )
     .context("resolving which options files apply")?;
@@ -317,10 +315,10 @@ fn is_init_flag(arg: &str) -> bool {
 /// strict-mode tests catch the regression.
 #[derive(Debug, clap::Parser)]
 struct InitCli {
-    /// Target path. Optional — defaults to `./snug.options` (the
-    /// same path `options_file::resolve` reads on a normal
-    /// invocation, so writing here means the next `snug` run will
-    /// pick it up).
+    /// Target path. Optional — defaults to `./snug.options`, which is
+    /// exactly the path `options_file::resolve_all` reads on a normal
+    /// invocation: both resolve against the directory snug was invoked
+    /// from, so writing here means the next `snug` run picks it up.
     #[arg(
         long = "init-options",
         value_name = "PATH",
@@ -339,8 +337,7 @@ struct InitCli {
 
     /// Target directory. Optional — defaults to `./localisations`
     /// relative to the *current working directory* (where snug was
-    /// invoked from), not the executable's own directory. Created if
-    /// missing.
+    /// invoked from). Created if missing.
     #[arg(
         long = "init-localizations",
         value_name = "DIR",

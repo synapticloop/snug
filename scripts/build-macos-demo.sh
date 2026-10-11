@@ -217,10 +217,9 @@ echo "    JavaFX natives for macOS: $mac_natives"
 # only*, so naming snug.options here would suppress snug.macos.options and
 # put the `.exe` back. Leaving the flag off is what layers the two.
 #
-# Nothing ships an options file next to the staged snug binary, so the
-# exe-dir lookup finds nothing and the CWD copies are the ones read. Both
-# are echoed so the dependency is visible in the log rather than being an
-# accident of the working directory.
+# Both files are read from the CWD and nowhere else, so this step depends
+# on being run from the repo root. Both are echoed so the dependency is
+# visible in the log rather than being an accident of the working directory.
 #
 # A snug.<os>.options is optional in general, but *this* script depends on
 # one: it carries the only value that differs on macOS.

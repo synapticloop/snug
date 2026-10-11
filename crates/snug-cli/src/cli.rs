@@ -487,7 +487,7 @@ pub struct Cli {
     /// localisations` on a later build.
     ///
     /// The directory defaults to `./localisations` — the directory
-    /// `snug` was invoked from, not the executable's own directory.
+    /// `snug` was invoked from.
     /// Pass a path to write elsewhere.
     ///
     /// By default refuses to overwrite existing bundles; pass

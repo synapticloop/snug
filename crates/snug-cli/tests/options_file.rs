@@ -299,7 +299,7 @@ fn options_file_load_skips_comments() {
 fn resolve_returns_nothing_when_no_default_and_no_explicit() {
     let tmp = tempdir();
     let args: Vec<String> = ["snug", "app.jar"].iter().map(|s| s.to_string()).collect();
-    assert!(options_file::resolve_all(&args, &tmp, None, "macos").unwrap().is_empty());
+    assert!(options_file::resolve_all(&args, &tmp, "macos").unwrap().is_empty());
 }
 
 #[test]
@@ -308,21 +308,8 @@ fn resolve_finds_default_in_cwd() {
     fs::write(tmp.join("snug.options"), "--name X\n").unwrap();
     let args: Vec<String> = ["snug", "app.jar"].iter().map(|s| s.to_string()).collect();
     assert_eq!(
-        options_file::resolve_all(&args, &tmp, None, "macos").unwrap(),
+        options_file::resolve_all(&args, &tmp, "macos").unwrap(),
         vec![tmp.join("snug.options")]
-    );
-}
-
-#[test]
-fn resolve_prefers_exe_dir_over_cwd() {
-    let exe_dir = tempdir();
-    let cwd = tempdir();
-    fs::write(exe_dir.join("snug.options"), "--name ExeDir\n").unwrap();
-    fs::write(cwd.join("snug.options"), "--name Cwd\n").unwrap();
-    let args: Vec<String> = ["snug", "app.jar"].iter().map(|s| s.to_string()).collect();
-    assert_eq!(
-        options_file::resolve_all(&args, &cwd, Some(exe_dir.as_path()), "macos").unwrap(),
-        vec![exe_dir.join("snug.options")]
     );
 }
 
@@ -334,16 +321,22 @@ fn resolve_returns_both_files_lowest_priority_first() {
     fs::write(tmp.join("snug.macos.options"), "--name Y\n").unwrap();
     let args: Vec<String> = ["snug", "app.jar"].iter().map(|s| s.to_string()).collect();
     assert_eq!(
-        options_file::resolve_all(&args, &tmp, None, "macos").unwrap(),
+        options_file::resolve_all(&args, &tmp, "macos").unwrap(),
         vec![tmp.join("snug.options"), tmp.join("snug.macos.options")]
     );
 }
 
 #[test]
-fn options_file_next_to_executable_is_loaded_from_any_cwd() {
-    // Simulates the portable-distro layout: `snug.exe` and
-    // `snug.options` shipped together, invoked from an unrelated
-    // working directory.
+fn options_file_next_to_executable_is_ignored() {
+    // The inverse of the old portable-distro test. A `snug.options` sitting
+    // beside the executable is *not* loaded: default options are found in
+    // the CWD and nowhere else, so a system-wide install cannot silently
+    // apply its metadata to every project on the machine.
+    //
+    // Run against the real binary rather than `resolve_all` alone, because
+    // the guarantee here is behavioural. The API-level version of this
+    // claim is structural — `resolve_all` has no directory parameter to
+    // pass an exe dir to — so it cannot express the case at all.
     let tool_dir = tempdir();
     let cwd = tempdir();
     let local_snug = tool_dir.join(snug_bin().file_name().unwrap());
@@ -354,7 +347,6 @@ fn options_file_next_to_executable_is_loaded_from_any_cwd() {
     )
     .unwrap();
 
-    // A CWD default that must lose to the exe-dir one.
     fs::write(cwd.join("snug.options"), "--min-java 17\n--name \"From CWD\"\n").unwrap();
 
     let jar = cwd.join("demo.jar");
@@ -371,23 +363,24 @@ fn options_file_next_to_executable_is_loaded_from_any_cwd() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stderr.contains("loaded options from"),
-        "stderr should mention loading the file: {stderr}"
+        !stderr.contains(&tool_dir.join("snug.options").display().to_string()),
+        "the exe-dir options file must not be loaded: {stderr}"
     );
     assert!(
-        stderr.contains(&tool_dir.join("snug.options").display().to_string()),
-        "the exe-dir options file should win over the CWD one: {stderr}"
+        stderr.contains(&cwd.join("snug.options").display().to_string()),
+        "the CWD options file is the one that should load: {stderr}"
     );
     assert!(
-        stdout.contains("min-java:    21"),
-        "exe-dir --min-java 21 should win over CWD's 17: {stdout}"
+        stdout.contains("min-java:    17"),
+        "CWD --min-java 17 should be the value that survives: {stdout}"
     );
 }
 
 #[test]
-fn cwd_options_file_still_loaded_when_exe_dir_has_none() {
-    // `CARGO_BIN_EXE_snug` lives in `target/<profile>/`, which normally
-    // has no `snug.options` — so the CWD default must still win.
+fn cwd_options_file_is_loaded() {
+    // The plain case, against the real binary: a `snug.options` in the
+    // directory snug is invoked from is found and applied. The companion
+    // `options_file_next_to_executable_is_ignored` covers the other side.
     let tmp = tempdir();
     let jar = tmp.join("demo.jar");
     write_jar(&jar);
@@ -718,7 +711,7 @@ fn effective_repo_output(os: &str) -> Result<Option<PathBuf>, clap::Error> {
     let root = repo_root();
     let raw: Vec<String> = ["snug", "demo.jar"].iter().map(|s| s.to_string()).collect();
 
-    let paths = options_file::resolve_all(&raw, &root, None, os).unwrap();
+    let paths = options_file::resolve_all(&raw, &root, os).unwrap();
     let mut layers = Vec::with_capacity(paths.len());
     for p in &paths {
         layers.push(options_file::load(p).expect("repo options files must parse"));

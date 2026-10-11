@@ -26,8 +26,8 @@ REM      runtime dependency, and adds nothing to the shipped snug.exe.
 REM   4. target\...\snug.exe assets\snug-javafx-demo-windows.jar
 REM      Reads snug.options for the shared metadata, then snug.windows.options
 REM      for the platform-specific --output, and writes
-REM      assets\snug-javafx-demo.exe. The exe dir (target\release\) holds no
-REM      options file, so the CWD copies are the ones read.
+REM      assets\snug-javafx-demo.exe. Both files are read from the CWD,
+REM      so this step depends on being run from the repo root.
 REM   5. Verify snug.exe contains the stub bytes we just produced
 REM      (scripts\verify-embedded-stub.ps1; sha256 substring check).
 REM   6. Stamp assets\snug-runner.png into snug.exe. UNCONDITIONAL - this is

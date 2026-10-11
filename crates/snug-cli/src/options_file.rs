@@ -29,25 +29,44 @@
 //! file is also the escape hatch for a build that must not pick up
 //! ambient per-machine configuration.
 //!
-//! ## Lookup order within a tier
+//! ## Where the files are looked for
 //!
-//! For each of the two names, the snug executable's own directory is
-//! searched first, then the current working directory — so a portable
-//! `snug.exe` shipped alongside its `snug.options` carries its scalar
-//! defaults (`--name`, `--company`, `--version`, …) wherever it is invoked
-//! from. This is a *per-tier* search: an exe-dir `snug.options` and a CWD
-//! `snug.<os>.options` both load, and the OS file still wins on
-//! conflicting flags.
+//! Both default names are looked for in the **current working
+//! directory** — the directory `snug` was invoked from — and nowhere
+//! else. In particular the snug executable's own directory is *not*
+//! searched; see the note below.
 //!
-//! Path-valued tokens are the exception, and this is stated plainly because
-//! the opposite used to be claimed here: a relative path inside an options
-//! file resolves against the **current working directory**, not against the
-//! directory the file was found in. An exe-dir `snug.options` naming
-//! `assets/demo.jar` therefore works only when invoked from the repo root,
-//! and otherwise fails with a stat error that reads as though the file were
-//! ignored. Rebasing such paths onto the file's own directory would need a
-//! decided list of which flags are path-valued, and guessing wrong would
-//! silently mangle `--jvm-arg`, so it has not been done.
+//! Every relative path in a default options file therefore resolves
+//! against the same directory the file was found in, because both are the
+//! CWD. `--input app.jar` means `<cwd>/app.jar`, and there is no second
+//! directory in the picture that could disagree with it. This is the same
+//! convention as `Makefile`, `package.json` and `Cargo.toml`: ambient
+//! project configuration is found where you stand, and paths in it are
+//! read from there. A file named explicitly with `--options <path>` is
+//! no exception — the path you name is resolved from where you ran snug,
+//! and the paths inside it are resolved from there too, not from the
+//! directory that file happens to live in.
+//!
+//! The executable's directory used to be searched first, on the theory
+//! that a portable `snug.exe` shipped beside its `snug.options` would
+//! carry its defaults wherever it was invoked from. That is gone, and the
+//! reason is worth recording. It made the two directories disagree: the
+//! file was found beside the exe while its paths resolved from the CWD,
+//! so a `snug.options` naming `assets/demo.jar` worked only when invoked
+//! from the directory holding the assets, and failed anywhere else with a
+//! stat error that reads as though the file had been ignored. It also
+//! broke the codebase's own convention in three places that had already
+//! been written: `--init-options` scaffolds `./snug.options` in the CWD,
+//! its doc claimed `resolve` reads that same path, and
+//! `init_localizations` carries a test asserting its default is
+//! "not exe-relative: the directory snug was invoked from wins".
+//!
+//! What it bought was an ambient global config — a `snug.options` in a
+//! system-wide install directory silently applying to every project on
+//! the machine, including the ones you did not have in mind. A user who
+//! wants that opts in with `--options <path>`, which is explicit, and
+//! which was already the documented escape hatch for a build that must not
+//! pick up ambient per-machine configuration.
 //!
 //! A missing file is not an error, and not a warning. `snug.<os>.options`
 //! is an opt-in, so looking for one and finding nothing must be silent
@@ -170,18 +189,20 @@ pub fn host_os_options_file_name() -> String {
 /// not validated as existing — the caller is expected to fail loudly,
 /// which is existing behaviour and the integration test for it.
 ///
-/// Within each of the two default names, the snug executable's own
-/// directory is searched before the current working directory. That
-/// search is per-tier: an exe-dir `snug.options` and a CWD
-/// `snug.<os>.options` both load, and the OS file still wins on
-/// conflicting flags. Taking the first hit per name also means a
-/// directory that happens to share the file's name is skipped
-/// (`is_file`, not `exists`) and that `exe_dir == cwd` cannot yield the
-/// same file twice.
+/// Both default names are looked for in `cwd` and nowhere else — the
+/// snug executable's own directory is not consulted. Taking the CWD
+/// alone also means a directory that happens to share a file's name is
+/// skipped (`is_file`, not `exists`).
+///
+/// `resolve_all` takes no executable-directory parameter at all, which
+/// is the structural guarantee rather than a tested one: there is no
+/// second location for a default file to be found in, so a file beside
+/// the binary cannot be loaded no matter where snug is installed. The
+/// only way to reach a file outside the CWD is to name it with
+/// `--options <path>`.
 pub fn resolve_all(
     raw_args: &[String],
     cwd: &Path,
-    exe_dir: Option<&Path>,
     os: &str,
 ) -> Result<Vec<PathBuf>, OptionsFileError> {
     // A malformed `--options` propagates rather than falling through to
@@ -193,28 +214,10 @@ pub fn resolve_all(
     let os_file_name = os_options_file_name(os);
     let hits: Vec<PathBuf> = [DEFAULT_OPTIONS_FILE, os_file_name.as_str()]
         .iter()
-        .filter_map(|name| {
-            search_dirs(exe_dir, cwd)
-                .map(|dir| dir.join(name))
-                .find(|p| p.is_file())
-        })
+        .map(|name| cwd.join(name))
+        .filter(|p| p.is_file())
         .collect();
     Ok(hits)
-}
-
-/// The directories searched for a default options file, highest location
-/// priority first: the snug executable's own directory, then the current
-/// working directory.
-fn search_dirs<'a>(exe_dir: Option<&'a Path>, cwd: &'a Path) -> impl Iterator<Item = &'a Path> {
-    exe_dir.into_iter().chain(std::iter::once(cwd))
-}
-
-/// The directory containing the running `snug` executable, or `None` if
-/// the platform refuses to report it.
-pub fn current_exe_dir() -> Option<PathBuf> {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(Path::to_path_buf))
 }
 
 /// Walk the raw argv looking for `--options <path>` or `--options=<path>`.
@@ -1393,7 +1396,7 @@ mod tests {
         // Default file also exists, but the explicit flag wins.
         std::fs::write(dir.join(DEFAULT_OPTIONS_FILE), "--name Y\n").unwrap();
         let raw = args(&["snug", "--options", explicit.to_str().unwrap()]);
-        assert_eq!(resolve_all(&raw, &dir, None, "macos").unwrap(), vec![explicit]);
+        assert_eq!(resolve_all(&raw, &dir, "macos").unwrap(), vec![explicit]);
     }
 
     #[test]
@@ -1402,7 +1405,7 @@ mod tests {
         std::fs::write(dir.join(DEFAULT_OPTIONS_FILE), "--name Y\n").unwrap();
         let raw = args(&["snug", "app.jar"]);
         assert_eq!(
-            resolve_all(&raw, &dir, None, "macos").unwrap(),
+            resolve_all(&raw, &dir, "macos").unwrap(),
             vec![dir.join(DEFAULT_OPTIONS_FILE)]
         );
     }
@@ -1411,73 +1414,29 @@ mod tests {
     fn resolve_returns_nothing_when_no_file_present() {
         let dir = tempdir();
         let raw = args(&["snug", "app.jar"]);
-        assert!(resolve_all(&raw, &dir, None, "macos").unwrap().is_empty());
-    }
-
-    #[test]
-    fn resolve_prefers_exe_dir_over_cwd() {
-        let exe_dir = tempdir();
-        let cwd = tempdir();
-        std::fs::write(exe_dir.join(DEFAULT_OPTIONS_FILE), "--name ExeDir\n").unwrap();
-        std::fs::write(cwd.join(DEFAULT_OPTIONS_FILE), "--name Cwd\n").unwrap();
-        let raw = args(&["snug", "app.jar"]);
-        assert_eq!(
-            resolve_all(&raw, &cwd, Some(&exe_dir), "macos").unwrap(),
-            vec![exe_dir.join(DEFAULT_OPTIONS_FILE)]
-        );
-    }
-
-    #[test]
-    fn resolve_uses_cwd_when_exe_dir_has_no_default() {
-        let exe_dir = tempdir();
-        let cwd = tempdir();
-        std::fs::write(cwd.join(DEFAULT_OPTIONS_FILE), "--name Cwd\n").unwrap();
-        let raw = args(&["snug", "app.jar"]);
-        assert_eq!(
-            resolve_all(&raw, &cwd, Some(&exe_dir), "macos").unwrap(),
-            vec![cwd.join(DEFAULT_OPTIONS_FILE)]
-        );
+        assert!(resolve_all(&raw, &dir, "macos").unwrap().is_empty());
     }
 
     #[test]
     fn resolve_explicit_flag_beats_every_default() {
-        let exe_dir = tempdir();
-        let cwd = tempdir();
-        std::fs::write(exe_dir.join(DEFAULT_OPTIONS_FILE), "--name ExeDir\n").unwrap();
-        std::fs::write(exe_dir.join("snug.macos.options"), "--name ExeDirOS\n").unwrap();
-        let explicit = cwd.join("custom.opts");
+        let dir = tempdir();
+        std::fs::write(dir.join(DEFAULT_OPTIONS_FILE), "--name Generic\n").unwrap();
+        std::fs::write(dir.join("snug.macos.options"), "--name OS\n").unwrap();
+        let explicit = dir.join("custom.opts");
         std::fs::write(&explicit, "--name Custom\n").unwrap();
         let raw = args(&["snug", "--options", explicit.to_str().unwrap()]);
-        assert_eq!(
-            resolve_all(&raw, &cwd, Some(&exe_dir), "macos").unwrap(),
-            vec![explicit]
-        );
+        assert_eq!(resolve_all(&raw, &dir, "macos").unwrap(), vec![explicit]);
     }
 
     #[test]
     fn resolve_ignores_directory_named_like_the_default() {
-        let exe_dir = tempdir();
-        let cwd = tempdir();
-        // A *directory* called snug.options next to the exe must not be
-        // treated as a config file; the CWD one wins instead.
-        std::fs::create_dir_all(exe_dir.join(DEFAULT_OPTIONS_FILE)).unwrap();
-        std::fs::write(cwd.join(DEFAULT_OPTIONS_FILE), "--name Cwd\n").unwrap();
-        let raw = args(&["snug", "app.jar"]);
-        assert_eq!(
-            resolve_all(&raw, &cwd, Some(&exe_dir), "macos").unwrap(),
-            vec![cwd.join(DEFAULT_OPTIONS_FILE)]
-        );
-    }
-
-    #[test]
-    fn resolve_exe_dir_equal_to_cwd_yields_one_hit() {
         let dir = tempdir();
-        std::fs::write(dir.join(DEFAULT_OPTIONS_FILE), "--name Same\n").unwrap();
+        // A *directory* called snug.options must not be read as a config
+        // file, so `is_file` rather than `exists`. With no real file
+        // present the result is empty rather than a read failure.
+        std::fs::create_dir_all(dir.join(DEFAULT_OPTIONS_FILE)).unwrap();
         let raw = args(&["snug", "app.jar"]);
-        assert_eq!(
-            resolve_all(&raw, &dir, Some(&dir), "macos").unwrap(),
-            vec![dir.join(DEFAULT_OPTIONS_FILE)]
-        );
+        assert!(resolve_all(&raw, &dir, "macos").unwrap().is_empty());
     }
 
     // ---- The OS-specific tier ----------------------------------------
@@ -1505,7 +1464,7 @@ mod tests {
         std::fs::write(dir.join(DEFAULT_OPTIONS_FILE), "--name Generic\n").unwrap();
         let raw = args(&["snug", "app.jar"]);
         assert_eq!(
-            resolve_all(&raw, &dir, None, "macos").unwrap(),
+            resolve_all(&raw, &dir, "macos").unwrap(),
             vec![dir.join(DEFAULT_OPTIONS_FILE)]
         );
     }
@@ -1519,7 +1478,7 @@ mod tests {
         std::fs::write(dir.join("snug.windows.options"), "--name Windows\n").unwrap();
         let raw = args(&["snug", "app.jar"]);
         assert_eq!(
-            resolve_all(&raw, &dir, None, "macos").unwrap(),
+            resolve_all(&raw, &dir, "macos").unwrap(),
             vec![dir.join(DEFAULT_OPTIONS_FILE)]
         );
     }
@@ -1534,34 +1493,20 @@ mod tests {
         std::fs::write(&generic, "--name Generic\n").unwrap();
         std::fs::write(&os_file, "--name OS\n").unwrap();
         let raw = args(&["snug", "app.jar"]);
-        assert_eq!(resolve_all(&raw, &dir, None, "macos").unwrap(), vec![generic, os_file]);
+        assert_eq!(resolve_all(&raw, &dir, "macos").unwrap(), vec![generic, os_file]);
     }
 
     #[test]
-    fn os_file_in_cwd_layers_over_generic_file_in_exe_dir() {
-        // Location is a *per-tier* search: the exe dir still wins for
-        // the generic name, but the OS tier is found on its own terms.
-        let exe_dir = tempdir();
-        let cwd = tempdir();
-        let generic = exe_dir.join(DEFAULT_OPTIONS_FILE);
-        let os_file = cwd.join("snug.macos.options");
-        std::fs::write(&generic, "--name ExeDir\n").unwrap();
-        std::fs::write(&os_file, "--name CwdOS\n").unwrap();
+    fn os_file_layers_over_the_generic_one_in_the_same_directory() {
+        // Both tiers come from the CWD, and the OS file still wins on
+        // conflicting flags because it is returned second.
+        let dir = tempdir();
+        let generic = dir.join(DEFAULT_OPTIONS_FILE);
+        let os_file = dir.join("snug.macos.options");
+        std::fs::write(&generic, "--name Generic\n").unwrap();
+        std::fs::write(&os_file, "--name OS\n").unwrap();
         let raw = args(&["snug", "app.jar"]);
-        assert_eq!(resolve_all(&raw, &cwd, Some(&exe_dir), "macos").unwrap(), vec![generic, os_file]);
-    }
-
-    #[test]
-    fn os_file_follows_the_same_exe_dir_over_cwd_rule() {
-        let exe_dir = tempdir();
-        let cwd = tempdir();
-        std::fs::write(exe_dir.join("snug.macos.options"), "--name ExeDirOS\n").unwrap();
-        std::fs::write(cwd.join("snug.macos.options"), "--name CwdOS\n").unwrap();
-        let raw = args(&["snug", "app.jar"]);
-        assert_eq!(
-            resolve_all(&raw, &cwd, Some(&exe_dir), "macos").unwrap(),
-            vec![exe_dir.join("snug.macos.options")]
-        );
+        assert_eq!(resolve_all(&raw, &dir, "macos").unwrap(), vec![generic, os_file]);
     }
 
     #[test]
@@ -1569,7 +1514,7 @@ mod tests {
         let dir = tempdir();
         std::fs::create_dir_all(dir.join("snug.macos.options")).unwrap();
         let raw = args(&["snug", "app.jar"]);
-        assert!(resolve_all(&raw, &dir, None, "macos").unwrap().is_empty());
+        assert!(resolve_all(&raw, &dir, "macos").unwrap().is_empty());
     }
 
     #[test]
@@ -1581,7 +1526,7 @@ mod tests {
         let custom = dir.join("custom.opts");
         std::fs::write(&custom, "--name Custom\n").unwrap();
         let raw = args(&["snug", "--options", custom.to_str().unwrap()]);
-        assert_eq!(resolve_all(&raw, &dir, None, "macos").unwrap(), vec![custom]);
+        assert_eq!(resolve_all(&raw, &dir, "macos").unwrap(), vec![custom]);
     }
 
     // ---- Short/long flag identity -------------------------------------
@@ -1885,9 +1830,10 @@ mod tests {
         // enough that two tests running in parallel can read the same
         // nanosecond. They then share a directory, one test's
         // `snug.options` shows up inside another test's deliberately
-        // empty exe dir, and the failure looks like a `resolve()` bug
+        // empty one, and the failure looks like a `resolve_all()` bug
         // rather than a collision. Observed as an intermittent failure
-        // of `resolve_uses_cwd_when_exe_dir_has_no_default`.
+        // of `resolve_uses_cwd_when_exe_dir_has_no_default`, which the
+        // removal of the exe-dir search has since deleted.
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let unique = format!(

@@ -237,9 +237,11 @@ mod tests {
 
     #[test]
     fn default_path_matches_options_file_resolve() {
-        // We don't import `options_file::resolve` here to avoid a
+        // We don't import `options_file::resolve_all` here to avoid a
         // cyclic test dep, but the literal default we advertise
         // must match the file the next `snug` invocation will read.
+        // Since 0.11.0 that is a plain equality rather than a
+        // search-order coincidence: both resolve against the CWD.
         // Sanity check the literal is what we expect:
         assert_eq!(DEFAULT_PATH, "snug.options");
     }

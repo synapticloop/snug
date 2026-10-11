@@ -699,7 +699,7 @@ by accident.
   not unique.** Tests share a pid, and macOS clock resolution is coarse
   enough that two tests running in parallel can read the same nanosecond.
   They then share a directory: one test's `snug.options` shows up inside
-  another test's deliberately empty exe dir, or one test's `libs/*.jar`
+  another test's deliberately empty directory, or one test's `libs/*.jar`
   becomes visible to a sibling, and the failure reads as a logic bug
   rather than a collision. Observed twice before this was understood — as
   `resolve_uses_cwd_when_exe_dir_has_no_default` and
@@ -1237,16 +1237,33 @@ by accident.
     for a build whose options must not depend on which machine ran it,
     and it is what `scripts/build-macos-demo.sh` relies on to pin the
     shared `snug.options` while overriding `-o` on the command line.
-  - **Location search is per-tier.** For each of the two names in turn:
-    the snug executable's own directory first, then the CWD. So an
-    exe-dir `snug.options` and a CWD `snug.<os>.options` both load and
-    the OS file still wins. First-hit-per-name is also what makes
-    `exe_dir == cwd` safe: it cannot yield the same file twice, which
-    for `--jvm-arg` would *duplicate* a JVM argument rather than
-    deduplicate it. Candidates are matched with `is_file()`, so a
-    directory that happens to share a file's name is skipped.
-  - **This repo's own demo builds use the tier, and `snug.options`
-    deliberately carries no `--output`.** The value lives in
+  - **Location search is the CWD only.** Both default names —
+    `snug.options` and `snug.<os>.options` — are looked for in the
+    directory `snug` was invoked from, and nowhere else. The
+    executable's own directory is **not** searched. `resolve_all` takes
+    no directory parameter beyond `cwd` at all, so this is structural
+    rather than tested: there is no second location a default file could
+    be found in. Every relative path inside a default options file
+    therefore resolves against the same directory the file was found in.
+    This is the `Makefile` / `package.json` / `Cargo.toml` convention —
+    ambient project config is read from where you stand — and it is what
+    `--init-options`, `--init-localizations` and `snug_bin()`'s own
+    scaffolding already assumed. Candidates are matched with
+    `is_file()`, so a directory that happens to share a file's name is
+    skipped.
+  - **Why the exe-dir search was removed (0.11.0).** It existed so a
+    portable `snug.exe` shipped beside its `snug.options` would carry its
+    defaults anywhere, but it made the two directories disagree: the file
+    was found beside the exe while its paths resolved from the CWD, so
+    `assets/demo.jar` worked only from the repo root and failed elsewhere
+    with a stat error that reads as though the file were ignored. It also
+    bought an ambient global config — a `snug.options` in a system-wide
+    install directory silently beating every project file, which is why
+    this repo previously had to warn "ship no `snug.options` next to
+    `snug.exe`". That warning is obsolete. `--options <path>` is the
+    explicit way to point at a config elsewhere.
+  - **This repo's own demo builds rely on the CWD lookup, and
+    `snug.options` deliberately carries no `--output`.** The value lives in
     `snug.windows.options` (`.exe`) and `snug.macos.options` (`.app`),
     because a platform-specific string in the shared file reads as though
     it applied everywhere and does not — which is the exact problem the
@@ -1316,12 +1333,12 @@ by accident.
   modifiers, and they can be combined in one call to lay down a whole
   project skeleton. `--init-localizations` defaults to
   `./localisations` relative to the **CWD — the directory snug was
-  invoked from, not the executable's own directory**; that is the
-  deliberate opposite of the `snug.options` *read* order above,
-  because translations are per-project source rather than a shipped
-  artefact, and it matches `--init-options`' own CWD-relative
-  default. `--init-localizations-tag <TAG>` (repeatable) scaffolds an
-  extra translation template; `en` is always written.
+  invoked from** — which matches both `--init-options`' own CWD-relative
+  default and the `snug.options` read order above; translations are
+  per-project source rather than a shipped artefact, so the project you
+  are standing in is where they belong. `--init-localizations-tag <TAG>`
+  (repeatable) scaffolds an extra translation template; `en` is always
+  written.
 - **A user-supplied `en` bundle replaces the built-in English
   baseline**, it does not collide with it: `localization::collect`
   puts the first user `en` in the baseline slot (position 0, lowest
@@ -1536,10 +1553,10 @@ by accident.
     for a folder. A dropped `build/libs` writes the EXE *beside* that
     folder — writing inside it would put the artefact somewhere the next
     `gradle clean` erases. The same parent is used as the child's working
-    directory, so a project-local `snug.options` is picked up for free.
-    Because of that, **ship no `snug.options` next to `snug.exe`**: the
-    exe-dir copy outranks the CWD copy and would silently beat every
-    project file.
+    directory, so a project-local `snug.options` is picked up for free —
+    and since 0.11.0 that is the *only* place options are read from, so
+    a `snug.options` shipped next to `snug.exe` is ignored outright rather
+    than silently outranking the project file.
   - **A build failure gets an error dialog and no terminal.** The dialog
     and `snug-build.log` are the only recourse on that path, so both have
     to stand alone. The terminal is reserved for *"you dropped something a
