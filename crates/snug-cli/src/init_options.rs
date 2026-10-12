@@ -27,10 +27,10 @@ use anyhow::{bail, Context, Result};
 
 /// Path snug provides when `--init-options` is given with no
 /// explicit value. Matches the file name looked up by
-/// `options_file::resolve_all`, which searches the snug executable's
-/// directory first and the current working directory second — the
-/// same string on both sides, so `snug --init-options` writes a file
-/// the next `snug` invocation will read.
+/// `options_file::resolve_all`, which searches the current working
+/// directory and nowhere else, so `snug --init-options` writes a
+/// file the next `snug` invocation, run from that same directory,
+/// will read.
 ///
 /// Deliberately *only* the generic name. The lookup also honours a
 /// host-specific `snug.<os>.options`, but scaffolding one of those

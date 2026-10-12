@@ -1395,25 +1395,23 @@ fn cfg_if_lock(path: &Path, major: u16, wait: std::time::Duration) -> Result<Ins
     }
 }
 
+/// Windows release is implicit, so this deliberately does nothing.
+///
+/// The kernel drops a `LockFileEx` lock when the handle that took it is
+/// closed, and `InstallLock::drop` runs *before* its fields are dropped --
+/// so `self.file` is still open and still holding the lock as this returns.
+/// Closing it a statement later is the release.
+///
+/// The earlier version opened a *second* handle to call `UnlockFileEx` (which
+/// only works on the handle that acquired the lock, so the call was a no-op)
+/// and then removed the lock file. Removing it was worse than doing nothing:
+/// a peer that had not opened the file yet would create a fresh one and
+/// acquire a second lock, reopening exactly the interleaving the lock exists
+/// to prevent -- two holders on one `<major>.zip.tmp`. The empty `.lock`
+/// file is left behind instead. It is inert, it costs one empty file, and
+/// the next acquirer opens and locks the very same file.
 #[cfg(windows)]
-fn cfg_unlock(path: &Path) {
-    use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::System::IO::OVERLAPPED;
-    use windows_sys::Win32::Storage::FileSystem::UnlockFileEx;
-    if let Ok(file) = std::fs::OpenOptions::new().read(true).write(true).open(path) {
-        let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
-        unsafe {
-            UnlockFileEx(
-                file.as_raw_handle() as _,
-                0,
-                u32::MAX,
-                u32::MAX,
-                &mut overlapped,
-            );
-        }
-    }
-    let _ = std::fs::remove_file(path);
-}
+fn cfg_unlock(_path: &Path) {}
 
 /// Non-Windows fallback: atomic create, with an age-based takeover.
 ///

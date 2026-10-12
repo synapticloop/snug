@@ -174,7 +174,7 @@ snug app.jar --emit-payload
 # Each line is parsed as if it were on the command line; `#` is a comment.
 # `--input` (file or directory) and every other flag can live here too,
 # so the JAR location doesn't have to be on the command line:
-#   # snug.options (next to snug.exe, or in cwd)
+#   # snug.options (read from the current working directory)
 #   --input path/to/app.jar         # or path/to/lib-dir/
 #   --name "My App"
 #   --company "SynapticLoop"

@@ -69,7 +69,7 @@ impl SnugEmbedded {
     /// Wrap a payload with a freshly computed length and CRC32.
     pub fn new(payload: SnugPayload) -> Self {
         let payload_bytes = postcard::to_allocvec(&payload).expect("postcard alloc never fails");
-        // Checked, not s u32 -- see the note in FormatError::PayloadTooLarge.
+        // Checked, not as u32 -- see the note in FormatError::PayloadTooLarge.
         // This constructor cannot return an error, so an unrepresentable
         // payload panics here rather than silently wrapping. The fallible
         // path for real builds is codec::encode, which returns the error.

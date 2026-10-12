@@ -210,9 +210,9 @@ jdk_install.progress.info_subtext_2 = Die Laufzeit wird für Ihr Benutzerkonto i
 jdk_install.progress.cancel_button_during_download = Installieren
 
 jdk_install.failure.title = Fehler bei der Installation der Laufzeit
-jdk_install.failure.heading = Fehler bei der Installation der Laufzeit
+jdk_install.failure.heading = Die Installation ist fehlgeschlagen
 jdk_install.failure.subheading = Alle Download-Versuche sind erschöpft, wir versuchen, die Anwendung zu starten.
-jdk_install.failure.content =
+jdk_install.failure.content = Eclipse Temurin {version} konnte nicht installiert werden. Technische Details:\n{error}
 jdk_install.failure.info_heading = Was kann ich tun?
 jdk_install.failure.info_subtext = Prüfen Sie Ihre Netzwerkverbindung, oder laden Sie die Laufzeit manuell von adoptium.net herunter.
 jdk_install.failure.info_subtext_2 = Die Anwendung versucht zu starten, egal welches Java auf diesem Rechner bereits vorhanden ist.

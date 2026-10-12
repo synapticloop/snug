@@ -52,9 +52,19 @@ pub struct SnugPayload {
     // went through `image::ImageReader` and took either. Dropping the field
     // actually removes the bytes, which is the cost that was reported.
     //
-    // `#[serde(default)]` on every remaining field, so an older payload
-    // blob still decodes (extra trailing fields are skipped by postcard),
-    // and this is a wire-layout change per AGENTS.md's versioning rules.
+    // `#[serde(default)]` is on the remaining fields so a blob missing one
+    // still decodes, and this is a wire-layout change per AGENTS.md's
+    // versioning rules. Note carefully what `default` does *not* buy here:
+    // `icon` sat in the middle of the old layout
+    // (`config, jars, icon, localizations`), and postcard only skips fields
+    // past the end of what it is decoding. New code reading an old blob
+    // therefore takes `localizations` out of the `icon` slot.
+    //
+    // That is acceptable precisely because the payload is written by
+    // `snug-cli` and read by the launcher inside the same EXE, so the two
+    // are never mismatched -- but do not read this removal as backward
+    // compatible, and do not remove a field from the middle again on the
+    // strength of `default` being present.
 
     /// Localization bundles for the launcher's runtime strings
     /// (error dialogs, splash errors, JDK-install errors, bare-stub

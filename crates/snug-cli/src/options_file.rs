@@ -455,28 +455,63 @@ const INPUT_FLAG: &str = "input";
 const META_FLAGS: &[&str] = &["options", "init-options", "init-localizations"];
 
 /// Drop meta-flags (and an attached value) from one file layer.
-fn strip_meta_flags(tokens: &[String]) -> Vec<String> {
+///
+/// Walks the layer with `FlagSpec`'s arity knowledge rather than matching
+/// `--options` wherever the token happens to appear. A line such as
+///
+/// ```text
+/// --company --options
+/// ```
+///
+/// passes `--options` as the *value* of `--company`. Dropping it there is
+/// silent data loss, and because `--options` takes a separate value the
+/// naive walk then set `skip_next` and ate the line after it as well. A
+/// token is a meta-flag only when it sits in flag position.
+fn strip_meta_flags(tokens: &[String], spec: &FlagSpec) -> Vec<String> {
     let mut out = Vec::with_capacity(tokens.len());
-    let mut skip_next = false;
+    let mut skip_meta_value = false;
+    let mut expect_value = false;
+    let mut after_separator = false;
+
     for token in tokens {
-        if skip_next {
-            skip_next = false;
-            continue;
-        }
-        if token == "--" {
+        // Past `--` nothing is a flag, so a `--options` there is a value.
+        // `collect_cli_flags` stops at the separator too, and stripping a
+        // positional would be the file silently losing an argument.
+        if after_separator {
             out.push(token.clone());
             continue;
         }
-        if let Some(name) = long_flag_name(token) {
-            if META_FLAGS.contains(&name.as_str()) {
-                // `--options` takes a separate value; the rest do not.
-                if !token.contains('=') && name == "options" {
-                    skip_next = true;
-                }
-                continue;
-            }
+        if skip_meta_value {
+            skip_meta_value = false;
+            continue;
         }
-        out.push(token.clone());
+        // A value is a value even when it is spelled like a flag.
+        if expect_value {
+            expect_value = false;
+            out.push(token.clone());
+            continue;
+        }
+        if token == "--" {
+            after_separator = true;
+            out.push(token.clone());
+            continue;
+        }
+        match spec.token_flag(token) {
+            Some((canonical, has_inline_value)) => {
+                if META_FLAGS.contains(&canonical.as_str()) {
+                    // `--options` takes a separate value; the rest do not.
+                    if !has_inline_value && canonical == "options" {
+                        skip_meta_value = true;
+                    }
+                    continue;
+                }
+                out.push(token.clone());
+                if !has_inline_value && spec.takes_value.contains(&canonical) {
+                    expect_value = true;
+                }
+            }
+            None => out.push(token.clone()),
+        }
     }
     out
 }
@@ -511,7 +546,7 @@ pub fn merge(raw_args: &[String], file_layers: Vec<Vec<String>>) -> Vec<String> 
         // the whole build (`--init-options` in a file), silently and with a
         // success message. Dropping them is the honest reading: the file
         // described a request that had already been decided.
-        let tokens = &strip_meta_flags(tokens);
+        let tokens = &strip_meta_flags(tokens, &spec);
         let surviving = spec.strip_overridden(tokens, &seen);
         seen.extend(spec.collect_cli_flags(&surviving));
         // Same precedence one tier down: a JAR in a higher-priority file
@@ -1003,6 +1038,39 @@ mod tests {
         assert!(flags.contains(&"--name"), "{merged:?}");
         assert!(flags.contains(&"Keep"), "{merged:?}");
         assert!(flags.contains(&"app.jar"), "{merged:?}");
+    }
+
+    #[test]
+    fn a_flag_shaped_value_is_not_mistaken_for_a_meta_flag() {
+        // `--company --options` passes `--options` as the *value* of
+        // --company. Dropping it loses the company name, and because
+        // `--options` takes a separate value the old walk also ate the
+        // token after it. Both halves used to fail silently.
+        let cli = args(&["snug", "app.jar"]);
+        let merged = merge(
+            &cli,
+            vec![vec![
+                "--company".into(),
+                "--options".into(),
+                "--name".into(),
+                "Keep".into(),
+            ]],
+        );
+        let flags: Vec<&str> = merged.iter().map(String::as_str).collect();
+        assert!(flags.contains(&"--company"), "{merged:?}");
+        assert!(flags.contains(&"--options"), "{merged:?}");
+        assert!(flags.contains(&"--name"), "{merged:?}");
+        assert!(flags.contains(&"Keep"), "{merged:?}");
+    }
+
+    #[test]
+    fn a_meta_flag_behind_a_separator_is_a_positional_and_survives() {
+        // After `--` nothing is a flag, so `--options` there is an
+        // ordinary argument and must reach clap as one.
+        let cli = args(&["snug", "app.jar"]);
+        let merged = merge(&cli, vec![vec!["--".into(), "--options".into()]]);
+        let flags: Vec<&str> = merged.iter().map(String::as_str).collect();
+        assert!(flags.contains(&"--options"), "{merged:?}");
     }
 
     #[test]

@@ -67,10 +67,12 @@
 #
 #  Lookup order
 #  ------------
-#  For each of the two names in turn, snug looks next to the snug
-#  executable first, then in the current working directory. So a
-#  `snug.exe` shipped alongside its `snug.options` carries its defaults
-#  wherever it is run from.
+#  Both names are looked for in the current working directory, the
+#  directory you ran snug from, and nowhere else. The directory
+#  holding snug.exe is *not* searched, so a relative path in this
+#  file always resolves against where you stand: `--input app.jar`
+#  means `<cwd>/app.jar`. Same convention as `Makefile`,
+#  `package.json` and `Cargo.toml`.
 #
 #  `--options <path>` bypasses all of the above and means *that file
 #  only* — the per-platform tier is not consulted as well, which is the

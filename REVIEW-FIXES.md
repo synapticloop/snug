@@ -23,8 +23,6 @@ Nothing in this review has been changed except items explicitly marked `DONE`.
 
 | Done | Item |
 |---|---|
-| Done | Item |
-|---|---|
 | ✅ `F-01` | `-o` pointing at the input JAR silently destroys it |
 | ✅ `F-02` | `build-windows.cmd` fails on a clean tree; step 8 never builds the dropper |
 | ✅ `F-03` | CI's "committed stub matches a fresh build" check can never pass |
@@ -51,16 +49,26 @@ Nothing in this review has been changed except items explicitly marked `DONE`.
 | ✅ `F-24` | The dropper shifts a multi-segment relative input |
 | ✅ `F-25` | `payload_len` is an unchecked narrowing cast |
 | ✅ `F-26` | A wrapped `Main-Class` continuation yields "no main class" silently |
+| ✅ `F-27` | Each build serialises the whole payload three times |
 | ✅ `F-28` | The exe-dir options tier doesn't carry relative paths, despite the documented promise |
 | ✅ `F-29` | Two snug apps downloading the same JDK corrupt each other's install |
 | ✅ `F-30` | `failure.heading` is a dead key; the heading repeats the title |
-### Next action required before CI is green
-`F-03` made the stub check work, and it immediately found real drift. Refresh the
-committed stub and commit it:
-```powershell
-.\scripts\build-windows.cmd
-git add bin\launcher-stub-windows-x86_64.exe
-```
+
+---
+
+### Stub freshness — this is not settled
+
+`F-03` made the stub check work. CI now compares a *source fingerprint*
+(`bin\launcher-stub.source`), not bytes, so it goes green whenever the launcher
+source has not moved. That check deliberately cannot tell you the committed
+binary was built from that source — `windows.yml` says so in its own comment.
+
+As of the 2026-10-11 audit the two disagree. Two pristine release builds of the
+current source agree with each other and with neither the committed stub nor the
+uncommitted one sitting in the working tree, and
+`scripts\refresh-stub.ps1 -CheckOnly` exits 1. Root cause not established.
+Until it is, a green CI run means the source has not moved — not that the
+artefact matches it.
 ---
 ## P0 — data loss, silent failure, CI red
 > IDs are stable, not positional: a finding added later keeps its number even
@@ -84,24 +92,24 @@ git add bin\launcher-stub-windows-x86_64.exe
 ### F-01 — `-o` pointing at the input JAR silently destroys it
 - **Status:** `DONE`
 - **Fixed:** 2026-10-10. New `build::guard_output_collision(&cli)`, called from `main.rs` immediately after the no-input check and before `build_payload`. Checks `jar`, `input`, `icon`, `splash` and `manifest` against the output by **canonicalised** path, not string. 4 new unit tests; `cargo test -p snug-cli` green (151 lib + 91 integration). Verified end-to-end: `snug demo.jar -o demo.jar` exits 1, prints the path and a `-o …demo.exe` hint, and the 10,254,138-byte JAR is byte-identical afterwards; an ordinary build still exits 0 and emits the EXE. Placement is deliberate — before `build_payload` so `--dry-run` reports the mistake too, even though it never reaches the write.
-- **File:** `crates/snug-cli/src/build.rs:476-488`, `crates/snug-cli/src/cli.rs:159-163`
+- **File:** `crates/snug-cli/src/build.rs:483-525`, `crates/snug-cli/src/main.rs:130`
 - **Trigger:** `snug app.jar -o app.jar`. `output_path` is `Some(p) => p.clone()` with no validation against `jar` / `input` / `icon` / `splash`, and `output` carries no `conflicts_with` (unlike `--input`, which has one). The JAR is fully read into memory before the write, so the write always succeeds.
 - **Impact:** The fat JAR is truncated and overwritten by the launcher. Build exits **0** and prints `snug: built app.jar`. The user's only artefact is unrecoverable. Same for `-o icon.png` / `-o splash.png`.
 - **Fix:** Reject when canonicalised `output` equals any input JAR, icon, splash or manifest path, before `build_payload`.
 ### F-02 — `build-windows.cmd` fails on a clean tree; step 8 never builds the dropper
 - **Status:** `DONE`
 - **Fixed:** 2026-10-10. Dropped `--bin stamp_dropper_icon` from both `BUILD_DROPPER_CMD` branches (`:173` zigbuild, `:202` native), so `-p snug-dropper` builds both bin targets. Added a comment at the native branch recording why, since the symmetry with step 7's `--bin snug_preview` is what made the omission easy to miss. Verified by moving both exes out of `target\release\` and re-running the new command verbatim: both reappeared (`snug-dropper.exe` 237,568 B, `stamp_dropper_icon.exe` 482,816 B).
-- **File:** `scripts/build-windows.cmd:194` (and `:173`), failing at `:459-462`
+- **File:** `scripts/build-windows.cmd:184` (zigbuild) and `:213` (native); the variable was renamed `CARGO_DROPPER_ARGS` in `a60c07c`
 - **Trigger:** `./scripts/build-windows.cmd --Clean`, or CI with a cold cargo cache. `BUILD_DROPPER_CMD` is `cargo build --release -p snug-dropper --bin stamp_dropper_icon` — it builds only the helper. No other step builds the `snug-dropper` binary. Step 7's `BUILD_PREVIEW_CMD` *does* carry `--bin snug_preview`; step 8 has no counterpart.
 - **Impact:** `if not exist "!BUILT_DROPPER_EXE!"` exits 1, so `release\windows-x86_64\` never receives `Build with Snug.exe`, and CI's `upload-artifact` (`if-no-files-found: error`) fails too. Passes locally only because a stale `target\release\snug-dropper.exe` survives.
 - **Fix:** Add `--bin snug-dropper` to both `BUILD_DROPPER_CMD` variants.
 ### F-03 — CI's "committed stub matches a fresh build" check can never pass
 - **Status:** `DONE`
-- **Fixed:** 2026-10-10. New `scripts/pe-stable-hash.ps1` with `Get-PeStableHash`, used by both `windows.yml` steps (`:97` records, `:128` compares). It zeroes four things: the PE `TimeDateStamp`, the optional-header `CheckSum`, the `IMAGE_DEBUG_DIRECTORY` table (mapped RVA→file offset through the section table — each of its 28-byte records carries its own copy of the link timestamp), and the RSDS CodeView record (located by signature: GUID + absolute PDB path). Script passes `Parser::ParseFile` clean.
+- **Fixed:** 2026-10-10. New `scripts/pe-stable-hash.ps1` with `Get-PeStableHash`. It zeroes four things: the PE `TimeDateStamp`, the optional-header `CheckSum`, the `IMAGE_DEBUG_DIRECTORY` table (mapped RVA→file offset through the section table — each of its 28-byte records carries its own copy of the link timestamp), and the RSDS CodeView record (located by signature: GUID + absolute PDB path). Script passes `Parser::ParseFile` clean.
 - **⚠️ The committed stub is genuinely stale, so CI will now fail this step until you refresh it.** This is a true positive, not a regression: commit `ae9f18e` ("Substitute `{arch}` in the Windows progress window") touched `crates/snug-launcher/src` *after* the stub was committed in `934e179`. Run `scripts\build-windows.cmd` on Windows and commit the refreshed `bin\launcher-stub-windows-x86_64.exe`.
 - **Evidence:** two release links 44 s apart with untouched source — raw SHA-256 `D4C61DA2…` vs `88AC68B5…`, differing in exactly 20 bytes: `TimeDateStamp` (1 byte, they differ only in the low byte at that spacing), the three `IMAGE_DEBUG_DIRECTORY` timestamps, and the 16-byte RSDS GUID. Normalised, both give `73AF36FB…`; the committed stub gives `88091C53…`, so the check still discriminates a genuinely different source state.
 - **Note:** `/Brepro` on the MSVC link would make builds bit-reproducible and let this revert to a plain `Get-FileHash`, at the cost of a global link-flag change. Not done — the normaliser is contained and already verified.
-- **File:** `.github/workflows/windows.yml:116-137`
+- **File:** `scripts/pe-stable-hash.ps1`, `scripts/launcher-source-fingerprint.ps1`, `scripts/refresh-stub.ps1`, `.github/workflows/windows.yml:119-135`
 - **Trigger:** Every CI run. MSVC `link.exe` stamps wall-clock time into `IMAGE_FILE_HEADER.TimeDateStamp` and there is no `/Brepro` anywhere. Verified: the committed stub carries `TimeDateStamp = 0x6AC427DF` = 2026-10-05 22:42:39 UTC, exactly equal to its file mtime.
 - **Impact:** A freshly linked launcher never reproduces the committed SHA-256, so the step fails on every push and its own "commit the refreshed stub" remedy just relocates the failure. `build-windows.cmd` step 2 always leaves `bin\` dirty, and the failure is indistinguishable from the genuine source drift the step exists to catch.
 - **Fix:** Hash the file with `TimeDateStamp` zeroed, or compare something link-stable (size + embedded payload).
@@ -113,7 +121,7 @@ git add bin\launcher-stub-windows-x86_64.exe
   - two items → `CAPTION "Build with Snug"` / body `"Only one jar is allowed. …"`
   - unsupported type → `CAPTION "Build with Snug"` / body `"Only .jar files and folders can be dropped on Build with Snug. …"`
 - **Also changed at the author's request:** the overwrite prompt's wording. Title is now `<filename> exists` and the body is `Overwrite?`, replacing `<filename> already exists in <cwd>.\r\n\r\nReplace it?`. The output directory is no longer shown in the dialog (the title names the file, and the output path is deterministic from the input's parent) — reintroduce it in the body if that turns out to matter.
-- **File:** `crates/snug-dropper/src/ui.rs:69-96`, caller at `crates/snug-dropper/src/main.rs:176-185`
+- **File:** `crates/snug-dropper/src/ui.rs:96-105`, caller at `crates/snug-dropper/src/main.rs:183`
 - **Trigger:** Any drop at all — an unsupported file type, a build failure, the overwrite confirm.
 - **Impact:** `message_box(text, caption, kind)` maps correctly onto `MessageBoxW(hwnd, lpText, lpCaption, …)`, but all three callers pass `TITLE` first. So `lpText = "Build with Snug"` and `lpCaption` = the error explanation, which then gets ellipsized in the title bar. The build-failure dialog — AGENTS.md calls it the user's *only* recourse on that path — loses its log path.
 - **Fix:** Swap the two arguments at the three call sites (or rename the params to `caption, text`).
@@ -126,7 +134,7 @@ git add bin\launcher-stub-windows-x86_64.exe
   4. Tracing this surfaced a fourth manifestation: `download_to_disk` already signalled a cancel as `Err(JdkError::Download("cancelled by user"))`, so the worker's `Err` arm stored **2 (error)** — clicking Cancel mid-download raised "Download failed — Try again?", contradicting the doc at `jdk_install.rs:1231`. Fixed by the same `settle()` path.
 - **Not a `JdkError` variant on purpose:** every `JdkError` is wired to a localisation key in `Display`, so a new variant would mean inventing user-facing text for something that is not a failure.
 - **Tests:** 4 new. `a_worker_cannot_overrule_a_cancel_it_races_against` is the regression test for the headline bug; `a_cancel_during_a_failing_phase_reports_cancelled_not_failed` and `a_genuine_failure_still_reports_failed` are the two halves of the preference; `hashing_stops_promptly_when_cancelled` covers the per-chunk latch.
-- **File:** `crates/snug-launcher/src/jdk_install.rs:1041`, `:1120`, plus the phase functions
+- **File:** `crates/snug-launcher/src/jdk_install.rs:1048`, `:1233`, plus the phase functions
 - **Trigger:** Download finishes, user clicks Cancel during phase 1 (SHA-256) or phase 2 (extract) — both live for tens of seconds on a ~190 MB archive.
 - **Impact:** `shared.cancel` is checked only inside `download_to_disk`'s read loop and once at `:1041`. Phases 1-2 never check it, then `:1120` runs `shared.done.store(1, …)` **overwriting** the `done = 3` the UI wrote. `run_one_install_attempt` reads `done == 1` → `Success(home)` (`:1402`). Three comments assert the opposite of what the code does (`jdk_install.rs:358-367`, `:1394-1397`, `progress_window.rs:968-969`). Cross-platform.
 - **Fix:** Check `cancel` between phases 1 and 2, and make the terminal `done.store(1)` respect it.
@@ -137,7 +145,7 @@ git add bin\launcher-stub-windows-x86_64.exe
 - **Fixed:** 2026-10-10. Ported `jni_version_for` from `platform/macos.rs:875-891` (added in `8c32c1d`, never backported) and wired it at `windows.rs:308`, which now reads the discovered major via `read_java_major` and logs the JNI level it is requesting.
 - **Tests:** `jni_version_never_exceeds_the_discovered_jvm` — the two-sided invariant: never below the VM's floor, never above the spec's ceiling (`JNI_VERSION_21` is the highest `JNI_CreateJavaVM` accepts; there is no 22/23/24/25).
 - **Known coverage limit:** this test pins the *function*, not the wiring at `:308`. Re-pointing `create_vm_args.version(...)` back at a constant would not fail it. Asserting the wiring needs the launch path and a real JVM, so it stays a manual check — worth knowing rather than assuming.
-- **File:** `crates/snug-launcher/src/platform/windows.rs:308`, `:885-914`
+- **File:** `crates/snug-launcher/src/platform/windows.rs:308-313`, `:966-982`
 - **Trigger:** `snug App.jar -o App.exe --min-java 17`. Discovery accepts a Java 17, then `InitArgsBuilder` asks for a JNI 21 entry point that isn't in it.
 - **Impact:** `JavaVM::with_libjvm` fails with a useless `JNI_CreateJavaVM failed: …` on a machine discovery just reported as conforming.
 - **Fix:** Port `jni_version_for` from `platform/macos.rs:859-891` (self-contained, already has 9 tests). **The macOS twin was fixed and Windows was not.**
@@ -146,7 +154,7 @@ git add bin\launcher-stub-windows-x86_64.exe
 - **Fixed:** 2026-10-10. `check_candidate` returns `Err(JvmTooOld)` and every call site propagated it with `?`, so the first too-old candidate ended discovery. Ported `scan_candidate` from `macos.rs:977-992` and switched the three *survey* steps onto it — `PATH`, the registry walk, and `try_common`. The first three steps (`--jvm-home`, `JAVA_HOME`, `JDK_HOME`) deliberately keep `check_candidate`, because those are explicit choices and "you have Java 11, you need 25" is the answer the user wants rather than something to scan past.
 - **⚠️ Not a blind port — the macOS twin has a gap.** `macos.rs` records `too_old` and then returns `Ok(None)` at `:1068` without ever reading it, so the "you have Java 11, you need 25" message is silently lost; its test only asserts the *recording*. Windows keeps the diagnostic: `discover_jvm` returns `JvmTooOld` at the end if the scan found nothing and remembered something. Windows is therefore strictly better than the reference it was copied from. **The macOS gap is still there** — worth a follow-up if macOS is ever in scope.
 - **Tests:** 3 new, and mutation-verified. Reverting `scan_candidate` to propagate the error makes exactly the two F-07 tests fail, which is what makes them regression tests rather than assertions of current behaviour. `an_explicit_choice_of_a_too_old_jdk_is_still_an_error` is the deliberate complement: it proves `check_candidate` *does* reject the old JDK, which is why the scan must not use it.
-- **File:** `crates/snug-launcher/src/platform/windows.rs:695-712`, `:627-693`
+- **File:** `crates/snug-launcher/src/platform/windows.rs:647-662`, wired at `:710`, `:725`, `:733`
 - **Trigger:** Oracle JDK 11 registered under `JavaSoft\JDK` (scanned first, `:672`) plus Adoptium 25. `check_candidate` returns `Err(LauncherError::JvmTooOld)` and every call site propagates with `?`.
 - **Impact:** Discovery stops at the old JDK; the user is told to fix `JAVA_HOME`/`PATH` or uninstall, despite a conforming Java 25 being installed. Commit `8c32c1d` fixed exactly this for macOS via `scan_candidate` (`macos.rs:977-992`) and never touched the Windows twin.
 - **Fix:** Port `scan_candidate` to `windows.rs`; step over too-old candidates, reporting the remembered one only if nothing qualifies.
@@ -195,7 +203,7 @@ git add bin\launcher-stub-windows-x86_64.exe
 - **Tests:** 6 new, and *where* they run is the point. They go through `Localization::parse`, not `unescape` directly — the defect was an **ordering** problem between the two, and the pre-existing `unescape_handles_common_sequences` passed throughout because it called the decoder in isolation, bypassing the order that broke it. Mutation-verified: reverting to `line.find('#')` fails `an_escaped_hash_survives_comment_stripping` and `escapes_and_comments_interleave_correctly`, and nothing else.
 - **Behaviour-neutral for the repo as it stands:** no shipped bundle (`snug-localisations.en.txt`, nor the hand-maintained `test/localisations/*.txt`) puts a `#` in a value, so this only *enables* the documented escape rather than changing any current output. That also means the `test/localisations` copies needed no resync here.
 - **Bonus finding while testing:** `\t` in a value decodes to a real tab, so a Windows path through a `temp` directory becomes control characters in the dialog. That is correct per the documented escapes and not a defect — but it is now pinned by `backslash_t_in_a_value_is_a_tab_not_a_path_separator`, so the next contributor learns it from a test rather than from a mangled dialog.
-- **File:** `crates/snug-format/src/localization.rs:151-181`
+- **File:** `crates/snug-format/src/localization.rs:171-185`
 - **Trigger:** Any bundle value containing a `#`, written exactly as the format instructs (`crates/snug-format/assets/snug-localisations.en.txt:20`): `err.foo = Error \#42`.
 - **Impact:** `strip_comment` runs first and does a bare `line.find('#')`, matching the *escaped* hash and cutting the line. The escape never reaches `unescape`. The value silently becomes `Error \` in a user-facing dialog — text lost, stray backslash added, no parse error, and the key exists so the missing-key check can't flag it. The `unescape_handles_common_sequences` test passes only because it calls `unescape` in isolation, bypassing the real order. Confirmed by three independent reviewers.
 - **Fix:** Make `strip_comment` find the first *unescaped* `#`.
@@ -206,14 +214,14 @@ git add bin\launcher-stub-windows-x86_64.exe
 - **Fixed:** 2026-10-10. `find_main_classes` skipped only an exact `module-info.class`, so every versioned copy under `META-INF/versions/<n>/` was scanned, and `class_name_from_entry` folds `/` to `.` — the report read `META-INF.versions.17.com.example.Main`. Now skipped by prefix.
 - **Why it matters more than it looks:** `--find-main` exists so its output can be copied into `--main-class`, and a name that is not a class cannot be pasted. `Helper`, which existed *only* in the overlay, was likewise offered as launchable.
 - **Test:** `multi_release_overlays_are_not_reported_as_entry_points` builds a JAR with a root `com/example/Main.class` plus two overlays. Mutation-verified: removing the skip fails it and nothing else.
-- **File:** `crates/snug-cli/src/classfile.rs:109-121`
+- **File:** `crates/snug-cli/src/classfile.rs:120-122`
 ### F-14 — A non-UTF-8 manifest aborts the entire build
 - **Status:** `DONE`
 - **Fixed:** 2026-10-10. `read_to_string` returns `Err` on invalid UTF-8 and the caller made that fatal, so a single Latin-1 byte in an unrelated `Name:` attribute made `snug` refuse a JAR that `java -jar` runs — with the error pointing at the archive, not the attribute. Now reads bytes and decodes with `from_utf8_lossy`.
 - **Safe because** the parser only ever looks for an ASCII `Main-Class:` header; a mangled neighbour cannot affect it.
 - **Note:** `survey_main_classes` swallowed this same failure, so `--find-main` reported "no main class" where the build reported a hard error. Both now agree.
 - **Test:** drives the real `read_main_class_from_bytes` over a zip with a deliberately mis-encoded manifest. Mutation-verified — reverting to `read_to_string` fails it. A first draft called `String::from_utf8_lossy` directly and so tested the standard library rather than this change; rewritten after noticing.
-- **File:** `crates/snug-cli/src/manifest.rs:45-58`
+- **File:** `crates/snug-cli/src/manifest.rs:53-57`
 ### F-15 — The terminal JDK-failure dialog renders no error text
 - **Status:** `DONE`
 - **Fixed:** 2026-10-10. `jdk_install.failure.content` was **empty**, and the caller substitutes `{version}` and `{error}` *into* it — so `fill("", …)` returned `""` and the substitution was dead code. It is now `Eclipse Temurin {version} could not be installed. Technical detail:\n{error}`, mirroring `jdk_install.retry.content = {error}` and `jdk_install.metadata_failed.content = Technical detail:\n{error}`.

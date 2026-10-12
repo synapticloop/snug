@@ -32,15 +32,25 @@ pub fn decode_payload(bytes: &[u8]) -> Result<SnugPayload, FormatError> {
 /// Encode a [`SnugEmbedded`] — outer wrapper + payload — to a single byte
 /// vector suitable for embedding via `include_bytes!()` or appending to a
 /// precompiled stub binary.
+/// Narrow an encoded payload length to the `u32` the wire header carries.
+///
+/// Checked, not `as u32`. Past 4 GiB that cast wraps and writes a header
+/// that disagrees with the bytes actually following it, so the artefact
+/// fails validation at launch and the error points at the launcher instead
+/// of at the build that produced it.
+///
+/// Every narrowing goes through here. That is what lets the boundary be
+/// tested against the function the builder actually uses: `encode` cannot
+/// be handed a 4 GiB payload in a unit test, so a test of `u32::try_from`
+/// on its own proves the standard library works and says nothing about
+/// whether `encode` calls it.
+fn checked_payload_len(len: usize) -> Result<u32, FormatError> {
+    u32::try_from(len).map_err(|_| FormatError::PayloadTooLarge { len: len as u64 })
+}
+
 pub fn encode(embedded: &SnugEmbedded) -> Result<Vec<u8>, FormatError> {
     let payload_bytes = postcard::to_allocvec(&embedded.payload)?;
-    // Checked, not s u32. Past 4 GiB that cast wraps and writes a header
-    // that disagrees with the bytes actually following it, so the artefact
-    // fails validation at launch and the error points at the launcher
-    // instead of at the build that produced it.
-    let len = u32::try_from(payload_bytes.len()).map_err(|_| FormatError::PayloadTooLarge {
-        len: payload_bytes.len() as u64,
-    })?;
+    let len = checked_payload_len(payload_bytes.len())?;
     let crc = crc32fast::hash(&payload_bytes);
 
     let mut out = Vec::with_capacity(SnugEmbedded::HEADER_LEN + payload_bytes.len());
@@ -163,8 +173,10 @@ mod tests {
         // build that produced it.
         //
         // Exercised on the boundary value rather than by allocating 4 GiB --
-        // the check is `u32::try_from(len)`, so a length one past `u32::MAX`
-        // is the case that distinguishes it from the old cast.
+        // `encode` cannot be given a 4 GiB payload in a test, so the
+        // assertion is on `checked_payload_len`, which is the only place the
+        // narrowing happens. The half that pins the call site is
+        // `encode_writes_the_length_it_checked` below.
         let header_can_hold = u32::MAX as usize;
         let over = header_can_hold.checked_add(1).expect("64-bit usize");
         // The old cast would have wrapped `over` to 0; assert the maths we
@@ -178,6 +190,29 @@ mod tests {
             "try_from must reject what the cast accepted"
         );
         assert!(u32::try_from(header_can_hold).is_ok());
+
+        // The function under test, not the standard library.
+        assert!(checked_payload_len(over).is_err());
+        assert_eq!(checked_payload_len(header_can_hold).unwrap(), u32::MAX);
+        assert_eq!(checked_payload_len(0).unwrap(), 0);
+        match checked_payload_len(over) {
+            Err(FormatError::PayloadTooLarge { len }) => assert_eq!(len, over as u64),
+            other => panic!("expected PayloadTooLarge, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn encode_writes_the_length_it_checked() {
+        // The 4 GiB case above cannot reach `encode`, so pin the other
+        // half: that the value landing in the header is the one
+        // `checked_payload_len` produced, rather than a second cast made
+        // independently at the call site.
+        let embedded = SnugEmbedded::new(sample_payload());
+        let bytes = encode(&embedded).unwrap();
+        let actual = bytes.len() - SnugEmbedded::HEADER_LEN;
+        let in_header = u32::from_le_bytes(bytes[10..14].try_into().unwrap());
+        assert_eq!(in_header as usize, actual);
+        assert_eq!(in_header, checked_payload_len(actual).unwrap());
     }
 
     #[test]

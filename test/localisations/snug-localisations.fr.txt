@@ -210,9 +210,9 @@ jdk_install.progress.info_subtext_2 = L'environnement d'exécution est installé
 jdk_install.progress.cancel_button_during_download = Installer
 
 jdk_install.failure.title = Échec de l'installation de l'environnement d'exécution
-jdk_install.failure.heading = Échec de l'installation de l'environnement d'exécution
+jdk_install.failure.heading = L'installation a échoué
 jdk_install.failure.subheading = Toutes les tentatives de téléchargement sont épuisées, nous allons essayer de lancer l'application.
-jdk_install.failure.content =
+jdk_install.failure.content = Eclipse Temurin {version} n'a pas pu être installé. Détail technique :\n{error}
 jdk_install.failure.info_heading = Que puis-je faire ?
 jdk_install.failure.info_subtext = Vérifiez votre connexion réseau, ou téléchargez manuellement l'environnement d'exécution depuis adoptium.net.
 jdk_install.failure.info_subtext_2 = L'application va tenter de démarrer avec le Java déjà présent sur cette machine.
