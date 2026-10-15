@@ -4,7 +4,7 @@
 # JavaFX demo as a real `.app`.
 #
 # This is the macOS counterpart of step 4 + the staging block in
-# scripts\build-windows.cmd: that one builds assets\snug-javafx-demo.exe,
+# scripts\build-windows.cmd: that one builds assets\snug-javafx-demo-windows.exe,
 # this one builds assets/snug-javafx-demo.app. Same input JAR, same options
 # files, same "build into assets/ then stage" shape — so the two platforms
 # cannot drift apart on how a demo is produced.

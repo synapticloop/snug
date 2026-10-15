@@ -26,7 +26,7 @@ REM      runtime dependency, and adds nothing to the shipped snug.exe.
 REM   4. target\...\snug.exe assets\snug-javafx-demo-windows.jar
 REM      Reads snug.options for the shared metadata, then snug.windows.options
 REM      for the platform-specific --output, and writes
-REM      assets\snug-javafx-demo.exe. Both files are read from the CWD,
+REM      assets\snug-javafx-demo-windows.exe. Both files are read from the CWD,
 REM      so this step depends on being run from the repo root.
 REM   5. Verify snug.exe contains the stub bytes we just produced
 REM      (scripts\verify-embedded-stub.ps1; sha256 substring check).
@@ -37,13 +37,13 @@ REM   7. Build snug_preview + stamp assets\snug-preview.png into it. The
 REM      only step --SkipDevTools turns off; snug_preview.exe is how you look
 REM      at snug's dialogs without building an app, and it ships anyway.
 REM   8. Build the dropper, stamp assets\snug-dropper.png, and emit
-REM      target\...\Build with Snug.exe beside snug.exe. The dropper's whole
+REM      target\...\Snug Quick Build.exe beside snug.exe. The dropper's whole
 REM      interface is its icon, so this is a shipped step with its own flag
 REM      rather than something hidden behind --SkipDevTools.
 REM   9. Verify each EXE's MAINICON really is the PNG it was stamped with
 REM      (verify_icons; pixel-exact, plus a check for orphan RT_ICON entries
 REM      left behind by an earlier stamp).
-REM  10. Stage release\: the EXEs a user runs (snug, Build with Snug, and
+REM  10. Stage release\: the EXEs a user runs (snug, Snug Quick Build, and
 REM      the snug_preview dialog preview) plus the demo JAR, so someone can
 REM      try the whole drop-a-JAR flow before building a JAR of their own.
 REM      They land in release\windows-<arch>\ - the same <os>-<arch>
@@ -69,7 +69,7 @@ REM                             icon stamp in step 6, which is a shipping
 REM                             concern: snug-cli has no build.rs, so a
 REM                             --SkipDevTools run would otherwise ship a
 REM                             snug.exe with no icon at all.
-REM     --SkipDropper           Skip step 8 (the Build with Snug beginner
+REM     --SkipDropper           Skip step 8 (the Snug Quick Build beginner
 REM                             shim). It is user-facing, so this is opt-out
 REM                             rather than implied by --SkipDevTools.
 REM     --SkipRelease           Skip step 10 (copy the shipping artefacts into
@@ -149,11 +149,11 @@ if "!CROSS_COMPILE!"=="1" if "!SKIP_LAUNCHER_REBUILD!"=="1" (
 )
 
 set "DEMO_JAR=assets\snug-javafx-demo-windows.jar"
-set "DEMO_EXE=assets\snug-javafx-demo.exe"
+set "DEMO_EXE=assets\snug-javafx-demo-windows.exe"
 set "PREVIEW_PNG=assets\snug-preview.png"
 set "SNUG_CLI_PNG=assets\snug-runner.png"
 set "DROPPER_PNG=assets\snug-dropper.png"
-set "DROPPER_SHIPPED=Build with Snug.exe"
+set "DROPPER_SHIPPED=Snug Quick Build.exe"
 set "RELEASE_DIR=release"
 
 REM ---------------------------------------------------------------------------
@@ -307,7 +307,7 @@ if not exist "!BUILT_VERIFY_EXE!" (
 )
 
 REM ---------------------------------------------------------------------------
-REM 4. Package the demo JAR into assets\snug-javafx-demo.exe.
+REM 4. Package the demo JAR into assets\snug-javafx-demo-windows.exe.
 REM ---------------------------------------------------------------------------
 
 if "!SKIP_PACKAGE!"=="1" goto skip_package
@@ -453,7 +453,7 @@ echo ==^> Skipping snug_preview build + icon stamp ^(--SkipDevTools^)
 :after_dev_tools
 
 REM ---------------------------------------------------------------------------
-REM 8. Build the beginner dropper (Build with Snug.exe).
+REM 8. Build the beginner dropper (Snug Quick Build.exe).
 REM
 REM    A shipped artefact, not a dev tool, so it is a first-class step with
 REM    its own --SkipDropper flag. The stamp helper has no build.rs of its own:
@@ -523,7 +523,7 @@ goto after_dropper
 
 :skip_dropper
 echo.
-echo ==^> Skipping Build with Snug build + package ^(--SkipDropper^)
+echo ==^> Skipping Snug Quick Build build + package ^(--SkipDropper^)
 
 :after_dropper
 
@@ -582,7 +582,7 @@ REM ---------------------------------------------------------------------------
 REM 10. Stage the release directory.
 REM
 REM    release\windows-x86_64\ is the folder a user unpacks: snug.exe, the
-REM    Build with Snug shim, the snug_preview dialog preview, and the demo
+REM    Snug Quick Build shim, the snug_preview dialog preview, and the demo
 REM    JAR so the whole drop-a-JAR flow can be tried before writing a JAR of
 REM    their own. The directory ignores its own contents, so nothing in it
 REM    is tracked.
@@ -599,7 +599,7 @@ REM    at snug's dialogs and error copy without building and launching an
 REM    app. It comes from step 7, so --SkipDevTools leaves it unbuilt and
 REM    :stage warns instead of aborting.
 REM
-REM    The two EXEs are staged together on purpose. Build with Snug.exe
+REM    The two EXEs are staged together on purpose. Snug Quick Build.exe
 REM    resolves snug.exe relative to its own path, so a release folder with
 REM    one and not the other is broken by construction -- the same
 REM    invariant step 8 asserts, now enforced at the shipping boundary.
@@ -654,11 +654,11 @@ for %%I in ("!BUILT_CLI_EXE!")   do echo   snug CLI:               !BUILT_CLI_EX
 for %%I in ("!DEMO_EXE!")        do echo   Demo EXE:               !DEMO_EXE!        ^(%%~zI bytes^)
 for %%I in ("!BUILT_PREVIEW_EXE!") do ( if exist "!BUILT_PREVIEW_EXE!" echo   snug_preview:           !BUILT_PREVIEW_EXE! ^(%%~zI bytes^) )
 for %%I in ("!BUILT_DROPPER_EXE!")     do ( if exist "!BUILT_DROPPER_EXE!" echo   Dropper built:          !BUILT_DROPPER_EXE! ^(%%~zI bytes^) )
-for %%I in ("!DROPPER_PACKAGED!")     do ( if exist "!DROPPER_PACKAGED!" echo   !DROPPER_SHIPPED!:  !DROPPER_PACKAGED! ^(%%~zI bytes^) )
+for %%I in ("!DROPPER_PACKAGED!")     do ( if exist "!DROPPER_PACKAGED!" echo   !DROPPER_SHIPPED!:   !DROPPER_PACKAGED! ^(%%~zI bytes^) )
 echo.
 echo Release directory: !STAGE_DIR!\
 for %%I in ("!STAGE_DIR!\snug.exe")               do ( if exist "!STAGE_DIR!\snug.exe" echo     snug.exe                 !STAGE_DIR!\snug.exe ^(%%~zI bytes^) )
-for %%I in ("!STAGE_DIR!\!DROPPER_SHIPPED!")     do ( if exist "!STAGE_DIR!\!DROPPER_SHIPPED!" echo     !DROPPER_SHIPPED!: !STAGE_DIR!\!DROPPER_SHIPPED! ^(%%~zI bytes^) )
+for %%I in ("!STAGE_DIR!\!DROPPER_SHIPPED!")     do ( if exist "!STAGE_DIR!\!DROPPER_SHIPPED!" echo     !DROPPER_SHIPPED!:   !STAGE_DIR!\!DROPPER_SHIPPED! ^(%%~zI bytes^) )
 for %%I in ("!STAGE_DIR!\snug_preview.exe")      do ( if exist "!STAGE_DIR!\snug_preview.exe" echo     snug_preview.exe        !STAGE_DIR!\snug_preview.exe ^(%%~zI bytes^) )
 for %%I in ("!STAGE_DIR!\snug-javafx-demo-windows.jar") do ( if exist "!STAGE_DIR!\snug-javafx-demo-windows.jar" echo     snug-javafx-demo-windows.jar !STAGE_DIR!\snug-javafx-demo-windows.jar ^(%%~zI bytes^) )
 

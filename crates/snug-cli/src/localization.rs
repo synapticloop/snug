@@ -114,11 +114,19 @@ pub fn validate_localization_path(s: &str) -> Result<PathBuf, String> {
 /// the always-present English baseline.
 ///
 /// The returned vector is in **insertion order** with the English
-/// baseline first; the launcher respects payload order during merge
-/// so this means the baseline has the lowest priority. Later bundles
-/// (in CLI / `snug.options` order) override earlier ones at the key
-/// level, with the user's full BCP 47 tag winning over the built-in
-/// baseline at runtime.
+/// baseline first, and that order carries **no** runtime meaning beyond
+/// "slot 0 is the baseline": the launcher does not walk this list in
+/// payload order. It detects the user's language preferences and builds
+/// its own lookup chain from them — exact tag, then successively
+/// truncated tags, with this baseline last. See
+/// `snug_launcher::localize::Bundles::load`.
+///
+/// So the order here matters only in that slot 0 is always the
+/// baseline. A user-supplied `en` bundle takes that slot over; every
+/// other bundle is an *offer* of a translation that the launcher will
+/// use only on a machine whose locale matches it. Passing many bundles
+/// therefore ships a multilingual launcher without any of them becoming
+/// a default that shadows the others.
 ///
 /// A user bundle tagged `en` takes over the baseline slot instead of
 /// being appended as a second `en`; see the module docs. A *second*

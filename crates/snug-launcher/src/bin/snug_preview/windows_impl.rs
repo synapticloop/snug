@@ -1487,7 +1487,6 @@ unsafe extern "system" fn wndproc(
                     jdk_install::show_error_dialog(
                         std::ptr::null_mut(),
                         "Sample post-install error",
-                        "",
                         "java.lang.UnsatisfiedLinkError: C:\\Users\\demo\\.snug\\jdk\\jdk-25\\bin\\jvm.dll: Can't find dependent libraries",
                     );
                 }),

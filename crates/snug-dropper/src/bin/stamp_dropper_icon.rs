@@ -3,7 +3,7 @@
 //!
 //! Mirrors `snug-launcher`'s `stamp_preview_icon` helper, for the same
 //! reason: it applies a **per-binary icon override** to an artefact that
-//! is renamed at packaging time into `Build with Snug.exe`, so the icon
+//! is renamed at packaging time into `Snug Quick Build.exe`, so the icon
 //! can be swapped (and re-judged against a 16 px taskbar slot) without a
 //! Rust rebuild.
 //!
@@ -25,7 +25,7 @@
 //!
 //! ```bash
 //! cargo run --release --bin stamp_dropper_icon -- --package
-//! # -> target\release\Build with Snug.exe, beside snug.exe
+//! # -> target\release\Snug Quick Build.exe, beside snug.exe
 //! ```
 //!
 //! `--package` takes an optional destination directory; it defaults to
@@ -62,7 +62,7 @@ use std::path::{Path, PathBuf};
 /// and to anyone browsing the folder, so it has to be a real display
 /// name rather than the crate's target name.
 #[cfg(windows)]
-const SHIPPED_NAME: &str = "Build with Snug.exe";
+const SHIPPED_NAME: &str = "Snug Quick Build.exe";
 
 #[cfg(windows)]
 fn main() {

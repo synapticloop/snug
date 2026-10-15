@@ -32,7 +32,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 /// Caption shared by every dialog this tool shows.
-pub const TITLE: &str = "Build with Snug";
+pub const TITLE: &str = "Snug Quick Build";
 
 // ---- DPI ----------------------------------------------------------------
 
@@ -83,7 +83,7 @@ pub fn error(text: &str) {
 ///
 /// Takes its own caption because the overwrite prompt names the file it is
 /// about to replace, which is more use in the title bar than the tool's
-/// name — "Build with Snug" is already on every other dialog here.
+/// name — "Snug Quick Build" is already on every other dialog here.
 pub fn confirm(caption: &str, text: &str) -> bool {
     message_box(caption, text, MB_YESNO | MB_ICONQUESTION) == IDYES
 }

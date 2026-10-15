@@ -1594,16 +1594,14 @@ pub fn maybe_install(
                             ("error", err.as_str()),
                         ],
                     );
-                    ui::failure(
-                        parent,
-                        &dlg.jdk_install.failure.title,
-                        // The heading, not the title again: the signature is
-                        // (parent, title, main, content), and passing
-                        // `title` twice left `failure.heading` unreferenced
-                        // and the dialog's heading identical to its title.
-                        &dlg.jdk_install.failure.heading,
-                        &content,
-                    );
+                    // Only the title and the error text are the caller's to
+                    // supply. The heading and subheading come from
+                    // `[jdk_install.failure]` in the localisation bundle,
+                    // because `show_error_dialog` passes an empty heading and
+                    // `error_window::show` substitutes the bundle's value for
+                    // an empty one. This call used to pass a third string that
+                    // no platform ever read.
+                    ui::failure(parent, &dlg.jdk_install.failure.title, &content);
                     return Ok(None);
                 }
                 if !ui::retry(
@@ -1947,13 +1945,27 @@ mod ui {
     }
 
     /// Terminal failure, after the attempts are exhausted.
+    ///
+    /// The heading and subheading are deliberately *not* parameters. They are
+    /// read from `[jdk_install.failure]` in the localisation bundle, because
+    /// `show_error_dialog` passes an empty heading and `error_window::show`
+    /// substitutes the bundle's value for an empty one.
+    ///
+    /// The signature used to take a third string here and map it to
+    /// `ErrorDialog::heading`. Neither platform implementation read it —
+    /// Windows dropped it into a `_main` and hard-coded `heading: ""`, macOS
+    /// dropped it into a `_main` and read the bundle instead. A caller could
+    /// therefore pass anything and see no difference at runtime, which is
+    /// exactly how `failure.heading` came to look unreferenced while sitting
+    /// in every bundle. Removing the parameter makes that failure mode
+    /// impossible rather than merely absent today.
     #[cfg(windows)]
-    pub fn failure(parent: ParentWindow, title: &str, main: &str, content: &str) {
-        unsafe { super::show_error_dialog(parent, title, main, content) }
+    pub fn failure(parent: ParentWindow, title: &str, content: &str) {
+        unsafe { super::show_error_dialog(parent, title, content) }
     }
 
     #[cfg(target_os = "macos")]
-    pub fn failure(_parent: ParentWindow, title: &str, _main: &str, content: &str) {
+    pub fn failure(_parent: ParentWindow, title: &str, content: &str) {
         crate::appkit::failure(title, content);
     }
 
@@ -2188,12 +2200,13 @@ pub unsafe fn show_metadata_failed_dialog(parent: HWND, min_java: u16, error_det
 /// `parent` must be null or a live window handle; it becomes the
 /// dialog's owner HWND in Win32. See [`show_retry_dialog`].
 #[cfg(windows)]
-pub unsafe fn show_error_dialog(parent: HWND, title: &str, _main: &str, content: &str) {
+pub unsafe fn show_error_dialog(parent: HWND, title: &str, content: &str) {
     // `title` is the title-bar text; the dialog body reads
     // `failure.heading` / `failure.subheading` from
-    // the localization bundle (or the caller-supplied overrides).
-    // `content`
-    // is the multi-line error description the launcher already
+    // the localization bundle — `error_window::show` substitutes the
+    // bundle's value whenever the field is empty, which is why `heading`
+    // below is `""` rather than something the caller supplies.
+    // `content` is the multi-line error description the launcher already
     // formatted with placeholders filled.
     let _ = title;
     let _ = content;

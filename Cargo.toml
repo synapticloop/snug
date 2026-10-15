@@ -33,6 +33,12 @@ anyhow = { version = "1" }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
+    # `GetUserPreferredUILanguages` / `GetUserDefaultLocaleName`, which are how
+    # `localize::detect_locales` asks Windows what language the user reads.
+    # Both live in the Globalization namespace, which nothing else in the tree
+    # needs — that is why the launcher used to ship a detection stub and blame
+    # the API for not existing.
+    "Win32_Globalization",
     "Win32_Graphics_Gdi",
     "Win32_Graphics_GdiPlus",
     "Win32_System_LibraryLoader",

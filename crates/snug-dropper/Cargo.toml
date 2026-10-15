@@ -12,7 +12,7 @@ description = "Beginner front-end for snug — drop a JAR (or a folder of JARs) 
 name = "snug_dropper"
 path = "src/lib.rs"
 
-# The shipped artefact is renamed to `Build with Snug.exe` at packaging
+# The shipped artefact is renamed to `Snug Quick Build.exe` at packaging
 # time (see AGENTS.md, slice 9). The target keeps a legal, cargo-friendly
 # name so `cargo build` / `cargo run` keep working without quoting.
 [[bin]]

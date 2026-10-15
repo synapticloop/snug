@@ -72,4 +72,4 @@
 # ---------------------------------------------------------------------------
 
 --input assets/snug-javafx-demo-windows.jar
---output assets/snug-javafx-demo.exe
+--output assets/snug-javafx-demo-windows.exe

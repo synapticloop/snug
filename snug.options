@@ -51,7 +51,7 @@
 # it reads as if it applied everywhere, and it does not.
 #
 #     snug.windows.options   --input assets\snug-javafx-demo-windows.jar
-#                             --output assets\snug-javafx-demo.exe
+#                             --output assets\snug-javafx-demo-windows.exe
 #     snug.macos.options     --input assets/snug-javafx-demo-macos.jar
 #                             --output assets/snug-javafx-demo.app
 #
@@ -101,7 +101,7 @@
 # terminal rather than launched by Launch Services that NSAlert never
 # appears. See AGENTS.md, "The JDK download flow used to deadlock on
 # macOS".
---download-jdk=auto
+--download-jdk=force
 #
 # `ALL-UNNAMED`, not `javafx.graphics`. snug puts the fat JAR on the
 # *classpath*, so JavaFX loads as part of the unnamed module rather than as

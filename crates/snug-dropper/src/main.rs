@@ -1,4 +1,4 @@
-//! `Build with Snug` — the beginner front-end to snug.
+//! `Snug Quick Build` — the beginner front-end to snug.
 //!
 //! A standalone Windows shim. Drop a JAR (or a folder of JARs) on it and
 //! it builds the EXE and says so; double-click it and it opens a command
@@ -8,7 +8,7 @@
 //! [`snug_dropper::ui`].
 //!
 //! The binary is built as `snug-dropper.exe` and renamed to
-//! `Build with Snug.exe` at packaging time, so that the file people
+//! `Snug Quick Build.exe` at packaging time, so that the file people
 //! drag onto carries a name that says what it does. It must sit in the
 //! **same folder as `snug.exe`** — that folder is where this looks for
 //! the real builder, where it writes `snug-build.log`, and where the
@@ -63,14 +63,14 @@ const TOO_MANY_BODY: &str = "Only one jar is allowed.\r\n\
 
 #[cfg(windows)]
 const BAD_TYPE_BODY: &str =
-    "Only .jar files and folders can be dropped on Build with Snug.\r\n\
+    "Only .jar files and folders can be dropped on Snug Quick Build.\r\n\
      \r\n\
      A command window has been opened so you can build it yourself.";
 
 #[cfg(windows)]
 const MISSING_SNUG_BODY: &str = "snug.exe could not be found.\r\n\
     \r\n\
-    Keep Build with Snug.exe in the same folder as snug.exe.";
+    Keep Snug Quick Build.exe in the same folder as snug.exe.";
 
 #[cfg(windows)]
 fn main() -> ExitCode {
@@ -191,7 +191,7 @@ fn confirm_overwrite(invocation: &Invocation) -> bool {
 #[cfg(not(windows))]
 fn main() -> ExitCode {
     eprintln!(
-        "snug-dropper / \"Build with Snug\" is a Windows-only tool. \
+        "snug-dropper / \"Snug Quick Build\" is a Windows-only tool. \
          It is shipped beside snug.exe for Windows users; on macOS, use \
          `snug` directly."
     );

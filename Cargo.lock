@@ -1274,6 +1274,7 @@ dependencies = [
  "anyhow",
  "clap",
  "editpe",
+ "embed-resource",
  "image",
  "plist",
  "postcard",

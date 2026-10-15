@@ -23,10 +23,17 @@
 //!
 //! ## Locale detection
 //!
-//! Uses `GetUserDefaultLocaleName`, which returns a BCP 47 tag like
-//! `en-US`, `de-DE`, `pt-BR`. We split on `-` and use the primary
-//! subtag (`en`, `de`, `pt`) as the next-priority lookup. Built-in
-//! English (`en`) is the absolute-last-resort fallback.
+//! [`detect_locales`] returns the user's language preference list as
+//! BCP 47 tags, most-preferred first: Windows
+//! `GetUserPreferredUILanguages` (falling back to
+//! `GetUserDefaultLocaleName`), macOS `+[NSLocale preferredLanguages]`.
+//! A machine set to `[de-AT, en-US]` yields exactly that order, which
+//! [`Bundles::load`] walks as its lookup chain.
+//!
+//! Each preferred tag is matched exactly first, then truncated one
+//! subtag at a time (`de-AT` → `de`, `zh-Hans-CN` → `zh-Hans` → `zh`),
+//! with the built-in English baseline as the absolute-last-resort
+//! fallback.
 //!
 //! ## Wire / runtime split
 //!
@@ -86,61 +93,104 @@ pub fn generation() -> u64 {
 /// A complete priority chain of localization bundles, ready for
 /// lookup. Built by [`Bundles::load`] and stashed in [`BUNDLES`].
 ///
-/// Order of priority (highest first):
-/// 1. User-supplied bundle matching the full BCP 47 tag (e.g. `en-US`).
-/// 2. User-supplied bundle matching the primary subtag (e.g. `en`).
-/// 3. Built-in English baseline (always last, always present).
+/// Order of priority (highest first), for a user whose preference list
+/// is `["de-AT", "en-US"]`:
 ///
-/// **This slice:** `detect_locale()` always returns `en`, so priority
-/// (1)/(2) are placeholders for a follow-up. Today every embedded
-/// bundle is treated as "lowest priority" and the built-in English
-/// baseline shadows nothing.
+/// 1. A bundle tagged exactly as a preferred tag — `de-AT`, then `en-US`.
+/// 2. A bundle tagged as a truncated form of one — `de` (from `de-AT`),
+///    then `en` (from `en-US`).
+/// 3. The built-in English baseline — always present, always last.
+///
+/// Bundles matching **no** preferred tag are deliberately left out of
+/// the chain. A bundle is an *offer* of a translation, not a default:
+/// dropping German and French bundles into a payload must not make a
+/// French speaker read German because `fr` happened to sort first.
+/// Nothing is lost by excluding them — every bundle is reachable from
+/// a machine whose locale it matches.
 pub struct Bundles {
-    /// Original bundles in the order they were passed to [`init`].
-    /// We walk this on every lookup so a key present in a later
-    /// bundle shadows an earlier one.
+    /// The bundles in priority order: most-preferred first, built-in
+    /// English baseline last. Every lookup walks this front to back and
+    /// takes the first bundle that defines the key.
     chain: Vec<Localization>,
 }
 
+/// Push `bundle` onto `chain` unless a bundle with the same tag is
+/// already present.
+///
+/// Locale matching is many-to-one — `de-AT` and `de-DE` both fall back
+/// to the same single `de` bundle — so without this the chain would
+/// carry one bundle once per preference that reached it.
+fn push_unique(chain: &mut Vec<Localization>, bundle: &Localization) {
+    if !chain.iter().any(|b| b.tag == bundle.tag) {
+        chain.push(bundle.clone());
+    }
+}
+
+/// The successively shorter forms of a BCP 47 tag, most specific first:
+/// `zh-Hans-CN` → `["zh-Hans", "zh"]`, `de` → `[]`.
+///
+/// This is the standard truncate-from-the-right lookup that language
+/// APIs assume, and it is what makes a `zh-Hans` bundle reachable from a
+/// `zh-Hans-CN` machine. Case is deliberately left alone: both APIs
+/// return canonically-cased tags (`pt-BR`, `zh-Hans`) and
+/// `tag_from_path` preserves the filename's casing, so an exact `find`
+/// is right. A bundle filed as `pt-br` will not match a `pt-BR`
+/// machine — which is the same trade every toolchain makes, and a
+/// mismatch there is a typo worth surfacing rather than hiding.
+fn parent_tags(tag: &str) -> Vec<String> {
+    let mut parts: Vec<&str> = tag.split('-').collect();
+    let mut out = Vec::new();
+    while parts.len() > 1 {
+        parts.pop();
+        out.push(parts.join("-"));
+    }
+    out
+}
+
 impl Bundles {
-    /// Build a lookup chain from the payload's embedded bundles plus
-    /// the always-present built-in English baseline.
+    /// Build a lookup chain from the payload's embedded bundles, ordered
+    /// against this machine's detected language preferences, plus the
+    /// always-present built-in English baseline.
     ///
-    /// The returned `Bundles` is empty if `payload_bundles` is empty
-    /// AND the built-in baseline failed to parse (a build-time
-    /// problem, not a runtime one — `localization.rs` tests catch
-    /// it). In every shipped build the baseline parses, so callers
-    /// always get at least one bundle.
-    ///
-    /// Sorts `payload_bundles` by detected-locale priority so that
-    /// the user's tag (currently always `en`) comes first and
-    /// generalist fallbacks come last. The CLI also pre-sorts via
-    /// `collect_localizations`, but doing it here too keeps the
-    /// invariant local — tests can construct `Bundles` directly
-    /// without depending on the CLI.
+    /// The returned `Bundles` is empty only if `payload_bundles` is
+    /// empty *and* the built-in baseline failed to parse (a build-time
+    /// problem, not a runtime one — `localization.rs` tests catch it). In
+    /// every shipped build the baseline parses, so callers always get at
+    /// least one bundle.
     pub fn load(payload_bundles: &[Localization]) -> Self {
-        let (full, _primary) = detect_locale();
+        Self::load_for(&detect_locales(), payload_bundles)
+    }
+
+    /// The host-independent half of [`Bundles::load`].
+    ///
+    /// Taking the preferences as an argument is what makes the chain
+    /// testable: `load` reads the *test machine's* locale, so a test
+    /// asserting "a German bundle wins" would pass on a German box and
+    /// fail everywhere else. Tests pass an explicit preference list and
+    /// get the same answer on every host.
+    pub fn load_for(preferences: &[String], payload_bundles: &[Localization]) -> Self {
         let mut chain: Vec<Localization> = Vec::with_capacity(payload_bundles.len() + 1);
 
-        // 1. Bundle matching the full detected tag (highest priority).
-        //    Skipped when full == primary (no separate regional bundle
-        //    is meaningful).
-        if !full.is_empty() && full != DEFAULT_TAG {
-            if let Some(b) = payload_bundles.iter().find(|b| b.tag == full) {
-                chain.push(b.clone());
-            }
-        }
-        // 2. Bundle matching the primary subtag.
-        //    (Currently no-op because `detect_locale` returns en; the
-        //    English baseline covers this.)
-        // 3. All other payload bundles in their original order.
-        for b in payload_bundles {
-            if !chain.iter().any(|existing| existing.tag == b.tag) {
-                chain.push(b.clone());
+        // 1. Exact tag matches, in the user's stated preference order.
+        for tag in preferences {
+            if let Some(b) = payload_bundles.iter().find(|b| &b.tag == tag) {
+                push_unique(&mut chain, b);
             }
         }
 
-        // 4. Built-in English baseline at the END so it's the lowest
+        // 2. Truncated forms, most specific first: `zh-Hans-CN` yields
+        //    `zh-Hans` then `zh`. Each preference's parents are walked
+        //    before moving to the next language, so a machine set to
+        //    `[de-AT, en-US]` resolves its own German before any English.
+        for tag in preferences {
+            for parent in parent_tags(tag) {
+                if let Some(b) = payload_bundles.iter().find(|b| &b.tag == &parent) {
+                    push_unique(&mut chain, b);
+                }
+            }
+        }
+
+        // 3. Built-in English baseline at the END so it's the lowest
         //    priority in the lookup chain.
         if let Ok(builtin) = Localization::parse(DEFAULT_TAG, DEFAULT_EN_TEXT) {
             if !chain.iter().any(|b| b.tag == DEFAULT_TAG) {
@@ -326,22 +376,171 @@ pub fn t_positional(key: &str, values: &[&str]) -> String {
     out
 }
 
-/// Detect the user's Windows UI language. Returns the BCP 47 tag
-/// (e.g. `"en-US"`, `"de-DE"`) and its primary subtag (e.g. `"en"`,
-/// `"de"`).
+/// The user's language preferences as BCP 47 tags, most-preferred
+/// first — e.g. `["de-AT", "en-US"]`.
 ///
-/// **Stub for this slice.** Always returns `("en", "en")` because
-/// `windows-sys` 0.59 does not export `GetUserDefaultLocaleName` or
-/// `GetUserDefaultUILanguage` under a usable feature gate. Adding
-/// real detection is a follow-up; the plan is to read
-/// `HKCU\Control Panel\Desktop\PreferredUILanguages` via the
-/// registry helpers we already pull in. Until then the launcher
-/// always uses the built-in English baseline; user-supplied
-/// `--localization` bundles are still parsed and embedded so a
-/// follow-up PR with detection can light them up without rebuilding
-/// the EXE.
-pub fn detect_locale() -> (String, String) {
-    (DEFAULT_TAG.to_string(), DEFAULT_TAG.to_string())
+/// Never empty: a platform with no detection (Linux, where there are no
+/// dialogs to localise yet) or a failed lookup degrades to `["en"]`,
+/// which resolves to the built-in baseline plus any user-supplied `en`
+/// bundle. A launcher that cannot tell what language to speak still has
+/// to start and still has to say something.
+///
+/// This is deliberately the OS's own answer rather than a computed one.
+/// Windows and macOS already agree on what a user's language list
+/// means, and re-deriving it from `LANG` or a registry key would be a
+/// worse version of the same thing that silently disagrees with the OS
+/// on the machines that matter.
+pub fn detect_locales() -> Vec<String> {
+    let mut out: Vec<String> = platform_locales()
+        .into_iter()
+        .filter(|s| !s.trim().is_empty())
+        .collect();
+    if out.is_empty() {
+        out.push(DEFAULT_TAG.to_string());
+    }
+    out
+}
+
+/// Windows: the user's ordered UI-language preference list.
+///
+/// `GetUserPreferredUILanguages` is the right call over its two siblings
+/// because it is the only one that returns an *ordered list*: a machine
+/// configured `[de-AT, en-US]` is stating a fallback order, and a lookup
+/// chain needs exactly that. `GetUserDefaultUILanguage` collapses that
+/// to a single LANGID and loses it.
+///
+/// `GetUserDefaultLocaleName` is the second choice, not the first: it
+/// returns the user's *regional* locale (`en-AU` for Australian
+/// English), which is the wrong notion for UI text — but a far better
+/// guess than giving up and defaulting to English.
+#[cfg(windows)]
+fn platform_locales() -> Vec<String> {
+    // `MUI_LANGUAGE` from winnls.h — "the UI language list", as opposed
+    // to `MUI_SEARCH_LANGUAGE` (the fallback list for files that carry no
+    // MUI resources). windows-sys exports the function but not the flag
+    // under a name, so the value is spelled out here.
+    const MUI_LANGUAGE: u32 = 0;
+    // `LOCALE_NAME_MAX_LENGTH` from winnls.h. Windows bounds each entry
+    // of the preferred list at this length; it is also the size of the
+    // buffer `GetUserDefaultLocaleName` documents as sufficient.
+    const LOCALE_NAME_MAX_LENGTH: i32 = 85;
+
+    let langs = preferred_ui_languages(MUI_LANGUAGE, LOCALE_NAME_MAX_LENGTH);
+    if !langs.is_empty() {
+        return langs;
+    }
+
+    let mut buf = [0u16; LOCALE_NAME_MAX_LENGTH as usize];
+    // SAFETY: `buf` holds exactly `LOCALE_NAME_MAX_LENGTH` UTF-16 units
+    // and the capacity argument matches, which is this API's only
+    // precondition.
+    let n = unsafe {
+        windows_sys::Win32::Globalization::GetUserDefaultLocaleName(
+            buf.as_mut_ptr(),
+            LOCALE_NAME_MAX_LENGTH,
+        )
+    };
+    if n <= 0 {
+        return Vec::new();
+    }
+    // `n` counts the terminating NUL — MSDN is explicit about this — so
+    // slicing to `n` keeps the NUL and yields a tag like `"en-AU\0"`,
+    // which then matches no bundle and truncates to nothing. It degrades
+    // quietly to English rather than erroring, so it is worth the
+    // explicit `- 1`.
+    let name = String::from_utf16_lossy(&buf[..n as usize - 1]);
+    if name.is_empty() {
+        return Vec::new();
+    }
+    vec![name]
+}
+
+/// The two-call buffer dance `GetUserPreferredUILanguages` requires: the
+/// first call asks how long the list is, the second fills it.
+///
+/// Returns an empty list on any failure rather than propagating one — a
+/// launcher with no language detection still has to start, and
+/// [`detect_locales`] carries the fallback for exactly this case.
+#[cfg(windows)]
+fn preferred_ui_languages(flags: u32, max_len: i32) -> Vec<String> {
+    use windows_sys::Win32::Globalization::GetUserPreferredUILanguages;
+
+    let mut num_languages: u32 = 0;
+    let mut sizing_len: u32 = 0;
+    // Sizing call: null buffer. On success `num_languages` comes back
+    // holding how many tags the user has queued — which is *not* the
+    // same as the character count of the buffer they need. The length
+    // out-parameter has to be a real pointer here; passing null for it
+    // makes the call fail and leaves `num_languages` at 0, which is
+    // indistinguishable from "no languages" downstream.
+    // SAFETY: a null buffer is the documented sizing form, and both
+    // out-parameters are live `u32`s.
+    unsafe {
+        GetUserPreferredUILanguages(
+            flags,
+            &mut num_languages,
+            std::ptr::null_mut(),
+            &mut sizing_len,
+        )
+    };
+    if num_languages == 0 {
+        return Vec::new();
+    }
+
+    // The two out-parameters carry different quantities and both are
+    // in/out, which is the one genuinely easy thing to get wrong here:
+    // `pulNumLanguages` takes the *language count* in and returns the
+    // number of strings written, while `pcchLanguagesBuffer` takes the
+    // buffer's capacity in *characters* and returns the characters
+    // written. Handing it a 0 — or a language count — fails with
+    // ERROR_INSUFFICIENT_BUFFER, and because this function swallows
+    // failures the symptom is not an error at all: detection quietly
+    // degrades to the single-locale path and a multilingual machine
+    // only ever hears about one of its languages.
+    let capacity = num_languages as usize * max_len.max(1) as usize;
+    let mut buf = vec![0u16; capacity];
+    let mut written: u32 = capacity as u32;
+    // SAFETY: `buf` holds exactly `capacity` UTF-16 units, the
+    // documented worst case for `num_languages` tags.
+    let ok =
+        unsafe { GetUserPreferredUILanguages(flags, &mut num_languages, buf.as_mut_ptr(), &mut written) };
+    if ok == 0 || written == 0 {
+        return Vec::new();
+    }
+    buf.truncate(written as usize);
+
+    // The whole list arrives as one buffer of NUL-separated,
+    // double-NUL-terminated strings, so splitting on NUL and dropping
+    // the empties the trailing terminator leaves behind is the parse.
+    String::from_utf16_lossy(&buf)
+        .split('\0')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// macOS: `+[NSLocale preferredLanguages]`, the same ordered list macOS
+/// uses to pick an app's `.lproj` — which is exactly the answer we want,
+/// since that is the list the user's own Applications are resolving
+/// against.
+#[cfg(target_os = "macos")]
+fn platform_locales() -> Vec<String> {
+    use objc2_foundation::NSLocale;
+    NSLocale::preferredLanguages()
+        .iter()
+        .map(|s| s.to_string())
+        .filter(|s| !s.trim().is_empty())
+        .collect()
+}
+
+/// No detection on this platform. `platform::other` is a deliberate no-op
+/// stub for the same reason — Linux has no launcher dialogs to localise
+/// yet — so this keeps the shape consistent rather than leaving a hole
+/// the next platform has to special-case.
+#[cfg(not(any(windows, target_os = "macos")))]
+fn platform_locales() -> Vec<String> {
+    Vec::new()
 }
 
 #[cfg(test)]
@@ -374,7 +573,7 @@ mod tests {
     #[test]
     fn load_appends_user_bundles_above_baseline() {
         let de = bundle("de", &[("err.jvm_not_found", "Keine JVM gefunden.")]);
-        let b = Bundles::load(&[de]);
+        let b = Bundles::load_for(&["de".to_string()], &[de]);
         assert_eq!(
             b.raw_lookup("err.jvm_not_found"),
             "Keine JVM gefunden.",
@@ -386,7 +585,7 @@ mod tests {
     fn load_keeps_baseline_only_for_keys_user_did_not_translate() {
         // User bundle covers only one key.
         let de = bundle("de", &[("err.jvm_not_found", "Keine JVM gefunden.")]);
-        let b = Bundles::load(&[de]);
+        let b = Bundles::load_for(&["de".to_string()], &[de]);
         // Key the user didn't translate falls back to English.
         assert_eq!(
             b.raw_lookup("err.java_exception"),
@@ -400,8 +599,10 @@ mod tests {
         // The CLI may include the baseline in the payload (it does,
         // intentionally). Make sure we don't double up: if a payload
         // already has an `en` tag, the built-in baseline is skipped.
+        // Preferred tag is `en-US`, so this also exercises the
+        // truncation path reaching the user's own `en` bundle.
         let cli_en = bundle("en", &[("err.foo", "from CLI")]);
-        let b = Bundles::load(&[cli_en]);
+        let b = Bundles::load_for(&["en-US".to_string()], &[cli_en]);
         // Should have exactly one `en` bundle in the chain.
         let en_count = b.chain.iter().filter(|b| b.tag == "en").count();
         assert_eq!(en_count, 1, "baseline should not duplicate CLI-supplied en");
@@ -432,23 +633,127 @@ mod tests {
     #[test]
     fn t_substitutes_placeholders_from_lookup() {
         // Construct a standalone chain (not via global init — that's
-        // a one-shot per-process).
-        let b = Bundles::load(&[bundle(
-            "en",
-            &[("err.demo", "Found Java {min_java}, need {wanted}")],
-        )]);
+        // a one-shot per-process), and pin the preference list so the
+        // assertion cannot depend on the test machine's own locale.
+        let b = Bundles::load_for(
+            &["en-US".to_string()],
+            &[bundle(
+                "en",
+                &[("err.demo", "Found Java {min_java}, need {wanted}")],
+            )],
+        );
         let resolved = b.raw_lookup("err.demo");
         let out = fill_placeholders(&resolved, &[("min_java", "17"), ("wanted", "25")]);
         assert_eq!(out, "Found Java 17, need 25");
     }
 
     #[test]
-    fn detect_locale_returns_a_tag() {
-        let (full, primary) = detect_locale();
-        assert!(!full.is_empty());
-        // Primary is the head of the full tag.
-        let expected_primary = full.split('-').next().unwrap_or(&full).to_string();
-        assert_eq!(primary, expected_primary);
+    fn detect_locales_always_yields_a_usable_tag() {
+        let langs = detect_locales();
+        assert!(!langs.is_empty(), "detection must degrade, never to nothing");
+        for tag in &langs {
+            assert!(!tag.trim().is_empty());
+            // `_` is the POSIX/`LANG` spelling of the same idea. Neither
+            // `GetUserPreferredUILanguages` nor `+[NSLocale
+            // preferredLanguages]` emits it, so this is a real assertion
+            // about the API contract rather than a defensive one — and
+            // `parent_tags` splits on `-`, so an underscore here would
+            // quietly defeat every fallback.
+            assert!(!tag.contains('_'), "not a BCP 47 tag: {tag}");
+        }
+    }
+
+    #[test]
+    fn parent_tags_truncates_from_the_right() {
+        assert_eq!(parent_tags("de"), Vec::<String>::new());
+        assert_eq!(parent_tags("de-AT"), vec!["de".to_string()]);
+        assert_eq!(parent_tags("pt-BR"), vec!["pt".to_string()]);
+        assert_eq!(
+            parent_tags("zh-Hans-CN"),
+            vec!["zh-Hans".to_string(), "zh".to_string()],
+            "a script subtag must survive the first truncation"
+        );
+    }
+
+    #[test]
+    fn exact_tag_wins_over_its_own_parent() {
+        // A `de-AT` machine shipping both `de-AT` and `de` must read the
+        // regional bundle first; `de` is the fallback for whatever the
+        // regional one left untranslated.
+        let generic = bundle("de", &[("k", "generic"), ("k2", "generic2")]);
+        let regional = bundle("de-AT", &[("k", "regional")]);
+        let b = Bundles::load_for(&["de-AT".to_string()], &[generic, regional]);
+        assert_eq!(
+            b.tags(),
+            vec!["de-AT".to_string(), "de".to_string(), "en".to_string()]
+        );
+        assert_eq!(b.raw_lookup("k"), "regional");
+        assert_eq!(
+            b.raw_lookup("k2"),
+            "generic2",
+            "keys the regional bundle omits fall back to its parent"
+        );
+    }
+
+    #[test]
+    fn user_preference_order_beats_payload_order() {
+        // The entire reason for asking for an ordered *list*. Payload
+        // order is `fr` before `de`; the user's order is `de` before
+        // `fr`, and the user's order is the one that counts.
+        let fr = bundle("fr", &[("k", "francais")]);
+        let de = bundle("de", &[("k", "deutsch")]);
+        let prefs = vec!["de-AT".to_string(), "fr-FR".to_string()];
+        let b = Bundles::load_for(&prefs, &[fr, de]);
+        assert_eq!(b.tags(), vec!["de".to_string(), "fr".to_string(), "en".to_string()]);
+        assert_eq!(b.raw_lookup("k"), "deutsch");
+    }
+
+    #[test]
+    fn script_subtag_bundle_is_reachable_from_a_regional_locale() {
+        // The case primary-subtag-only matching gets wrong: `zh` is a
+        // poor stand-in for `zh-Hans` on a Simplified Chinese machine.
+        let script = bundle("zh-Hans", &[("k", "simplified")]);
+        let b = Bundles::load_for(&["zh-Hans-CN".to_string()], &[script]);
+        assert_eq!(b.raw_lookup("k"), "simplified");
+    }
+
+    #[test]
+    fn bundles_the_user_cannot_read_are_left_out_of_the_chain() {
+        // Regression guard for the old payload-order chain, which put
+        // *every* bundle in the lookup and so let `de` shadow `fr` for
+        // every user regardless of their locale.
+        let de = bundle("de", &[("err.jvm_not_found", "Keine JVM gefunden.")]);
+        let b = Bundles::load_for(&["en-US".to_string()], &[de]);
+        assert!(
+            !b.tags().contains(&"de".to_string()),
+            "unreadable bundle leaked into the chain: {:?}",
+            b.tags()
+        );
+        assert_eq!(
+            b.raw_lookup("err.jvm_not_found"),
+            "Could not locate a Java {min_java}+ JVM in any of the configured discovery locations"
+        );
+    }
+
+    #[test]
+    fn a_single_locale_payload_still_works_on_an_english_machine() {
+        // A `--localization de.txt` build whose only non-English bundle
+        // matches nothing here: English is still in the chain, so every
+        // key resolves to real copy rather than a raw key string.
+        let de = bundle("de", &[("err.jvm_not_found", "Keine JVM gefunden.")]);
+        let b = Bundles::load_for(&["en-GB".to_string()], &[de]);
+        assert_eq!(b.tags(), vec!["en".to_string()]);
+        assert_eq!(b.raw_lookup("splash.title"), "Snug Splash");
+    }
+
+    #[test]
+    fn chain_has_no_duplicate_tags_when_preferences_share_a_parent() {
+        // `de-AT` and `de-DE` both truncate to `de`; without the dedup
+        // the same bundle would be walked twice per lookup.
+        let de = bundle("de", &[("k", "deutsch")]);
+        let prefs = vec!["de-AT".to_string(), "de-DE".to_string()];
+        let b = Bundles::load_for(&prefs, &[de]);
+        assert_eq!(b.tags(), vec!["de".to_string(), "en".to_string()]);
     }
 
     /// Every key the launcher looks up must exist in the built-in

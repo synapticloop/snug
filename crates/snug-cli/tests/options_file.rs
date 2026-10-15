@@ -747,7 +747,7 @@ fn each_platform_gets_the_output_for_its_own_artefact() {
     let windows = effective_repo_output("windows").unwrap().expect("windows sets --output");
     assert_eq!(
         windows,
-        root.join("assets/snug-javafx-demo.exe"),
+        root.join("assets/snug-javafx-demo-windows.exe"),
         "a Windows build must name the .exe build-windows.cmd asserts on"
     );
 }

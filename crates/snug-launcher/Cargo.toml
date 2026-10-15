@@ -66,7 +66,15 @@ ureq = { workspace = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = "0.3.2"
-objc2-foundation = { version = "0.3", default-features = false, features = ["alloc", "std", "NSString", "NSPathUtilities"] }
+# `NSLocale` + `NSArray` are what `localize::detect_locales` uses to read the
+# user's ordered language preference list on macOS
+# (`+[NSLocale preferredLanguages]`), the macOS counterpart of Windows'
+# `GetUserPreferredUILanguages`. `NSEnumerator` is what gates
+# `NSArray::iter` — without it the call does not exist and the macOS
+# branch will not compile. All three are pure-binding features that pull
+# in no extra crates (`NSEnumerator` and `NSArray` are `= []`, and
+# `bitflags` is already here via `NSString`).
+objc2-foundation = { version = "0.3", default-features = false, features = ["alloc", "std", "NSString", "NSArray", "NSEnumerator", "NSLocale", "NSPathUtilities"] }
 # `confstr` is how snug asks macOS where the per-user cache directory is,
 # rather than hardcoding `~/Library/Caches`. Windows reads
 # %LOCALAPPDATA% through the Win32 API instead, so it needs no libc.

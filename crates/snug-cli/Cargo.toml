@@ -34,6 +34,14 @@ quick-xml = { workspace = true }
 # is mostly declaring a direct dependency for clarity.)
 image = { workspace = true }
 
+[build-dependencies]
+# Links assets/snug-runner.png in as a Windows MAINICON so snug.exe has an
+# icon straight out of `cargo build --release`, rather than only after
+# build-windows.cmd step 6 stamps one in post-link. Resolutions are
+# deliberately editpe's, so a plain build already satisfies `verify_icons`.
+embed-resource = { version = "3", default-features = false }
+image = { workspace = true }
+
 [dev-dependencies]
 # Dev-only: parses the generated Info.plist back so a malformed plist
 # fails a test instead of producing a bundle the Dock calls "damaged".

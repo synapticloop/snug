@@ -1,4 +1,4 @@
-//! `snug-dropper` — the "Build with Snug" beginner front-end.
+//! `snug-dropper` — the "Snug Quick Build" beginner front-end.
 //!
 //! A standalone Windows shim, and its own workspace crate: it never links
 //! the builder, the launcher, or `clap` (the only dependency is the raw

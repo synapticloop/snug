@@ -55,7 +55,7 @@ snug/
 │   ├── snug-builder/     # produces the EXE (template-per-build v1, stub v2)
 │   ├── snug-launcher/    # runtime: JVM discovery, JNI load, splash, main invoke
 │   ├── snug-format/      # shared embedded-payload types + codec
-│   └── snug-dropper/     # "Build with Snug" — beginner drag-and-drop shim
+│   └── snug-dropper/     # "Snug Quick Build" — beginner drag-and-drop shim
 ├── examples/
 └── tests/
 ```
@@ -248,7 +248,7 @@ The *binary name is always `snug`*; the platform lives in the directory:
 
 ```text
 release/
-├── windows-x86_64/            # snug.exe, Build with Snug.exe, snug_preview.exe, demo JAR
+├── windows-x86_64/            # snug.exe, Snug Quick Build.exe, snug_preview.exe, demo JAR
 ├── macos-arm64/snug
 └── macos-x86_64/snug
 ```
@@ -264,7 +264,7 @@ triple implies, so the two pipelines agree on the shape and a future
 Windows-on-Arm64 slice needs no new convention. The `x86_64` spelling
 matches the macOS Intel directory rather than `amd64`, which is what
 `uname -m` and a Rust target both use. The Windows bundle holds more than
-one artefact (`snug.exe`, `Build with Snug.exe`, `snug_preview.exe`, the
+one artefact (`snug.exe`, `Snug Quick Build.exe`, `snug_preview.exe`, the
 demo JAR), and the co-location invariant between the first two is why
 they must be staged *together* — so the directory, not the file name, is
 what identifies the platform. Note that `RELEASE_SUBDIR` is derived
@@ -350,7 +350,7 @@ precompiled `launcher-stub-windows-x86_64.exe` (v2).
 | 6 | Native splash renderer (PNG via GDI+/WIC)      | planned    |
 | 7 | Per-user cache + old-version cleanup           | **done** — cache entries expire. `cache::touch` stamps a cached JAR's mtime on **every** launch that uses it, and `cache::sweep` runs off a detached thread (rate-limited to once per 6h by a `.sweep` stamp file) to delete the ones no longer wanted. Policy: keep the most recently used `KEEP_RECENT` (3) entries — the running build's own entries count toward that depth — up to a per-app byte budget of `clamp(build_bytes * 3, 512 MB, 8 GB)`, and evict anything untouched for `MAX_UNUSED_AGE` (30 days) regardless of rank. The current build is never evicted; everything else is recoverable because a missing entry is re-extracted from the payload on the next launch. Sweeping is *not* triggered by the builder — `snug-cli` never writes to the cache, so the launcher is the sole owner of the policy. |
 | 8 | GitHub Actions CI (windows-latest release)     | planned    |
-| 9 | `Build with Snug` beginner drag-and-drop shim   | **done** — separate `crates/snug-dropper` crate. Drop a `.jar` or a folder of JARs on `Build with Snug.exe` and it runs `snug.exe --name "Example Application Name" --company "Example Company Pty Ltd" -o "<parent>/Example Application Name.exe" <input>` behind an indeterminate marquee on a worker thread, then reports with a `MessageBoxW`. Double-click opens a command window in the EXE's own folder. Two or more items, or one item that is neither a `.jar` nor a directory, get a dialog and *then* the terminal as a hand-off. A build failure or a missing `snug.exe` gets an error dialog and **no** terminal. Built as `snug-dropper.exe`; renamed to `Build with Snug.exe` at packaging time. Must ship in the same folder as `snug.exe`. |
+| 9 | `Snug Quick Build` beginner drag-and-drop shim   | **done** — separate `crates/snug-dropper` crate. Drop a `.jar` or a folder of JARs on `Snug Quick Build.exe` and it runs `snug.exe --name "Example Application Name" --company "Example Company Pty Ltd" -o "<parent>/Example Application Name.exe" <input>` behind an indeterminate marquee on a worker thread, then reports with a `MessageBoxW`. Double-click opens a command window in the EXE's own folder. Two or more items, or one item that is neither a `.jar` nor a directory, get a dialog and *then* the terminal as a hand-off. A build failure or a missing `snug.exe` gets an error dialog and **no** terminal. Built as `snug-dropper.exe`; renamed to `Snug Quick Build.exe` at packaging time. Must ship in the same folder as `snug.exe`. |
 | 10 | Native macOS / Linux `snug` CLI builds    | **done** — `cargo build --workspace` and `cargo test --workspace --lib --bins --tests` pass on macOS (283 tests), and the CLI produces a real `PE32+ executable (GUI) x86-64` end-to-end from a Mac. `scripts/build-macos.sh` stages two thin per-arch binaries into `release/macos-arm64/snug` and `release/macos-x86_64/snug` at a macOS 12.0 deployment floor — same binary name on every platform, platform in the directory, so docs never name two binaries. No universal2: macOS 27 is the last release with Rosetta 2, so arm64 is the future-proof slice and x86_64 only serves the four Intel models that top out at macOS 26. Windows-only surfaces are gated: the six Win32 GUI modules in `snug-launcher` use file-level `#![cfg(windows)]` (joining `jdk_install.rs` / `splash.rs`), while the three Windows-only *binaries* use per-item `#[cfg(windows)]` plus a real non-Windows `main`. `editpe` was made unconditional (pure-Rust PE parsing — `snug-cli` needs it to build EXEs anywhere) and `ureq` Windows-only. Homebrew tap / Developer ID notarization is follow-up; see "Build host". |
 | 11 | macOS launcher runtime (`libjvm.dylib` + JNI) | **done, verified against a real JDK on macOS.** `platform/macos.rs` mirrors `platform/windows.rs` step for step: cache extraction + sweep, log, `Main-Class` resolution, JVM discovery, `libjvm.dylib` load via the same `jni` 0.22 invocation API, and the `main(String[])` / JavaFX `Application.launch` dispatch. `tests/macos_launch_e2e.rs` compiles a real class with `javac`, packages it with `jar`, hands it to the launcher, and asserts the JVM actually runs it — it is skipped rather than failed when no JDK is present. **Not implemented:** splash, the Adoptium download flow, and error dialogs (all Win32); `DownloadJdkMode::Auto`/`Force` degrade to discovery-only and *log* that. |
 | 12 | macOS `.app` bundle emitter | **done, verified by launching a real bundle.** The output extension selects the artefact: `-o MyApp.app` builds a macOS bundle, `-o MyApp.exe` a Windows one, and the *default* is the host's own — `snug app.jar` with no `-o` gives `app.app` on macOS and `app.exe` elsewhere. `macos_bundle.rs` writes `Contents/{Info.plist,MacOS/<App>,Resources/<App>.snugpayload,Resources/App.icns}` and ad-hoc signs it. The launcher is a **byte-copy** — unlike the Windows stub there is nothing to stamp, because a Mach-O has no resource directory and `editpe` is PE-only. `bin/launcher-stub-macos-<arch>` is embedded per `#[cfg(target_arch)]`, so each `snug` binary carries one launcher and can only build a `.app` for its own arch. |
@@ -477,7 +477,7 @@ commit — useful history, not a live list.
 - **macOS ships no icons at all, and `build-macos.sh` never stamps any.**
   The Windows pipeline gives each of its three EXEs its own artwork
   (`snug.exe` → `snug-runner.png`, `snug_preview.exe` → `snug-preview.png`,
-  `Build with Snug.exe` → `snug-dropper.png`, all verified by
+  `Snug Quick Build.exe` → `snug-dropper.png`, all verified by
   `verify_icons`), and the macOS pipeline has no equivalent step, so the
   symmetry is cosmetic. `release\macos-arm64\snug` and
   `release\macos-x86_64\snug` have **no icon whatsoever**, and
@@ -487,10 +487,12 @@ commit — useful history, not a live list.
     `verify_icons` now guards against, only with nothing watching it:
     the `__TEXT,__icns` section is emitted by `snug-launcher`'s
     `build.rs`, whose link arg is *un-binned* and therefore never
-    reaches `snug-cli`, which has no `build.rs` of its own. So the
-    missing icon is not an oversight in `build-macos.sh` — there is
-    nothing there to stamp with.
-  - `Build with Snug.exe` has no macOS counterpart and never will: the
+    reaches `snug-cli`. `snug-cli` does now have a `build.rs` of its
+    own, but it is Windows-only and emits a PE `MAINICON`; a Mach-O
+    has no resource directory, so there is no equivalent step for it to
+    perform. So the missing icon is not an oversight in
+    `build-macos.sh` — there is nothing there to stamp with.
+  - `Snug Quick Build.exe` has no macOS counterpart and never will: the
     dropper is Win32-only, gated per-item with `#[cfg(windows)]`. The
     honest macOS equivalent set is `snug`, and optionally `snug_preview`.
   - Closing it is not a port of `stamp_preview_icon`. `editpe` is
@@ -1270,7 +1272,7 @@ by accident.
     split exists to fix. Both release scripts pass **no `-o` and no
     `--options`** and rely on the implicit CWD lookup:
     `scripts\build-windows.cmd` runs `snug.exe assets\snug-javafx-demo-windows.jar`
-    and then asserts `assets\snug-javafx-demo.exe` exists;
+    and then asserts `assets\snug-javafx-demo-windows.exe` exists;
     `build-macos-demo.sh` reads the path back out of the files via its own
     `effective_flag` helper rather than hardcoding it. So the string lives
     in exactly one place, and each script fails loudly if its file is
@@ -1539,7 +1541,7 @@ by accident.
     text was silently clipped instead. Its hit-test rect is measured
     the same way as the buttons and was **zero-width** before the
     `DT_CALCRECT` fix, which made the link unclickable.
-- **`snug-dropper` ("Build with Snug") is a beginner utility, and every
+- **`snug-dropper` ("Snug Quick Build") is a beginner utility, and every
   decision follows from that.** It is its own crate, has no dependencies
   except `windows-sys`, and is **not** part of the launcher or the CLI.
   Four rules that look arbitrary but are not:
@@ -1596,7 +1598,7 @@ by accident.
     entries downscale from real detail instead of being upscaled.
   - **`--package` is what emits the shipped name, and it must land
     beside `snug.exe`.** `stamp_dropper_icon --package [DIR]` stamps the
-    icon and copies the binary to `DIR\Build with Snug.exe`, defaulting
+    icon and copies the binary to `DIR\Snug Quick Build.exe`, defaulting
     to the exe's own folder. That placement is load-bearing rather than
     tidy: the dropper resolves `snug.exe` relative to its *own* location
     at runtime, so separating the two turns every build into a "snug.exe
@@ -1616,7 +1618,7 @@ by accident.
     iterating on an icon was broken.
   - **`release\` is the shipping folder, and it ignores itself.**
     `build-windows.cmd` step 10 stages `snug.exe`,
-    `Build with Snug.exe`, `snug_preview.exe` and
+    `Snug Quick Build.exe`, `snug_preview.exe` and
     `snug-javafx-demo-windows.jar` in there; the nested `.gitignore` hides
     everything but itself, so a fresh clone has the directory and the
     rules without a single artefact. The two shipping EXEs are staged
