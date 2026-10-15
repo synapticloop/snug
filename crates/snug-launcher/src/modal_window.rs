@@ -137,12 +137,11 @@ const WINDOW_W: i32 = 640;
 /// Height of the **client** area, and the same value the whole dialog
 /// family uses (`progress_window` mirrors this stack exactly).
 ///
-/// Derived upward from the info box rather than hardcoded, because the
-/// whole point of the redesign is that the two gaps below the box are
-/// equal: `INFO_BOX_Y` is the anchor both modules share, then the box,
-/// `BOTTOM_PAD`, the button row, and `BOTTOM_PAD` again. Change any
+/// Derived upward from the info box rather than hardcoded:
+/// `INFO_BOX_Y` is the anchor both modules share, then the box,
+/// `INFO_TO_BUTTON_GAP`, the button row, and `BOTTOM_PAD`. Change any
 /// one of those and the window follows.
-const WINDOW_H: i32 = INFO_BOX_Y + INFO_BOX_H + BOTTOM_PAD + BUTTON_H + BOTTOM_PAD;
+const WINDOW_H: i32 = INFO_BOX_Y + INFO_BOX_H + INFO_TO_BUTTON_GAP + BUTTON_H + BOTTOM_PAD;
 
 const MARGIN: i32 = 16;
 const MASCOT_X: i32 = MARGIN;
@@ -186,7 +185,15 @@ const INFO_BOX_X: i32 = MARGIN;
 /// out) because the buttons used to sit inside the box's band. With the
 /// buttons moved to their own row the extra reserve has no owner.
 const INFO_BOX_W: i32 = WINDOW_W - MARGIN * 2;
-const INFO_BOX_Y: i32 = 220;
+/// Where the info box sat before it was pushed down toward the button
+/// row. Named so the offset applied below stays visible rather than
+/// being folded into a magic 228.
+const INFO_BOX_Y_BASE: i32 = 220;
+/// The box moves down by exactly the difference between the two gaps,
+/// so `WINDOW_H` lands on the same value it did before. Deriving it is
+/// what keeps "move the box closer to the buttons" and "do not resize
+/// the dialog" from becoming two edits that can disagree.
+const INFO_BOX_Y: i32 = INFO_BOX_Y_BASE + (BOTTOM_PAD - INFO_TO_BUTTON_GAP);
 /// Height of the light-blue info box. Sized for the heading plus
 /// **two** subtext lines: `INFO_HEADING_Y_OFFSET` .. plus two rows of
 /// `INFO_SUBTEXT_H`, with `INFO_PAD` top and bottom. `WINDOW_H` is
@@ -206,12 +213,17 @@ const INFO_SUBTEXT2_Y_OFFSET: i32 = INFO_SUBTEXT_Y_OFFSET + INFO_SUBTEXT_H + 2;
 const INFO_TEXT_X: i32 = INFO_BOX_X + INFO_PAD + INFO_ICON_SIZE + 28;
 const INFO_TEXT_W: i32 = INFO_BOX_W - (INFO_TEXT_X - INFO_BOX_X) - INFO_PAD;
 
-/// Uniform padding around the bottom of the content stack. Used
-/// **twice** on purpose: once between the info box and the button row,
-/// and once between the button row and the bottom of the window. That
-/// is what makes the two gaps provably equal rather than equal by
-/// hand-tuning two numbers that would drift apart.
+/// Padding between the button row and the bottom of the window.
 const BOTTOM_PAD: i32 = 16;
+
+/// Gap between the bottom of the info box and the button row.
+///
+/// Deliberately tighter than [`BOTTOM_PAD`]. The box used to sit a full
+/// `BOTTOM_PAD` above the buttons *and* a full `BOTTOM_PAD` below them,
+/// so it floated between two equal gaps and read as detached from both.
+/// Halving the upper gap and pushing the box down by the difference
+/// brings it toward the buttons and leaves `WINDOW_H` untouched.
+const INFO_TO_BUTTON_GAP: i32 = 8;
 
 /// Buttons sit in their own row *below* the info box, right-aligned.
 /// Widths are measured from each label (see `measure_button_width`)
@@ -235,7 +247,7 @@ const BUTTON_GAP: i32 = INFO_PAD;
 /// Right edge of the button group, and the leftward step between
 /// buttons.
 const BUTTON_RIGHT: i32 = WINDOW_W - MARGIN;
-const BUTTON_Y: i32 = INFO_BOX_Y + INFO_BOX_H + BOTTOM_PAD;
+const BUTTON_Y: i32 = INFO_BOX_Y + INFO_BOX_H + INFO_TO_BUTTON_GAP;
 
 /// Optional "Check for a newer version" block, painted as **two
 /// stacked rows under the mascot**: the label, then the URL beneath it.

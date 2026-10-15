@@ -83,8 +83,10 @@ use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{HMODULE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, CreateFontW, DT_LEFT, DT_SINGLELINE, DT_VCENTER, DrawTextW, EndPaint, HBRUSH, HBITMAP,
-    HFONT, PAINTSTRUCT, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
+    BeginPaint, CreateFontW, CreateRoundRectRgn, CreateSolidBrush, DeleteObject, DT_LEFT,
+    DT_SINGLELINE, DT_VCENTER, DT_WORDBREAK, DrawTextW, EndPaint, FillRect, FillRgn,
+    HBRUSH, HBITMAP, HFONT, InvalidateRect, PAINTSTRUCT, SelectObject, SetBkMode, SetTextColor,
+    TRANSPARENT,
 };
 use windows_sys::Win32::Graphics::GdiPlus::{
     GdiplusShutdown, GdiplusStartup, GdiplusStartupInput, GdipCreateBitmapFromFile,
@@ -94,12 +96,17 @@ use windows_sys::Win32::Graphics::GdiPlus::{
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+use windows_sys::Win32::UI::HiDpi::{
+    AdjustWindowRectExForDpi, GetDpiForSystem, GetDpiForWindow, SetProcessDpiAwarenessContext,
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AdjustWindowRectEx, CB_ADDSTRING, CB_GETCOUNT, CB_GETCURSEL, CB_RESETCONTENT, CB_SETCURSEL,
-    CBN_SELCHANGE, CBS_DROPDOWNLIST, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
+    CB_ADDSTRING, CB_GETCOUNT, CB_GETCURSEL, CB_RESETCONTENT, CB_SETCURSEL, CBN_SELCHANGE,
+    CBS_DROPDOWNLIST, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     DrawIconEx, GetClientRect, GetDlgItem, GetMessageW, GetSystemMetrics, LoadCursorW, LoadImageW,
-    MSG, PostThreadMessageW,
-    RegisterClassExW, SendMessageW, SM_CXSCREEN, SM_CYSCREEN, TranslateMessage, BS_PUSHBUTTON,
+    MoveWindow, MSG, PostThreadMessageW,
+    RegisterClassExW, SendMessageW, SetWindowPos, SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE,
+    SWP_NOZORDER, TranslateMessage, BS_PUSHBUTTON,
     DI_NORMAL, HICON, ICON_BIG, ICON_SMALL, IDC_ARROW, IMAGE_ICON, LR_DEFAULTSIZE,
     LR_LOADFROMFILE, LR_SHARED, WM_CLOSE, WM_COMMAND,
     WM_CREATE, WM_DESTROY, WM_NCDESTROY, WM_PAINT, WM_QUIT, WM_SETICON, WNDCLASSEXW, WS_CAPTION,
@@ -121,16 +128,62 @@ use snug_launcher::progress_window;
 const CLASS_NAME: &str = "snug_preview_launcher_v1\0";
 const WINDOW_TITLE: &str = "snug dialog preview\0";
 
+// ============================================================================
+//  Layout metrics
+// ============================================================================
+//
+//  Every constant below is a **logical** measurement at 96 DPI. None of
+//  them is handed to Win32 directly — `scale_px` converts at the call
+//  site — so one number describes the layout at every scale factor
+//  instead of needing a second table of 150%-sized copies.
+//
+//  The pairing is not optional. Opting into per-monitor DPI awareness on
+//  its own stops Windows bitmap-stretching the window but leaves these
+//  numbers unscaled, which is *worse* than staying unaware: the window
+//  comes out physically too small holding the same contents.
+//  `snug-dropper`'s `enable_dpi_awareness` records the same trap from
+//  the other side.
+
+/// Scale a logical (96 DPI) measurement to `dpi`.
+///
+/// Rounded half-away-from-zero rather than truncated, so a measurement
+/// never loses a pixel to integer division and the hairline gaps
+/// between buttons stay even across scale factors instead of drifting
+/// by 1 px.
+///
+/// The sign handling is not decoration. Rust's `/` truncates toward
+/// zero, so the obvious `(n + 48) / 96` rounds *negatives the wrong
+/// way* — a -13 px offset becomes -12 at 96 DPI, i.e. the overhang
+/// silently shrinks by a pixel at every scale factor. Offsets here are
+/// legitimately negative (the `--icon` plate hangs outside the mascot's
+/// right edge), so the helper has to be symmetric or the overhang is
+/// off by one everywhere it is actually used.
+const fn scale_px(logical: i32, dpi: u32) -> i32 {
+    let n = logical as i64 * dpi as i64;
+    const HALF: i64 = 48;
+    if n >= 0 {
+        ((n + HALF) / 96) as i32
+    } else {
+        -((-n + HALF) / 96) as i32
+    }
+}
+
 /// Window dimensions (logical pixels at 96 DPI).
 ///
 /// `LAUNCHER_W` / `launcher_client_height()` describe the **client
-/// area**, not the raw window size — the title bar (~30 px) is added
-/// on top at `CreateWindowExW` time via `AdjustWindowRectEx`. Treating
-/// the values as client dimensions means the body layout
+/// area**, not the raw window size — the title bar is added on top at
+/// `CreateWindowExW` time via `AdjustWindowRectExForDpi`. Treating the
+/// values as client dimensions means the body layout
 /// (`BTN_FIRST_Y`, `BTN_CLOSE_MARGIN_BOTTOM`) is computed in the same
 /// coordinate system the buttons actually live in, so the Close button
 /// can never end up below the visible area.
-const LAUNCHER_W: i32 = 480;
+///
+/// 520 rather than the old 480: "Java error (with update link)" needs
+/// ~190 px of a 432 px column at 10pt, and the leftover was an
+/// arbitrary-looking 24 px gutter on both sides rather than a margin.
+/// The extra 40 px also lets the Language dropdown sit on a round
+/// measure instead of being pinned to the label.
+const LAUNCHER_W: i32 = 520;
 
 /// Height of the client area, **derived from the content** so the
 /// Close button always sits just below the last dialog row. The
@@ -150,28 +203,84 @@ const fn launcher_client_height() -> i32 {
 /// Header icon painted at the top of the launcher window's client
 /// area — the EXE's embedded MAINICON, centred horizontally. 128 px
 /// reads well at HiDPI without overshooting the available width
-/// (window is 480 px, icon is centred with 176 px on either side).
+/// (window is 520 px, icon is centred with 196 px on either side).
+///
+/// This is **always the mascot**, override or not. `--icon` replaces
+/// the window's title-bar / taskbar / Alt-Tab icon and the mascot
+/// image each dialog draws, but it deliberately does not replace this
+/// one — the preview's premise is that the mascot is the inspector and
+/// the candidate icon is what it is inspecting. See
+/// [`inspected_icon_rect`].
 const HEADER_ICON_SIZE: i32 = 128;
-const HEADER_ICON_Y: i32 = 8;
+const HEADER_ICON_Y: i32 = 12;
+const HEADER_ICON_BOTTOM: i32 = HEADER_ICON_Y + HEADER_ICON_SIZE;
 
 /// Button layout — single column, 24 px outer margin, 8 px gap.
-/// `BTN_FIRST_Y` is set below the header icon + subtitle so the
-/// icon and one-line copy sit above the buttons.
+///
+/// One column rather than eight buttons in a 2×4 grid: each button is a
+/// distinct dialog kind, scanning the list is the primary action, and
+/// the longest label needs ~190 px — which does not survive two
+/// columns plus a gutter once the font grows.
 const BTN_X: i32 = 24;
 const BTN_W: i32 = LAUNCHER_W - 48;
-const BTN_H: i32 = 38;
+/// 40 rather than 38: the row pitch is `BTN_H + BTN_GAP`, so this is
+/// also the *distance* between button centres, and 38 left the rows
+/// visually crowded against each other in a column this long.
+const BTN_H: i32 = 40;
 const BTN_GAP: i32 = 8;
-const BTN_CLOSE_W: i32 = 96;
-const BTN_CLOSE_H: i32 = 36;
+const BTN_CLOSE_W: i32 = 104;
+const BTN_CLOSE_H: i32 = 40;
 const BTN_CLOSE_MARGIN_BOTTOM: i32 = 16;
 /// Vertical gap between the last dialog row and the Close button.
 /// 16 px reads as a clear separator without looking detached.
 const BTN_CLOSE_GAP: i32 = 16;
 
-/// Subtitle text painted in `WM_PAINT`. `SUBTITLE_Y` sits directly
-/// below the header icon (icon ends at y=136) with a 16 px gap.
-const SUBTITLE_TEXT: &str = "Click a button to open the corresponding dialog.";
-const SUBTITLE_Y: i32 = 152;
+/// Vertical rhythm below the mascot, **derived** rather than a column
+/// of independent magic numbers.
+///
+/// These were 152 / 200 / 248 — three values hand-tuned against each
+/// other, so moving the icon meant re-checking all three and nothing
+/// stopped them drifting apart. Chaining them off the mascot's bottom
+/// edge means the header can grow without anything below it silently
+/// overlapping.
+const HEADING_Y: i32 = HEADER_ICON_BOTTOM + 16;
+const HEADING_H: i32 = 22;
+const SUBTITLE_Y: i32 = HEADING_Y + HEADING_H;
+/// Two lines at 10pt. The subtitle is the only place the detachment
+/// behaviour can be explained, and one line at 520 px fits ~65
+/// characters — not enough for a sentence that is actually useful.
+const SUBTITLE_H: i32 = 40;
+/// Gap from the subtitle to the dropdown row.
+const COMBO_GAP: i32 = 24;
+const COMBO_Y: i32 = SUBTITLE_Y + SUBTITLE_H + COMBO_GAP;
+/// Gap from the dropdown row to the first dialog button. Wider than
+/// `COMBO_GAP` so the eight dialogs read as their own group rather
+/// than as a continuation of the controls above them.
+const BTN_GAP_HEADER: i32 = 40;
+const BTN_FIRST_Y: i32 = COMBO_Y + BTN_GAP_HEADER;
+
+/// Close button position, derived so it tracks the last dialog row.
+/// Both `WM_CREATE` and the `WM_DPICHANGED` relayout read these two,
+/// which is why they are functions rather than inline arithmetic at
+/// each site.
+const fn close_y() -> i32 {
+    BTN_FIRST_Y + (DIALOG_BUTTONS.len() as i32 - 1) * (BTN_H + BTN_GAP) + BTN_H + BTN_CLOSE_GAP
+}
+const fn close_x() -> i32 {
+    BTN_X + BTN_W - BTN_CLOSE_W
+}
+
+/// Copy painted in `WM_PAINT`.
+///
+/// The second sentence is not decoration. Detached dialogs are the
+/// single most surprising thing about this tool — the old copy, "Click
+/// a button to open the corresponding dialog.", never mentioned that
+/// closing the launcher leaves every dialog you have opened alive, and
+/// the `--help` NOTES were the only place it was written down.
+const HEADING_TEXT: &str = "snug dialog preview";
+const SUBTITLE_TEXT: &str =
+    "Each dialog opens in its own window and stays open until you close it, \
+     so you can compare two side by side.";
 
 /// Language picker — a `COMBOBOX` between the subtitle and the dialog
 /// buttons, so a translation can be flipped on before opening a dialog
@@ -194,7 +303,6 @@ const COMBO_LABEL_X: i32 = BTN_X;
 /// gutter without crowding the dropdown.
 const COMBO_LABEL_W: i32 = 76;
 const COMBO_X: i32 = COMBO_LABEL_X + COMBO_LABEL_W;
-const COMBO_Y: i32 = 200;
 const COMBO_W: i32 = 240;
 /// Height passed to `CreateWindowExW`. For a `CBS_DROPDOWNLIST` combo
 /// this is the height of the **dropped list** — the closed field sizes
@@ -208,12 +316,142 @@ const COMBO_W: i32 = 240;
 /// was there. 140 px is ~5 rows, which covers a realistic locale set
 /// and leaves room to scroll rather than truncate silently.
 const COMBO_H: i32 = 140;
-/// Grows to fit a few more locales without touching the constants.
-const BTN_FIRST_Y: i32 = 248;
 
 /// `WM_SETFONT` isn't exported as a named constant by windows-sys
 /// 0.59. Value from winuser.h.
 const WM_SETFONT: u32 = 0x0030;
+
+/// `WM_DPICHANGED` isn't exported either. Value from winuser.h.
+const WM_DPICHANGED: u32 = 0x02E0;
+
+// ============================================================================
+//  Palette and type
+// ============================================================================
+//
+//  `COLORREF` is 0x00BBGGRR, so these read reversed on screen. Each is
+//  written here as the hex its author thought in and converted once,
+//  rather than scattering BGR literals through the paint code.
+//
+//  `COLOR_BODY` replaces the old 0x00606060. That grey sat close enough
+//  to the heading that the two lines read as the same weight at a
+//  glance, which is the thing a two-level hierarchy cannot afford.
+const COLOR_BG: u32 = 0x00FF_FFFF; // #FFFFFF
+const COLOR_HEADING: u32 = 0x0020_1A15; // #151A20, cool near-black
+const COLOR_BODY: u32 = 0x005A_5550; // #50555A
+/// Outline of the `--icon` plate.
+///
+/// This border is doing all of the separating, because the plate is
+/// white and sits on white twice over: the mascot artwork is white and
+/// so is the window. The previous `#BFC4C8` was present but read as
+/// almost nothing at 1 px; a neutral `#ADADAD` is still plainly a
+/// *light* grey, and is the first value that actually reads as an edge
+/// against both neighbours.
+const COLOR_PLATE_EDGE: u32 = 0x00AD_ADAD; // #ADADAD
+
+const HEADING_PT: i32 = 12;
+const BODY_PT: i32 = 10;
+
+/// `FW_NORMAL` / `FW_SEMIBOLD`, spelled out rather than imported so the
+/// weights read as weights at the call site.
+const FONT_WEIGHT_NORMAL: i32 = 400;
+const FONT_WEIGHT_SEMIBOLD: i32 = 600;
+
+// ============================================================================
+//  `--icon` composed onto the mascot
+// ============================================================================
+//
+//  When `--icon` is given, the candidate icon is painted small in the
+//  bottom-right of the mascot: the jar mascot holds its magnifying
+//  glass in the upper-right of the artwork (`assets/snug-preview.png`),
+//  so that corner is directly under the lens — and it is also the one
+//  region of the artwork that is empty white, so nothing has to be
+//  moved or redrawn to make room.
+
+/// Side of the candidate icon as a fraction of the mascot's.
+///
+/// Proportional rather than a fixed pixel count for two reasons: it
+/// tracks the mascot through `WM_DPICHANGED` without a second constant
+/// to scale, and the "under the lens" relationship survives a change to
+/// `HEADER_ICON_SIZE`. A third reads as an object being examined rather
+/// than a badge stuck in the corner.
+const INSPECTED_NUM: i32 = 1;
+const INSPECTED_DEN: i32 = 3;
+
+/// Horizontal offset from the mascot's **right** edge to the plate's.
+///
+/// Negative on purpose, so the plate overhangs the mascot by 13 px.
+/// Started flush inside the corner and read as a badge painted on top
+/// of the mascot's foot; pushing it out past the edge makes it an
+/// object held up *beside* the mascot instead — which is what the
+/// magnifying glass is aimed at. There is room for it: the mascot is
+/// centred in a 520 px window and ends at x=324, so the plate clears
+/// the window edge by ~178 px even at its widest.
+const INSPECTED_RIGHT: i32 = -13;
+
+/// Vertical offset from the mascot's **bottom** edge to the plate's.
+///
+/// Left positive. Dropping the plate *below* the mascot would detach it
+/// from the lens, which sits in the artwork's upper-right — the two
+/// offsets are independent for exactly that reason.
+const INSPECTED_BOTTOM: i32 = 8;
+/// White padding between the plate's edge and the icon inside it, so
+/// the icon is not flush against the outline.
+const INSPECTED_PLATE_PAD: i32 = 5;
+/// Thickness of the plate's grey ring.
+///
+/// 2 rather than 1: the plate is white on white twice over — the
+/// mascot artwork and the window — so at 1 px the ring is a decision
+/// about rendering quality the user cannot resolve.
+const INSPECTED_PLATE_BORDER: i32 = 2;
+/// Corner ellipse **diameter** — GDI takes a diameter, not a radius.
+const INSPECTED_PLATE_RADIUS: i32 = 14;
+
+/// Side of the candidate icon for a mascot `mascot` logical px wide.
+const fn inspected_icon_side(mascot: i32) -> i32 {
+    mascot * INSPECTED_NUM / INSPECTED_DEN
+}
+
+/// Where the `--icon` override is painted: `(x, y, side)` in **device**
+/// pixels, positioned against the mascot's bottom-right corner by
+/// [`INSPECTED_RIGHT`] and [`INSPECTED_BOTTOM`].
+///
+/// The mascot box is passed in **logical** pixels and everything comes
+/// back scaled, so the offsets and the side cannot disagree about which
+/// DPI they are in — the bug that a "caller passes device pixels" version
+/// of this function invites.
+fn inspected_icon_rect(mascot_x: i32, mascot_y: i32, mascot: i32, dpi: u32) -> (i32, i32, i32) {
+    let side = scale_px(inspected_icon_side(mascot), dpi);
+    let right = scale_px(mascot_x + mascot, dpi) - scale_px(INSPECTED_RIGHT, dpi);
+    let bottom = scale_px(mascot_y + mascot, dpi) - scale_px(INSPECTED_BOTTOM, dpi);
+    (right - side, bottom - side, side)
+}
+
+/// The rounded plate behind the candidate icon, as `(l, t, r, b)` with
+/// `r`/`b` **exclusive** — `CreateRoundRectRgn` treats them that way, and
+/// an inclusive edge here draws a plate one pixel wider on the right and
+/// bottom than on the left and top.
+///
+/// Separate from [`inspected_icon_rect`] because the padding is the
+/// easiest value in this feature to get subtly wrong, and containment
+/// is worth asserting on its own.
+fn inspected_plate_rect(icon: (i32, i32, i32), dpi: u32) -> (i32, i32, i32, i32) {
+    let pad = scale_px(INSPECTED_PLATE_PAD, dpi);
+    let (x, y, side) = icon;
+    (x - pad, y - pad, x + side + pad, y + side + pad)
+}
+
+/// The white centre of the plate, inset from the outer edge by exactly
+/// [`INSPECTED_PLATE_BORDER`] on every side.
+///
+/// The grey ring is the region *between* these two rectangles, so an
+/// inset that is not uniform shows up as a visibly lopsided rim. Kept
+/// as a separate function precisely so that symmetry is one expression
+/// rather than four subtractions to keep in step.
+fn inspected_plate_inner(outer: (i32, i32, i32, i32), dpi: u32) -> (i32, i32, i32, i32) {
+    let border = scale_px(INSPECTED_PLATE_BORDER, dpi);
+    let (l, t, r, b) = outer;
+    (l + border, t + border, r - border, b - border)
+}
 
 /// Load the EXE's embedded `MAINICON` group at two sizes for the
 /// window class. `LR_SHARED` keeps Windows from handing us a
@@ -1030,6 +1268,13 @@ fn help_text() -> String {
     out.push_str("                                dialogs read for both the mascot image\n");
     out.push_str("                                and the title bar / taskbar.\n");
     out.push('\n');
+    out.push_str("                                The launcher window's own header keeps\n");
+    out.push_str("                                the Snug mascot in every case. Your\n");
+    out.push_str("                                icon is painted small in the mascot's\n");
+    out.push_str("                                bottom-right corner, under the\n");
+    out.push_str("                                magnifying glass it is holding, so you\n");
+    out.push_str("                                can see it in context.\n");
+    out.push('\n');
     out.push_str("                                <FILE>  a .png or .ico. .ico goes through\n");
     out.push_str("                                LoadImageW; a .png needs GDI+, because\n");
     out.push_str("                                Windows' LoadImageW does not decode\n");
@@ -1051,6 +1296,8 @@ fn help_text() -> String {
     out.push_str("    Changing the language affects dialogs opened afterwards;\n");
     out.push_str("    windows already on screen keep the copy they were built\n");
     out.push_str("    with. Close and reopen them to see the new language.\n\n");
+    out.push_str("    The window is per-monitor DPI aware: drag it between\n");
+    out.push_str("    displays of different scale and the layout rescales.\n\n");
     out.push_str("    Open one dialog directly with:\n");
     out.push_str("        cargo run --example dialogs_preview -- --kind <KIND>\n");
     out
@@ -1112,6 +1359,18 @@ pub fn run() {
     ));
     activate_localisations(bundles, start);
 
+    // Before any window exists. Paired with `scale_px` at every
+    // geometry site below — on its own this call would make the
+    // window physically too small, which is the opposite of the
+    // intent. Logged rather than enforced: failing to become aware
+    // is survivable (everything just stays unscaled), so it is not a
+    // reason to refuse to start.
+    let aware = enable_dpi_awareness();
+    let dpi = system_dpi();
+    log(&format!(
+        "preview dpi: process DPI-aware = {aware}; initial geometry at {dpi} DPI"
+    ));
+
     unsafe {
         // Capture the launcher main thread id up front so the
         // window-counter accounting can post `WM_QUIT` to *this*
@@ -1153,23 +1412,23 @@ pub fn run() {
         let _atom = RegisterClassExW(&wc);
 
         // `LAUNCHER_W` / `launcher_client_height()` describe the
-        // **client area**. `AdjustWindowRectEx` adds the title-bar /
-        // non-client chrome to that rectangle, so we hand the
-        // *expanded* dimensions to `CreateWindowExW`. Centring on the
-        // primary monitor uses the expanded width/height (which is
-        // what the user actually sees on the desktop), not the client
-        // area.
+        // **client area** in logical pixels. `AdjustWindowRectExForDpi`
+        // scales both the client size and the title-bar / non-client
+        // chrome together — the plain `AdjustWindowRectEx` assumes
+        // 96 DPI for the chrome, which on a 150% display gives a body
+        // sized for one scale inside a title bar drawn for another.
         let mut client_rect = RECT {
             left: 0,
             top: 0,
-            right: LAUNCHER_W,
-            bottom: launcher_client_height(),
+            right: scale_px(LAUNCHER_W, dpi),
+            bottom: scale_px(launcher_client_height(), dpi),
         };
-        AdjustWindowRectEx(
+        AdjustWindowRectExForDpi(
             &mut client_rect,
             WS_CAPTION | WS_SYSMENU | WS_OVERLAPPED,
             0,
             WS_EX_TOPMOST,
+            dpi,
         );
         let win_w = client_rect.right - client_rect.left;
         let win_h = client_rect.bottom - client_rect.top;
@@ -1239,11 +1498,10 @@ unsafe extern "system" fn wndproc(
 ) -> LRESULT {
     match msg {
         WM_CREATE => unsafe {
-            // Create one Segoe UI 10pt font used by every button.
-            // Leaked intentionally — the launcher window is the
-            // last user-owned resource, the OS reclaims everything
-            // on process exit.
-            let hfont = create_button_font();
+            // The window's own DPI, not the process one: this can be
+            // the first thing to run after a `WM_DPICHANGED` resize.
+            let dpi = window_dpi(hwnd);
+            let fonts = fonts_for(dpi);
             let hinst = GetModuleHandleW(std::ptr::null());
 
             // Language dropdown, above the dialog buttons. Populated
@@ -1258,17 +1516,17 @@ unsafe extern "system" fn wndproc(
                     | WS_TABSTOP
                     | WS_VSCROLL
                     | (CBS_DROPDOWNLIST as u32),
-                COMBO_X,
-                COMBO_Y,
-                COMBO_W,
-                COMBO_H,
+                scale_px(COMBO_X, dpi),
+                scale_px(COMBO_Y, dpi),
+                scale_px(COMBO_W, dpi),
+                scale_px(COMBO_H, dpi),
                 hwnd,
                 ID_COMBO_LANGUAGE as *mut _,
                 hinst,
                 std::ptr::null(),
             );
             if !combo.is_null() {
-                SendMessageW(combo, WM_SETFONT, hfont as usize, 1);
+                SendMessageW(combo, WM_SETFONT, fonts.body() as usize, 1);
                 SendMessageW(combo, CB_RESETCONTENT, 0, 0);
                 let bundles = localisations();
                 for bundle in &bundles {
@@ -1309,97 +1567,203 @@ unsafe extern "system" fn wndproc(
                     wide("BUTTON").as_ptr(),
                     wide(label).as_ptr(),
                     WS_CHILD | WS_VISIBLE | (BS_PUSHBUTTON as u32),
-                    BTN_X,
-                    y,
-                    BTN_W,
-                    BTN_H,
+                    scale_px(BTN_X, dpi),
+                    scale_px(y, dpi),
+                    scale_px(BTN_W, dpi),
+                    scale_px(BTN_H, dpi),
                     hwnd,
                     *id as *mut _,
                     hinst,
                     std::ptr::null(),
                 );
                 if !btn.is_null() {
-                    SendMessageW(btn, WM_SETFONT, hfont as usize, 1);
+                    SendMessageW(btn, WM_SETFONT, fonts.body() as usize, 1);
                 }
             }
 
             // Close button — bottom right, positioned relative to the
             // last dialog row so it stays put as the list grows.
-            let close_y = BTN_FIRST_Y
-                + (DIALOG_BUTTONS.len() as i32 - 1) * (BTN_H + BTN_GAP)
-                + BTN_H
-                + BTN_CLOSE_GAP;
             let close = CreateWindowExW(
                 0,
                 wide("BUTTON").as_ptr(),
                 wide("Close").as_ptr(),
                 WS_CHILD | WS_VISIBLE | (BS_PUSHBUTTON as u32),
-                LAUNCHER_W - BTN_X - BTN_CLOSE_W,
-                close_y,
-                BTN_CLOSE_W,
-                BTN_CLOSE_H,
+                scale_px(close_x(), dpi),
+                scale_px(close_y(), dpi),
+                scale_px(BTN_CLOSE_W, dpi),
+                scale_px(BTN_CLOSE_H, dpi),
                 hwnd,
                 ID_BTN_CLOSE as *mut _,
                 hinst,
                 std::ptr::null(),
             );
             if !close.is_null() {
-                SendMessageW(close, WM_SETFONT, hfont as usize, 1);
+                SendMessageW(close, WM_SETFONT, fonts.body() as usize, 1);
             }
 
             0
         },
         WM_PAINT => unsafe {
-            // Paint the heading + subtitle above the buttons. Same
-            // font as the buttons (10pt Segoe UI), reused via
-            // SelectObject so the system font doesn't bleed through.
-            let hfont = create_button_font();
+            let dpi = window_dpi(hwnd);
+            let fonts = fonts_for(dpi);
             let hinst = GetModuleHandleW(std::ptr::null());
             let mut ps: PAINTSTRUCT = std::mem::zeroed();
             let hdc = BeginPaint(hwnd, &mut ps);
-            let prev_font = SelectObject(hdc, hfont as _);
 
             SetBkMode(hdc, TRANSPARENT as i32);
 
-            // 1. Header icon — centred horizontally at the top of
-            //    the client area. The HICON is loaded once via the
-            //    `OnceLock` in `header_icon()` and reused on every
-            //    subsequent paint (LR_SHARED keeps the handle valid
-            //    for the lifetime of the EXE module, so no
+            // 0. Background. The window class registers a NULL brush,
+            //    which tells Windows not to erase the client area at
+            //    all — so without this fill the window shows whatever
+            //    was in those pixels beforehand, and the rounded
+            //    `--icon` plate below has no guaranteed colour to sit
+            //    on. `FillRect` takes the brush by value, so it is
+            //    created and destroyed per paint rather than cached:
+            //    brushes are cheap next to the `CreateFontW` that
+            //    used to happen here.
+            let bg = CreateSolidBrush(COLOR_BG);
+            let mut client: RECT = std::mem::zeroed();
+            GetClientRect(hwnd, &mut client);
+            FillRect(hdc, &client, bg);
+            DeleteObject(bg as _);
+
+            // Everything below is positioned from the *logical*
+            // constants, converted here once per use.
+            let mascot_x = scale_px((LAUNCHER_W - HEADER_ICON_SIZE) / 2, dpi);
+            let mascot_y = scale_px(HEADER_ICON_Y, dpi);
+            let mascot_side = scale_px(HEADER_ICON_SIZE, dpi);
+
+            // 1. Mascot — centred horizontally at the top of the
+            //    client area. Always the EXE's MAINICON and never the
+            //    `--icon` override: it is the inspector, not the
+            //    thing being inspected. The HICON is loaded once via
+            //    the `OnceLock` in `header_icon()` and reused on
+            //    every subsequent paint (LR_SHARED keeps the handle
+            //    valid for the lifetime of the EXE module, so no
             //    DestroyIcon is needed).
-            let hicon = header_icon(hinst);
-            if !hicon.is_null() {
-                let icon_x = (LAUNCHER_W - HEADER_ICON_SIZE) / 2;
+            let mascot = header_icon(hinst);
+            if !mascot.is_null() {
                 DrawIconEx(
                     hdc,
-                    icon_x,
-                    HEADER_ICON_Y,
-                    hicon,
-                    HEADER_ICON_SIZE,
-                    HEADER_ICON_SIZE,
+                    mascot_x,
+                    mascot_y,
+                    mascot,
+                    mascot_side,
+                    mascot_side,
                     0,
                     std::ptr::null_mut(),
                     DI_NORMAL,
                 );
             }
 
-            // 2. Subtitle — one line of mid-grey copy below the icon.
-            SetTextColor(hdc, 0x00606060);
+            // 2. The `--icon` candidate, small, in the mascot's
+            //    bottom-right corner — under the magnifying glass
+            //    the mascot holds. Drawn only when an override was
+            //    installed, so a plain run still shows the mascot
+            //    alone.
+            //
+            //    `MASCOT_ICON` rather than the title-bar handle: that
+            //    is the 256 px build, so a ~42 px draw is a downscale
+            //    and stays crisp — the same reason the dialogs take
+            //    it for their mascot slot.
+            let candidate = MASCOT_ICON.load(Ordering::SeqCst) as HICON;
+            if !candidate.is_null() {
+                let icon_rect = inspected_icon_rect(
+                    (LAUNCHER_W - HEADER_ICON_SIZE) / 2,
+                    HEADER_ICON_Y,
+                    HEADER_ICON_SIZE,
+                    dpi,
+                );
+                let outer = inspected_plate_rect(icon_rect, dpi);
+                let (l, t, r, b) = outer;
+                let radius = scale_px(INSPECTED_PLATE_RADIUS, dpi);
+                // Two nested regions, not `FillRgn` + `FrameRgn`.
+                //
+                // `FrameRgn` turned out to draw nothing usable here:
+                // with `dx`/`dy` of 0 its border is one device unit,
+                // and on a plate that is white against a white mascot
+                // and a white window that hairline is invisible.
+                // Verified rather than assumed — rendering the ring in
+                // solid red and the frame in black showed the fill and
+                // no frame at all.
+                //
+                // Filling a larger ring and then a smaller plate gives
+                // an explicit thickness that scales with the display,
+                // which is what "put a border around it" means.
+                let ring = CreateRoundRectRgn(l, t, r, b, radius, radius);
+                let (il, it, ir, ib) = inspected_plate_inner(outer, dpi);
+                let inner_radius = (radius - scale_px(INSPECTED_PLATE_BORDER, dpi)).max(1);
+                let plate = CreateRoundRectRgn(il, it, ir, ib, inner_radius, inner_radius);
+                if !ring.is_null() && !plate.is_null() {
+                    let edge = CreateSolidBrush(COLOR_PLATE_EDGE);
+                    FillRgn(hdc, ring, edge);
+                    DeleteObject(edge as _);
+                    let fill = CreateSolidBrush(COLOR_BG);
+                    FillRgn(hdc, plate, fill);
+                    DeleteObject(fill as _);
+                }
+                if !ring.is_null() {
+                    DeleteObject(ring as _);
+                }
+                if !plate.is_null() {
+                    DeleteObject(plate as _);
+                }
+                let (cx, cy, cside) = icon_rect;
+                DrawIconEx(
+                    hdc,
+                    cx,
+                    cy,
+                    candidate,
+                    cside,
+                    cside,
+                    0,
+                    std::ptr::null_mut(),
+                    DI_NORMAL,
+                );
+            }
+
+            // 3. Heading — the window's one line of real hierarchy,
+            //    in the semibold 12pt face. The window title bar
+            //    already names the tool, so this exists to separate
+            //    the brand header from the explanatory copy below it.
+            let prev_font = SelectObject(hdc, fonts.heading() as _);
+            SetTextColor(hdc, COLOR_HEADING);
+            let mut rect_heading = RECT {
+                left: scale_px(BTN_X, dpi),
+                top: scale_px(HEADING_Y, dpi),
+                right: scale_px(LAUNCHER_W - BTN_X, dpi),
+                bottom: scale_px(HEADING_Y + HEADING_H, dpi),
+            };
+            DrawTextW(
+                hdc,
+                wide(HEADING_TEXT).as_ptr(),
+                -1,
+                &mut rect_heading,
+                DT_LEFT | DT_SINGLELINE | DT_VCENTER,
+            );
+
+            // 4. Subtitle — wrapped across the full content width.
+            //    `DT_WORDBREAK` rather than `DT_SINGLELINE`, because
+            //    the copy is two sentences' worth and clipping the
+            //    second would leave the detachment behaviour
+            //    undocumented exactly where a user looks first.
+            SelectObject(hdc, fonts.body() as _);
+            SetTextColor(hdc, COLOR_BODY);
             let mut rect_sub = RECT {
-                left: BTN_X,
-                top: SUBTITLE_Y,
-                right: LAUNCHER_W - BTN_X,
-                bottom: SUBTITLE_Y + 24,
+                left: scale_px(BTN_X, dpi),
+                top: scale_px(SUBTITLE_Y, dpi),
+                right: scale_px(LAUNCHER_W - BTN_X, dpi),
+                bottom: scale_px(SUBTITLE_Y + SUBTITLE_H, dpi),
             };
             DrawTextW(
                 hdc,
                 wide(SUBTITLE_TEXT).as_ptr(),
                 -1,
                 &mut rect_sub,
-                DT_LEFT | DT_SINGLELINE,
+                DT_LEFT | DT_WORDBREAK,
             );
 
-            // 3. Language label — to the LEFT of the dropdown, on the
+            // 5. Language label — to the LEFT of the dropdown, on the
             //    same row and vertically centred against it. The
             //    band is the combo's own client rect (its closed
             //    field sizes itself to the font, so asking beats
@@ -1408,25 +1772,25 @@ unsafe extern "system" fn wndproc(
             //    centres the text in that band; the rect is clipped
             //    to the label's reserved width so a long label can
             //    never bleed under the dropdown.
-            SetTextColor(hdc, 0x00606060);
             let combo = GetDlgItem(hwnd, ID_COMBO_LANGUAGE as i32);
+            let combo_top = scale_px(COMBO_Y, dpi);
             let mut combo_band = RECT {
                 left: 0,
-                top: 0,
+                top: combo_top,
                 right: 0,
-                bottom: COMBO_H,
+                bottom: combo_top + scale_px(COMBO_H, dpi),
             };
             if !combo.is_null() {
                 let mut cr: RECT = std::mem::zeroed();
                 if GetClientRect(combo, &mut cr) != 0 && cr.bottom > cr.top {
-                    combo_band.top = COMBO_Y + cr.top;
-                    combo_band.bottom = COMBO_Y + cr.bottom;
+                    combo_band.top = combo_top + cr.top;
+                    combo_band.bottom = combo_top + cr.bottom;
                 }
             }
             let mut rect_combo_label = RECT {
-                left: COMBO_LABEL_X,
+                left: scale_px(COMBO_LABEL_X, dpi),
                 top: combo_band.top,
-                right: COMBO_X,
+                right: scale_px(COMBO_X, dpi),
                 bottom: combo_band.bottom,
             };
             DrawTextW(
@@ -1517,6 +1881,37 @@ unsafe extern "system" fn wndproc(
             unsafe {
                 DestroyWindow(hwnd);
             }
+            0
+        }
+        WM_DPICHANGED => unsafe {
+            // `lparam` is the rectangle Windows wants the window moved
+            // to. Honouring that rather than recomputing from our own
+            // client size is what keeps the window on the monitor the
+            // user just dragged it to, instead of snapping to a size
+            // that belonged to the old scale factor.
+            //
+            // `wparam` carries the new DPI in both halves, but after
+            // the move `window_dpi` is authoritative — and it is the
+            // same value `WM_PAINT` will read a moment later, so the
+            // layout cannot disagree with what gets drawn.
+            let suggested = &*(lparam as *const RECT);
+            SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                suggested.left,
+                suggested.top,
+                suggested.right - suggested.left,
+                suggested.bottom - suggested.top,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+            let dpi = window_dpi(hwnd);
+            // Controls first, then fonts: a control repositioned while
+            // still holding the previous DPI's font measures its text
+            // against the wrong metrics, and `MoveWindow` on a combo
+            // can re-measure its dropped-list height.
+            layout_controls(hwnd, dpi);
+            apply_fonts(hwnd, dpi);
+            InvalidateRect(hwnd, std::ptr::null(), 1);
             0
         }
         WM_DESTROY => {
@@ -1688,20 +2083,199 @@ fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-/// Create the Segoe UI 10pt font used by every launcher button.
-/// Same shape as `modal_window::create_font_pt` with weight
-/// `FW_NORMAL` (=400). No underline. Leaked; see `WM_CREATE`.
-unsafe fn create_button_font() -> HFONT {
-    // `-pt * 96 / 72` converts points to a 96-DPI pixel height.
-    let h = -((10 * 96) / 72);
+// ============================================================================
+//  DPI
+// ============================================================================
+
+/// Opt into per-monitor DPI awareness, before any window exists.
+///
+/// Without this Windows bitmap-stretches the window on a 125–150%
+/// display: correctly sized, but soft text. The awareness *call* alone
+/// would be worse than nothing — it stops the stretch while leaving the
+/// logical constants unscaled, so the window would come out physically
+/// too small. The scaling half is `scale_px`, applied at every call
+/// site.
+///
+/// Returns whether the process actually became aware. A `bool` rather
+/// than a panic because awareness can legitimately fail — a manifest
+/// that already set it, or a pre-1703 Windows without
+/// `SetProcessDpiAwarenessContext` — and neither is worth taking this
+/// dev tool down over. The layout degrades to unscaled, which is
+/// exactly the behaviour before this change.
+fn enable_dpi_awareness() -> bool {
+    unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) != 0 }
+}
+
+/// Process DPI, floored at 96.
+///
+/// `GetDpiForSystem` is Windows 10 1703+. On anything older it returns
+/// 0, and `.max(96)` turns "unknown" into "unscaled" rather than into a
+/// zero-sized window. Used for the *initial* geometry, before there is a
+/// window to ask.
+fn system_dpi() -> u32 {
+    (unsafe { GetDpiForSystem() as u32 }).max(96)
+}
+
+/// This window's own DPI, which is what `WM_DPICHANGED` exists to keep
+/// current as the window is dragged between monitors.
+fn window_dpi(hwnd: HWND) -> u32 {
+    (unsafe { GetDpiForWindow(hwnd) as u32 }).max(96)
+}
+
+// ============================================================================
+//  Fonts
+// ============================================================================
+//
+//  Cached per DPI rather than built per paint.
+//
+//  The previous `create_button_font()` was called from `WM_PAINT` and
+//  its `HFONT` was never deleted, so every repaint — and a repaint
+//  happens on every focus change, every hover over a native button, and
+//  every language switch — leaked one GDI font object for the life of
+//  the process. Caching by DPI fixes the leak and is cheaper anyway:
+//  the font is a function of the scale factor and nothing else.
+
+/// `HFONT` is a raw pointer, which is not `Send`, so the handles are
+/// held as bit patterns and cast on read — the same trick `header_icon`
+/// uses for `HICON`.
+struct UiFonts {
+    body: usize,
+    heading: usize,
+}
+
+impl UiFonts {
+    fn body(&self) -> HFONT {
+        self.body as HFONT
+    }
+    fn heading(&self) -> HFONT {
+        self.heading as HFONT
+    }
+}
+
+/// The live pair and the DPI it was built for.
+static UI_FONTS: Mutex<Option<(u32, UiFonts)>> = Mutex::new(None);
+
+/// The fonts for `dpi`, rebuilt — and the previous pair released — only
+/// when the DPI actually changes.
+fn fonts_for(dpi: u32) -> UiFonts {
+    let mut slot = UI_FONTS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((built, fonts)) = slot.as_ref() {
+        if *built == dpi {
+            return UiFonts {
+                body: fonts.body,
+                heading: fonts.heading,
+            };
+        }
+        // Release the old pair. Dropping the cache without deleting the
+        // handles is the same leak in a slower form, and this is the
+        // only path that could ever accumulate one.
+        unsafe {
+            DeleteObject(fonts.body as _);
+            DeleteObject(fonts.heading as _);
+        }
+    }
+    let fonts = UiFonts {
+        body: unsafe { create_font_pt(BODY_PT, FONT_WEIGHT_NORMAL, dpi) as usize },
+        heading: unsafe { create_font_pt(HEADING_PT, FONT_WEIGHT_SEMIBOLD, dpi) as usize },
+    };
+    *slot = Some((
+        dpi,
+        UiFonts {
+            body: fonts.body,
+            heading: fonts.heading,
+        },
+    ));
+    fonts
+}
+
+/// Push `dpi`'s fonts onto every child control.
+///
+/// The initial build and `WM_DPICHANGED` both need this, and a control
+/// that misses the `WM_SETFONT` keeps rendering in the *old* DPI's font
+/// — the classic half-resized-window artefact — so there is exactly one
+/// list of children rather than one per caller.
+fn apply_fonts(hwnd: HWND, dpi: u32) {
+    let fonts = fonts_for(dpi);
+    let mut ids: Vec<i32> = vec![ID_COMBO_LANGUAGE as i32, ID_BTN_CLOSE as i32];
+    ids.extend(DIALOG_BUTTONS.iter().map(|(_, id)| *id as i32));
+    for id in ids {
+        let child = unsafe { GetDlgItem(hwnd, id) };
+        if !child.is_null() {
+            unsafe { SendMessageW(child, WM_SETFONT, fonts.body() as usize, 1) };
+        }
+    }
+}
+
+/// Re-place every child control for `dpi`.
+///
+/// Reads the same constants `WM_CREATE` does rather than a parallel set
+/// of scaled copies, so a DPI change cannot leave the window laid out
+/// for a scale factor nothing else is using.
+unsafe fn layout_controls(hwnd: HWND, dpi: u32) {
+    let place = |id: i32, x: i32, y: i32, w: i32, h: i32| {
+        let child = unsafe { GetDlgItem(hwnd, id) };
+        if !child.is_null() {
+            unsafe {
+                MoveWindow(
+                    child,
+                    scale_px(x, dpi),
+                    scale_px(y, dpi),
+                    scale_px(w, dpi),
+                    scale_px(h, dpi),
+                    1,
+                );
+            }
+        }
+    };
+
+    place(
+        ID_COMBO_LANGUAGE as i32,
+        COMBO_X,
+        COMBO_Y,
+        COMBO_W,
+        COMBO_H,
+    );
+    for (i, (_, id)) in DIALOG_BUTTONS.iter().enumerate() {
+        place(
+            *id as i32,
+            BTN_X,
+            BTN_FIRST_Y + i as i32 * (BTN_H + BTN_GAP),
+            BTN_W,
+            BTN_H,
+        );
+    }
+    place(
+        ID_BTN_CLOSE as i32,
+        close_x(),
+        close_y(),
+        BTN_CLOSE_W,
+        BTN_CLOSE_H,
+    );
+}
+
+/// Segoe UI at `pt` points, rendered for `dpi`.
+///
+/// Points are converted at the target DPI directly (`pt * dpi / 72`)
+/// rather than through `scale_px`, which is a 96-DPI-to-`dpi` scale and
+/// would apply the 96/72 conversion a second time.
+///
+/// Segoe UI rather than "Segoe UI Variable": `CreateFontW` fails soft
+/// on an unknown face and silently substitutes, so a name that exists
+/// only on Windows 11 would quietly render in a fallback on 10 instead
+/// of reporting anything.
+unsafe fn create_font_pt(pt: i32, weight: i32, dpi: u32) -> HFONT {
+    // A negative height requests a character height rather than a cell
+    // height, which is what keeps a 10pt label from growing a pixel or
+    // two per line against a 12pt heading.
+    let height = -(((pt as i64 * dpi as i64) + 36) / 72) as i32;
     let face_w = wide("Segoe UI");
     unsafe {
         CreateFontW(
-            h,
+            height,
             0,
             0,
             0,
-            400, // FW_NORMAL
+            weight,
             0,
             0,
             0,
@@ -2139,5 +2713,249 @@ mod tests {
         )])
         .expect_err("missing path");
         assert!(err.contains("stat-ing localization entry"), "{err}");
+    }
+
+    // ------------------------------------------------------------------
+    // Layout geometry
+    // ------------------------------------------------------------------
+
+    /// The mascot's horizontal origin in logical pixels, exactly as
+    /// `WM_PAINT` passes it to [`inspected_icon_rect`].
+    const MASCOT_X: i32 = (LAUNCHER_W - HEADER_ICON_SIZE) / 2;
+
+    #[test]
+    fn the_mascot_is_centred_horizontally() {
+        assert_eq!(MASCOT_X * 2 + HEADER_ICON_SIZE, LAUNCHER_W);
+    }
+
+    #[test]
+    fn the_vertical_rhythm_is_derived_not_hand_tuned() {
+        // These were three independent magic numbers (152 / 200 / 248)
+        // tuned against each other, so growing the header could push
+        // into the controls below with nothing to catch it. Chaining
+        // them off the mascot's bottom edge is the fix, and this is
+        // the guard that keeps it a chain.
+        assert_eq!(HEADING_Y, HEADER_ICON_BOTTOM + 16);
+        assert_eq!(SUBTITLE_Y, HEADING_Y + HEADING_H);
+        assert_eq!(COMBO_Y, SUBTITLE_Y + SUBTITLE_H + COMBO_GAP);
+        assert_eq!(BTN_FIRST_Y, COMBO_Y + BTN_GAP_HEADER);
+        assert!(HEADER_ICON_BOTTOM <= HEADING_Y);
+        assert!(SUBTITLE_Y + SUBTITLE_H <= COMBO_Y);
+    }
+
+    #[test]
+    fn the_close_button_sits_below_the_last_dialog_row() {
+        // `close_y` is read by both `WM_CREATE` and the
+        // `WM_DPICHANGED` relayout, so a dialog added to
+        // `DIALOG_BUTTONS` moves Close in both paths or in neither.
+        let last_bottom =
+            BTN_FIRST_Y + (DIALOG_BUTTONS.len() as i32 - 1) * (BTN_H + BTN_GAP) + BTN_H;
+        assert_eq!(close_y(), last_bottom + BTN_CLOSE_GAP);
+        assert_eq!(
+            close_y() + BTN_CLOSE_H + BTN_CLOSE_MARGIN_BOTTOM,
+            launcher_client_height()
+        );
+    }
+
+    #[test]
+    fn the_close_button_is_right_aligned_with_the_button_column() {
+        assert_eq!(close_x() + BTN_CLOSE_W, BTN_X + BTN_W);
+    }
+
+    #[test]
+    fn scale_px_is_the_identity_at_96_dpi() {
+        for v in [0, 1, 7, 24, 128, 520] {
+            assert_eq!(scale_px(v, 96), v, "{v} px at 96 DPI must be unchanged");
+        }
+    }
+
+    #[test]
+    fn scale_px_doubles_at_192_dpi() {
+        assert_eq!(scale_px(128, 192), 256);
+        assert_eq!(scale_px(520, 192), 1040);
+    }
+
+    #[test]
+    fn scale_px_never_loses_a_pixel_to_truncation() {
+        // `v * dpi / 96` truncates, so an odd value at 150% comes out
+        // half a pixel short and the gaps between buttons drift as the
+        // scale factor changes. Half-up rounding is the entire point of
+        // the helper.
+        for v in 1..=64 {
+            assert_eq!(
+                scale_px(v, 144),
+                (v * 144 + 48) / 96,
+                "{v} at 144 DPI must round half up"
+            );
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // `--icon` composed onto the mascot
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn the_inspected_icon_is_a_third_of_the_mascot() {
+        assert_eq!(inspected_icon_side(HEADER_ICON_SIZE), 42);
+        // Proportional, so it tracks a change to `HEADER_ICON_SIZE`.
+        assert_eq!(inspected_icon_side(240), 80);
+    }
+
+    #[test]
+    fn the_inspected_icon_overhangs_the_mascot_to_the_right() {
+        // The negative offset is the mechanism, so assert both the
+        // sign and the arithmetic — a later "tidy this up" that pushes
+        // it back flush would put the plate on the mascot's foot
+        // again, which is the look this replaced.
+        let (x, _, side) = inspected_icon_rect(MASCOT_X, HEADER_ICON_Y, HEADER_ICON_SIZE, 96);
+        let mascot_right = MASCOT_X + HEADER_ICON_SIZE;
+        assert!(INSPECTED_RIGHT < 0, "the offset must stay negative");
+        assert_eq!(x + side, mascot_right - INSPECTED_RIGHT);
+        // `x + side` is *past* `mascot_right`, so the overhang is the
+        // other subtraction. Getting this backwards is what made the
+        // first run of this test fail while the geometry was right.
+        assert_eq!(
+            (x + side) - mascot_right,
+            13,
+            "the plate must overhang the mascot's right edge, not sit inside it"
+        );
+    }
+
+    #[test]
+    fn the_inspected_icon_stays_inside_the_mascot_box_vertically() {
+        // Only the horizontal offset moved out. Dropping the plate
+        // below the mascot too would detach it from the lens, which
+        // sits in the artwork's upper-right.
+        let (_, y, side) = inspected_icon_rect(MASCOT_X, HEADER_ICON_Y, HEADER_ICON_SIZE, 96);
+        let mascot_bottom = HEADER_ICON_Y + HEADER_ICON_SIZE;
+        assert!(y >= HEADER_ICON_Y);
+        assert!(y + side <= mascot_bottom);
+        assert_eq!(mascot_bottom - (y + side), INSPECTED_BOTTOM);
+    }
+
+    #[test]
+    fn the_plate_stays_inside_the_window() {
+        // The overhang has a budget — the content margin, not the raw
+        // client width.
+        let icon = inspected_icon_rect(MASCOT_X, HEADER_ICON_Y, HEADER_ICON_SIZE, 96);
+        let (_, _, _, r) = inspected_plate_rect(icon, 96);
+        assert!(
+            r <= LAUNCHER_W - BTN_X,
+            "plate right edge {r} must stay inside the content margin {}",
+            LAUNCHER_W - BTN_X
+        );
+    }
+
+    #[test]
+    fn the_plate_border_is_a_uniform_ring() {
+        // The grey is the region *between* the outer rect and the inner
+        // one, so a non-uniform inset reads as a lopsided rim. That is
+        // the whole reason `inspected_plate_inner` exists rather than
+        // four inline subtractions.
+        let icon = inspected_icon_rect(MASCOT_X, HEADER_ICON_Y, HEADER_ICON_SIZE, 96);
+        let (l, t, r, b) = inspected_plate_rect(icon, 96);
+        let (il, it, ir, ib) = inspected_plate_inner((l, t, r, b), 96);
+        let border = scale_px(INSPECTED_PLATE_BORDER, 96);
+        assert_eq!(il - l, border);
+        assert_eq!(it - t, border);
+        assert_eq!(r - ir, border);
+        assert_eq!(b - ib, border);
+        // The inner plate must stay inside the icon it backs.
+        let (x, y, _) = icon;
+        assert!(il <= x && it <= y, "ring must not intrude on the icon");
+    }
+
+    #[test]
+    fn the_plate_border_is_a_readable_light_grey() {
+        // The plate is white on white twice over — the mascot artwork
+        // and the window — so this border is the only edge a user
+        // sees. Guard the luminance rather than the literal value, so
+        // a future tweak cannot quietly drop it to near-white or push
+        // it to a hard black outline.
+        let b = (COLOR_PLATE_EDGE >> 16) & 0xFF;
+        let g = (COLOR_PLATE_EDGE >> 8) & 0xFF;
+        let r = COLOR_PLATE_EDGE & 0xFF;
+        let min = r.min(g).min(b);
+        let max = r.max(g).max(b);
+        assert!(min > 0x60, "too dark to be a light grey: {COLOR_PLATE_EDGE:#010x}");
+        assert!(max < 0xF0, "too light to read as an edge: {COLOR_PLATE_EDGE:#010x}");
+        assert!(max - min <= 0x08, "expected a neutral grey: {COLOR_PLATE_EDGE:#010x}");
+    }
+
+    #[test]
+    fn the_inspected_icon_lands_in_the_bottom_right_quadrant() {
+        // The artwork's magnifying glass is upper-right, so the
+        // candidate has to be the bottom-*right* corner or it is not
+        // under the lens at all. Asserting the quadrant separately
+        // from the offsets catches a sign flip in either axis.
+        let (x, y, side) = inspected_icon_rect(MASCOT_X, HEADER_ICON_Y, HEADER_ICON_SIZE, 96);
+        let mascot_centre_x = MASCOT_X + HEADER_ICON_SIZE / 2;
+        let mascot_centre_y = HEADER_ICON_Y + HEADER_ICON_SIZE / 2;
+        assert!(x + side / 2 > mascot_centre_x, "must be right of centre");
+        assert!(y + side / 2 > mascot_centre_y, "must be below centre");
+    }
+
+    #[test]
+    fn the_inspected_icon_scales_with_the_display() {
+        let (x96, _, s96) = inspected_icon_rect(MASCOT_X, HEADER_ICON_Y, HEADER_ICON_SIZE, 96);
+        let (x192, _, s192) = inspected_icon_rect(MASCOT_X, HEADER_ICON_Y, HEADER_ICON_SIZE, 192);
+        assert_eq!(s192, s96 * 2);
+        // Scaled about the same corner, so the overhang past the
+        // mascot's right edge doubles along with everything else.
+        let overhang96 = MASCOT_X + HEADER_ICON_SIZE - (x96 + s96);
+        let mascot_right192 = scale_px(MASCOT_X + HEADER_ICON_SIZE, 192);
+        let overhang192 = mascot_right192 - (x192 + s192);
+        assert_eq!(overhang192, overhang96 * 2);
+    }
+
+    #[test]
+    fn scale_px_rounds_negatives_away_from_zero() {
+        // Rust's `/` truncates toward zero, so the naive
+        // `(n + 48) / 96` makes a negative offset shrink instead of
+        // grow — the -13 px overhang would come out at -12 at 96 DPI
+        // and be wrong at every scale factor. This is the guard for
+        // that, and it is why `scale_px` has a sign branch at all.
+        assert_eq!(scale_px(-13, 96), -13);
+        assert_eq!(scale_px(-13, 192), -26);
+        assert_eq!(scale_px(-13, 144), -20); // 19.5 px, away from zero
+        // Symmetry: +n and -n must be exact negatives of each other.
+        for v in 1..=64 {
+            assert_eq!(scale_px(-v, 96), -scale_px(v, 96), "{v}");
+            assert_eq!(scale_px(-v, 144), -scale_px(v, 144), "{v} at 144 DPI");
+        }
+    }
+
+    #[test]
+    fn the_plate_contains_the_icon_with_symmetric_padding() {
+        let icon = inspected_icon_rect(MASCOT_X, HEADER_ICON_Y, HEADER_ICON_SIZE, 96);
+        let (x, y, side) = icon;
+        let (l, t, r, b) = inspected_plate_rect(icon, 96);
+        assert!(l < x && t < y, "plate must extend past the icon");
+        assert!(r > x + side && b > y + side);
+        // Symmetric, so the icon is not off-centre in its card.
+        assert_eq!(x - l, r - (x + side));
+        assert_eq!(y - t, b - (y + side));
+    }
+
+    #[test]
+    fn the_plate_padding_scales_with_the_display() {
+        let pad_at = |dpi: u32| {
+            let icon = inspected_icon_rect(MASCOT_X, HEADER_ICON_Y, HEADER_ICON_SIZE, dpi);
+            let (x, _, _) = icon;
+            let (l, _, _, _) = inspected_plate_rect(icon, dpi);
+            x - l
+        };
+        assert_eq!(pad_at(96), INSPECTED_PLATE_PAD);
+        assert_eq!(pad_at(192), INSPECTED_PLATE_PAD * 2);
+    }
+
+    #[test]
+    fn help_text_explains_the_mascot_composition() {
+        // The composition is the one behaviour of `--icon` a user
+        // cannot infer from the flag name, so it has to be written
+        // down rather than discovered.
+        let h = help_text();
+        assert!(h.contains("magnifying glass"), "{h}");
+        assert!(h.contains("bottom-right"), "{h}");
     }
 }

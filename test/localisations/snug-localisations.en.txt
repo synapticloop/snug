@@ -179,12 +179,12 @@ jdk_install.prompt.button_download = Download Temurin {version} now
 jdk_install.prompt.button_open_browser = Open the download page in my browser
 jdk_install.prompt.button_cancel = Cancel
 
-jdk_install.metadata_failed.title = Could not reach Adoptium - Snug
-jdk_install.metadata_failed.heading = We couldn't reach Adoptium
-jdk_install.metadata_failed.subheading = Java {major} requires a download link from Adoptium, but our request didn't reach the server.
+jdk_install.metadata_failed.title = Could not reach Server - Snug
+jdk_install.metadata_failed.heading = We could not reach the Server
+jdk_install.metadata_failed.subheading = This application requires a download, but our request didn't reach the server.
 jdk_install.metadata_failed.content = Technical detail:\n{error}
 jdk_install.metadata_failed.info_heading = Why did this happen?
-jdk_install.metadata_failed.info_subtext = Your network connection may be down, or Adoptium's API is temporarily unreachable.
+jdk_install.metadata_failed.info_subtext = Your network connection may be down, or the Runtime API is temporarily unreachable.
 jdk_install.metadata_failed.info_subtext_2 = Check your network connection and try again in a moment.
 jdk_install.metadata_failed.button_open_browser = Open the download page
 jdk_install.metadata_failed.button_cancel = Cancel
@@ -214,7 +214,7 @@ jdk_install.failure.heading = Install runtime failure
 jdk_install.failure.subheading = All download attempts were exhausted, we will attempt to launch the application.
 jdk_install.failure.content = Eclipse Temurin {version} could not be installed. Technical detail:\n{error}
 jdk_install.failure.info_heading = What can I do?
-jdk_install.failure.info_subtext = Check your network, or download the runtime manually from adoptium.net.
+jdk_install.failure.info_subtext = Check your network, and retry later.
 jdk_install.failure.info_subtext_2 = The application will try to start with whatever Java is already on this machine.
 jdk_install.failure.button_label = OK
 

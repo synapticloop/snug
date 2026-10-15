@@ -103,12 +103,13 @@ const TIMER_ID: usize = 1;
 const TIMER_MS: u32 = 200;
 
 const WINDOW_W: i32 = 640;
-/// Uniform padding below the content stack, used **twice**: between the
-/// info box and the button row, and between the button row and the
-/// bottom of the window. That is what makes the two gaps provably
-/// equal. See `modal_window` for the full derivation -- the whole
-/// family shares one height, and these constants mirror it exactly.
+/// Padding between the button row and the bottom of the window. See
+/// `modal_window` for the full derivation -- the whole family shares
+/// one height, and these constants mirror it exactly.
 const BOTTOM_PAD: i32 = 16;
+/// Gap between the bottom of the info box and the button row. Tighter
+/// than `BOTTOM_PAD` on purpose; see `modal_window::INFO_TO_BUTTON_GAP`.
+const INFO_TO_BUTTON_GAP: i32 = 8;
 const MARGIN: i32 = 16;
 const MASCOT_X: i32 = MARGIN;
 const MASCOT_Y: i32 = MARGIN;
@@ -145,7 +146,13 @@ const INFO_BOX_W: i32 = WINDOW_W - MARGIN * 2;
 /// The family's shared anchor. The button row hangs below the box and
 /// the window is sized from the stack, so this dialog is exactly the
 /// same height as every `modal_window` dialog.
-const INFO_BOX_Y: i32 = 220;
+const INFO_BOX_Y_BASE: i32 = 220;
+/// The family's shared anchor, offset by the same difference as in
+/// `modal_window` so both dialogs stay pixel-identical in this band.
+/// The button row hangs below the box and the window is sized from the
+/// stack, so this dialog is exactly the same height as every
+/// `modal_window` dialog.
+const INFO_BOX_Y: i32 = INFO_BOX_Y_BASE + (BOTTOM_PAD - INFO_TO_BUTTON_GAP);
 /// Sized for the heading plus **two** subtext lines. Aligned with
 /// modal_window::INFO_BOX_H; see that file for the derivation.
 const INFO_BOX_H: i32 = 74;
@@ -181,11 +188,11 @@ const INFO_TEXT_W: i32 = INFO_BOX_W - (INFO_TEXT_X - INFO_BOX_X) - INFO_PAD;
 const CANCEL_PT: i32 = 9;
 const CANCEL_H: i32 = 25;
 const CANCEL_MIN_W: i32 = 80;
-const CANCEL_Y: i32 = INFO_BOX_Y + INFO_BOX_H + BOTTOM_PAD;
+const CANCEL_Y: i32 = INFO_BOX_Y + INFO_BOX_H + INFO_TO_BUTTON_GAP;
 const CANCEL_RIGHT: i32 = WINDOW_W - MARGIN;
 /// Client height, mirroring `modal_window::WINDOW_H` so every dialog in
 /// the family is the same size.
-const WINDOW_H: i32 = INFO_BOX_Y + INFO_BOX_H + BOTTOM_PAD + CANCEL_H + BOTTOM_PAD;
+const WINDOW_H: i32 = INFO_BOX_Y + INFO_BOX_H + INFO_TO_BUTTON_GAP + CANCEL_H + BOTTOM_PAD;
 
 // Control IDs
 const IDC_HEADING: i32 = 1001;
