@@ -440,7 +440,7 @@ rewritten every tick with `Downloaded X MB of Y MB (Z%)` /
 `Verifying SHA-256… (Z%)` / `Extracting… (Z%)`.
 
 If `api.adoptium.net` itself is unreachable, the user sees a separate
-"Could not reach Adoptium — Snug" dialog with **Open the download page
+"Could not reach Server - Snug" dialog with **Open the download page
 in my browser / Cancel** so they can still install Temurin manually
 from the fallback URL.
 
@@ -523,13 +523,13 @@ the copy compiled into the launcher's in-binary fallback are the same
 bytes by construction.
 
 ```text
-jdk_install.prompt.title = Java Runtime Required — Snug
+jdk_install.prompt.title = Java Runtime Required - Snug
 jdk_install.prompt.main = Eclipse Temurin JDK was not found on this machine
 jdk_install.prompt.content = This application needs a Java {version} or higher. Snug can download the official Eclipse Temurin {version} (~{size_mb} MB) and install it to a per-user location, or open the download page in your browser.\n\nDownload will be verified against the official SHA-256.
 jdk_install.prompt.button_download = Download Temurin {version} now
 jdk_install.prompt.button_cancel = Cancel
 
-jdk_install.metadata_failed.title = Could not reach Adoptium — Snug
+jdk_install.metadata_failed.title = Could not reach Server - Snug
 ```
 
 Values are single-line. A real newline is a literal `\n`, a literal

@@ -406,7 +406,13 @@ mod tests {
         assert!(!d.jdk_install.prompt.button_download.is_empty());
         assert!(d.jdk_install.prompt.content.contains("{version}"));
         assert_eq!(d.generic.error_dialog_ok, "OK");
-        assert!(d.launcher.error.title.ends_with("— Snug"));
+        // The brand suffix is defined by the baseline, and the
+        // separator in front of it has changed once already -- it was
+        // an em dash until the baseline was normalised to ASCII. If
+        // this assertion breaks, read the convention note on
+        // `launcher.fallback_messagebox.title` in the baseline rather
+        // than assuming the value regressed.
+        assert!(d.launcher.error.title.ends_with("- Snug"));
     }
 
     #[test]

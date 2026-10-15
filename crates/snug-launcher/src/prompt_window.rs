@@ -15,7 +15,7 @@
 //!
 //! ```text
 //! ┌────────────────────────────────────────────────────────────┐
-//! │ [icon] Java Runtime Required — Snug        — □ ✕           │
+//! │ [icon] Java Runtime Required - Snug        - □ ✕           │
 //! │                                                            │
 //! │  ┌────────────┐  Eclipse Temurin JDK was not found…       │
 //! │  │  [mascot]  │  …                                       │
