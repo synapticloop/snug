@@ -1874,16 +1874,22 @@ mod ui {
         sha256: &str,
     ) -> bool {
         let d = dialogs::dialogs();
-        // 256x256 is the load size the other Win32 windows use for the
-        // mascot; the window scales the bitmap itself.
-        const MASCOT_LOAD: i32 = 256;
-        // `prompt_window` takes the mascot as an `isize` handle, which is
-        // the same convention `modal_window::ModalDialog::mascot_hbitmap`
-        // uses, so a null handle is 0 rather than a null pointer.
-        let mascot = super::mascot_icon_override()
-            .or_else(|| super::find_best_icon_hicon(MASCOT_LOAD, MASCOT_LOAD))
-            .map(|h| h as isize)
-            .unwrap_or(0);
+        // Pass 0 and let `modal_window` resolve the mascot itself. It
+        // already does exactly this when a caller has nothing to offer:
+        // it prefers the `snug_preview --icon` override, falls back to
+        // the EXE's MAINICON, caches the result as `state.mascot_hicon`
+        // on WM_CREATE, and paints it with `DrawIconEx`.
+        //
+        // Resolving it here and passing the handle down was a type
+        // confusion. That slot is an HBITMAP -- `prompt_window::show`'s
+        // own safety contract says so -- but `find_best_icon_hicon`
+        // returns an HICON. So `modal_window` handed it to
+        // `GetObjectW`, which rejects an icon, logged "modal_window
+        // mascot: GetObjectW failed", and drew nothing. Worse, its
+        // `if mascot_hbitmap == 0` guard meant the working HICON path
+        // was skipped as well, so the real launcher showed no mascot
+        // at all while `snug_preview`, which passes 0, always did.
+        let mascot = 0isize;
         let choice = unsafe {
             crate::prompt_window::show(
                 parent,
