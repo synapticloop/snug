@@ -108,9 +108,24 @@ pub fn render(inv: &Inventory, out: &mut impl std::io::Write) -> std::io::Result
 
     writeln!(out)?;
     writeln!(out, "Every distinct token ({}):", inv.tokens.len())?;
-    let joined: Vec<&str> = inv.tokens.iter().map(String::as_str).collect();
-    write!(out, "  {}", joined.join("  "))?;
-    writeln!(out)?;
+    // Column width from the widest name, floored so a future rename to
+    // something two characters long doesn't produce a 4-space gutter.
+    let width = inv
+        .tokens
+        .iter()
+        .map(String::len)
+        .max()
+        .unwrap_or(0)
+        .max(12);
+    for token in &inv.tokens {
+        // A gap prints as a gap rather than being hidden. It cannot
+        // happen while snug-format's coverage test passes, but if it
+        // ever did, the person reading this is exactly the one who can
+        // do something about it.
+        let described = snug_format::describe(token)
+            .unwrap_or("(UNDOCUMENTED -- see the baseline and fix TOKEN_DESCRIPTIONS)");
+        writeln!(out, "  {:<width$}  {}", token, described, width = width)?;
+    }
 
     writeln!(out)?;
     writeln!(
@@ -183,7 +198,6 @@ mod tests {
         for expected in [
             "version",
             "size_mb",
-            "url",
             "sha256",
             "attempt",
             "max_attempts",

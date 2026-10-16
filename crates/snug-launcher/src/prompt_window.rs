@@ -47,8 +47,6 @@ pub enum PromptChoice {
 	/// User clicked "Download Temurin" / Enter. Launch the
 	/// download flow.
 	Download,
-	/// User clicked "Open the download page in my browser".
-	OpenBrowser,
 	/// User clicked Cancel, the X button, or pressed Alt+F4 / Esc.
 	Cancel,
 }
@@ -65,8 +63,15 @@ pub enum PromptChoice {
 /// * `version` — replaces `{version}` placeholders in `content`
 ///   / `expanded` / `button_download`.
 /// * `size_mb` — replaces `{size_mb}` in `content` / `expanded`.
-/// * `url` — replaces `{url}` in `expanded`.
 /// * `sha256` — replaces `{sha256}` in `expanded`.
+///
+/// There is deliberately no `url` parameter and no browser button. The
+/// prompt used to print a direct download link and offer "Open the
+/// download page in my browser", but that path never opened anything —
+/// `jdk_install::consent` only tested for `Download`, so the button
+/// closed the dialog and stopped. Printing the URL was worse than dead:
+/// it read as the supported way to install by hand, on a dialog with
+/// no way to act on it.
 ///
 /// Blocks the calling thread until the user dismisses the dialog.
 ///
@@ -81,7 +86,6 @@ pub unsafe fn show(
 	prompt: &InstallPromptDialog,
 	version: &str,
 	size_mb: u32,
-	url: &str,
 	sha256: &str,
 ) -> PromptChoice {
 	let size_mb_str = size_mb.to_string();
@@ -92,16 +96,21 @@ pub unsafe fn show(
 	// preserved verbatim.
 	let content = format!(
 		"{}\n\n{}",
-		substitute(&prompt.content, version, &size_mb_str, url, sha256),
-		substitute(&prompt.expanded, version, &size_mb_str, url, sha256),
+		substitute(&prompt.content, version, &size_mb_str, sha256),
+		substitute(&prompt.expanded, version, &size_mb_str, sha256),
 	);
 
-	let download_label = substitute(&prompt.button_download, version, &size_mb_str, url, sha256);
+	let download_label = substitute(&prompt.button_download, version, &size_mb_str, sha256);
 
+	// Two buttons. There was a third -- "Open the download page in my
+	// browser" -- and it did nothing: `jdk_install::consent` only ever
+	// tested for `Download`, so choosing it closed the dialog and
+	// neither started the install nor opened anything. The direct URL
+	// it referred to went with it. macOS' `appkit::consent` had already
+	// dropped that button and offered the same pair.
 	let buttons = [
 		modal_window::Button::Primary(&download_label),
-		modal_window::Button::Secondary(&prompt.button_open_browser),
-		modal_window::Button::Tertiary(&prompt.button_cancel),
+		modal_window::Button::Secondary(&prompt.button_cancel),
 	];
 
 	let result = unsafe {
@@ -128,18 +137,16 @@ pub unsafe fn show(
 
 	match result {
 		modal_window::IDYES_I32 => PromptChoice::Download,
-		modal_window::IDNO_I32 => PromptChoice::OpenBrowser,
-		// `IDCANCEL_I32` covers the tertiary button + X + Alt+F4.
+		// The secondary button + X + Alt+F4 all land here.
 		_ => PromptChoice::Cancel,
 	}
 }
 
 /// Cheap placeholder substitution. Avoids pulling in `format!` for
 /// each placeholder so the call site stays readable.
-fn substitute(template: &str, version: &str, size_mb: &str, url: &str, sha256: &str) -> String {
+fn substitute(template: &str, version: &str, size_mb: &str, sha256: &str) -> String {
 	template
 		.replace("{version}", version)
 		.replace("{size_mb}", size_mb)
-		.replace("{url}", url)
 		.replace("{sha256}", sha256)
 }

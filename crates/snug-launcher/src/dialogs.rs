@@ -79,7 +79,6 @@ pub struct InstallPromptDialog {
     pub content: String,
     pub expanded: String,
     pub button_download: String,
-    pub button_open_browser: String,
     pub button_cancel: String,
 }
 
@@ -293,7 +292,6 @@ fn assemble() -> Dialogs {
                     content: lookup("jdk_install.prompt.content"),
                     expanded: lookup("jdk_install.prompt.expanded"),
                     button_download: lookup("jdk_install.prompt.button_download"),
-                    button_open_browser: lookup("jdk_install.prompt.button_open_browser"),
                     button_cancel: lookup("jdk_install.prompt.button_cancel"),
                 },
                 metadata_failed: MetadataFailedDialog {
@@ -404,7 +402,7 @@ mod tests {
         let d = dialogs();
         assert!(!d.jdk_install.prompt.title.is_empty());
         assert!(!d.jdk_install.prompt.button_download.is_empty());
-        assert!(d.jdk_install.prompt.content.contains("{version}"));
+        assert!(d.jdk_install.prompt.content.contains("{size_mb}"));
         assert_eq!(d.generic.error_dialog_ok, "OK");
         // The brand suffix is defined by the baseline, and the
         // separator in front of it has changed once already -- it was
@@ -473,14 +471,20 @@ mod tests {
         let d = dialogs();
         let prompt = &d.jdk_install.prompt.content;
         assert!(
-            prompt.contains("\n\n"),
-            "prompt body lost its paragraph break: {prompt:?}"
+            prompt.contains("a runtime to launch"),
+            "prompt body changed shape: {prompt:?}"
         );
-        assert!(prompt.contains("Java {version} or higher"));
         assert!(!prompt.contains("\\n"), "escapes were not decoded");
 
+        // The prompt body is one paragraph now that the digest and the
+        // JDK explainer moved to `expanded`; the paragraph-break guard
+        // belongs with the key that still carries one.
         let expanded = &d.jdk_install.prompt.expanded;
-        assert!(expanded.contains("\n{url}\n"), "url line lost: {expanded:?}");
+        assert!(
+            expanded.contains("\n\n"),
+            "expanded body lost its paragraph break: {expanded:?}"
+        );
+        assert!(!expanded.contains("\\n"), "escapes were not decoded");
         assert!(expanded.contains("SHA-256: {sha256}"));
 
         let failed = &d.jdk_install.metadata_failed.content;

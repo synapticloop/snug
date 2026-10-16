@@ -2039,7 +2039,6 @@ fn run_install_prompt_v5() {
             prompt,
             "21.0.2",
             192,
-            "https://api.adoptium.net/v3/binary/latest/21/ga/windows/x64/jdk/hotspot/normal/eclipse",
             "9c629caaccc4e64aa0ea58bd0a3f43eaf903a4c1a3e2c2a6e9c5b1a8e8b3f1a0",
         )
     };

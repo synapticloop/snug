@@ -828,7 +828,6 @@ mod tests {
             "jdk_install.prompt.content",
             "jdk_install.prompt.expanded",
             "jdk_install.prompt.button_download",
-            "jdk_install.prompt.button_open_browser",
             "jdk_install.prompt.button_cancel",
             "jdk_install.metadata_failed.title",
             "jdk_install.metadata_failed.heading",

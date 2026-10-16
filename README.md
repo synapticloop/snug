@@ -548,9 +548,9 @@ mode, and a nastier one.
 ```console
 $ snug --list-tokens
 snug: localisation inventory for the built-in `en` baseline
-      107 keys, 43 carry placeholders, 26 distinct tokens
+      106 keys, 42 carry placeholders, 25 distinct tokens
 ...
-  jdk_install.prompt.content  {size_mb, version}
+  jdk_install.prompt.content  {size_mb}
   jdk_install.retry.subheading  {attempt, max_attempts}
   launcher.error.content  {error}
 ```

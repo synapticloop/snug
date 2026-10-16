@@ -173,10 +173,9 @@ launcher.error.content = {error}
 
 jdk_install.prompt.title = Environnement d'exécution Java requis - Snug
 jdk_install.prompt.main = Le JDK Eclipse Temurin est introuvable sur cette machine
-jdk_install.prompt.content = Cette application nécessite Java {version} ou une version ultérieure. Snug peut télécharger la version officielle Eclipse Temurin {version} (~{size_mb} Mo) et l'installer à un emplacement propre à l'utilisateur, ou ouvrir la page de téléchargement dans votre navigateur.\n\nLe téléchargement sera vérifié par rapport au SHA-256 officiel.
-jdk_install.prompt.expanded = URL de téléchargement direct (également cliquable ci-dessous) :\n{url}\n\nSHA-256 : {sha256}\n\nQu'est-ce qu'un JDK ? Les applications Java ont besoin d'un Java Development Kit pour s'exécuter. Eclipse Temurin est la distribution OpenJDK officielle du groupe de travail Eclipse Adoptium - le même Java que vous obtiendriez de n'importe quel fournisseur, mais reconstruit et redistribué gratuitement sous licence GPL.
-jdk_install.prompt.button_download = Télécharger Temurin {version} maintenant
-jdk_install.prompt.button_open_browser = Ouvrir la page de téléchargement dans mon navigateur
+jdk_install.prompt.content = Cette application nécessite un environnement d'exécution pour démarrer. Snug peut télécharger l'environnement d'exécution pour vous (~{size_mb} Mo) et l'installer.\n\nLe téléchargement sera vérifié par rapport au SHA-256 officiel.
+jdk_install.prompt.expanded = SHA-256 : {sha256}\n\nQu'est-ce qu'un JDK ? Les applications Java ont besoin d'un Java Development Kit pour s'exécuter. Eclipse Temurin est la distribution OpenJDK officielle du groupe de travail Eclipse Adoptium - le même Java que vous obtiendriez de n'importe quel fournisseur, mais reconstruit et redistribué gratuitement sous licence GPL.
+jdk_install.prompt.button_download = Installer l'environnement d'exécution maintenant
 jdk_install.prompt.button_cancel = Annuler
 
 jdk_install.metadata_failed.title = Serveur injoignable - Snug

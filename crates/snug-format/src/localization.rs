@@ -380,6 +380,83 @@ pub fn discover_localization_files(
     Ok(expanded)
 }
 
+/// One line of prose per placeholder the shipped baseline uses.
+///
+/// **Hand-maintained, and that is the trade.** Nothing can derive what a
+/// token *means* from the baseline — the English sentence shows it in
+/// context but does not say what the launcher will put in it. So this
+/// table is prose a human writes, and prose a human can get wrong
+/// without anything breaking.
+///
+/// What is enforceable is coverage, and both directions are checked by
+/// tests below: every placeholder in `DEFAULT_EN_TEXT` has an entry, and
+/// every entry names a placeholder the baseline actually uses. A token
+/// added to the baseline without a description here fails the build,
+/// and a description left behind by a removed token fails too. That
+/// bounds the drift to "the wording is a bit off" rather than "a token
+/// silently has no explanation", which is the failure worth catching.
+///
+/// The wording is written for whoever is translating: what the launcher
+/// passes, not what the code calls it.
+pub const TOKEN_DESCRIPTIONS: &[(&str, &str)] = &[
+    // Positional. Filled by index via `t_positional`, not by name.
+    (
+        "0",
+        "positional slot — the single argument this key is handed, usually an error message",
+    ),
+    // JVM discovery (error.rs).
+    ("min_java", "the Java major version the application requires"),
+    ("found", "the Java major version actually found on the machine"),
+    ("path", "a filesystem path that was located, or searched"),
+    // JNI load failures (error.rs).
+    ("library", "the library that failed to load"),
+    ("symbol", "the exported symbol that was missing from it"),
+    ("message", "the OS-level error text explaining the failed load"),
+    // JDK metadata (jdk_install.rs).
+    ("name", "name of the metadata field that was malformed"),
+    ("value", "the value the launcher received for that field"),
+    ("declared", "the SHA-256 the publisher advertised"),
+    ("computed", "the SHA-256 the launcher calculated from the downloaded file"),
+    // The download itself.
+    (
+        "version",
+        "the JDK release being downloaded or installed, e.g. \"25.0.1+9\"",
+    ),
+    ("size_mb", "approximate download size in megabytes"),
+    ("sha256", "expected SHA-256 hex digest of that archive"),
+    // Retry loop.
+    ("attempt", "which attempt this is, counting from 1"),
+    ("max_attempts", "total number of attempts configured"),
+    // Progress window (progress_window.rs, appkit.rs).
+    ("pct", "completion percentage as a whole number"),
+    ("n", "whole seconds of estimated time remaining"),
+    ("arch", "target architecture label, e.g. \"Windows x64\""),
+    ("done_mb", "megabytes downloaded so far"),
+    ("total_mb", "total megabytes to download"),
+    ("speed_mb_s", "current download speed in MB/s"),
+    // Splash (splash.rs).
+    ("actual", "byte length the pixel buffer turned out to have"),
+    ("expected", "byte length the buffer's dimensions require"),
+    // Error bodies shown verbatim in a dialog.
+    (
+        "error",
+        "the underlying error, already localised when it is a launcher error",
+    ),
+];
+
+/// The description of `token`, if there is one.
+///
+/// Returns `None` rather than a placeholder string so callers can tell
+/// "no description" from "description happens to be empty" — the CLI
+/// prints the gap rather than hiding it, since an undocumented token is
+/// exactly what a translator needs to know about.
+pub fn describe(token: &str) -> Option<&'static str> {
+    TOKEN_DESCRIPTIONS
+        .iter()
+        .find(|(name, _)| *name == token)
+        .map(|(_, text)| *text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,8 +509,6 @@ mod tests {
 
     #[test]
     fn every_placeholder_in_the_shipped_baseline_is_identifier_shaped() {
-        // If this fails, a bundle author reading `--list-tokens` would be
-        // shown a token they cannot usefully write into their translation.
         let bundle = Localization::parse(DEFAULT_EN_TAG, DEFAULT_EN_TEXT).expect("baseline parses");
         let odd: Vec<String> = bundle
             .entries
@@ -449,6 +524,68 @@ mod tests {
             })
             .collect();
         assert!(odd.is_empty(), "unrecognised brace contents in the baseline: {odd:?}");
+    }
+
+    // ---- TOKEN_DESCRIPTIONS ----
+
+    /// Every placeholder the baseline uses must be explained, in both
+    /// directions.
+    ///
+    /// Forward is the one that matters: a token added to the baseline
+    /// with no description here would ship, and `snug --list-tokens`
+    /// would print a bare name to the person translating it. Backward
+    /// matters just as much for a different reason — a description
+    /// left behind by a deleted token is a confident, wrong answer
+    /// sitting in a table nobody re-reads.
+    ///
+    /// This bounds the hand-written part to "the wording might be a bit
+    /// off", which no test can catch and no test should pretend to.
+    #[test]
+    fn token_descriptions_cover_the_baseline_exactly() {
+        let bundle = Localization::parse(DEFAULT_EN_TAG, DEFAULT_EN_TEXT).expect("baseline parses");
+        let used: BTreeSet<String> = bundle
+            .entries
+            .iter()
+            .flat_map(|(_, v)| placeholders(v))
+            .map(str::to_string)
+            .collect();
+
+        let documented: BTreeSet<String> = TOKEN_DESCRIPTIONS
+            .iter()
+            .map(|(name, _)| (*name).to_string())
+            .collect();
+
+        let undocumented: Vec<&String> = used.difference(&documented).collect();
+        assert!(
+            undocumented.is_empty(),
+            "placeholder(s) used by the baseline with no entry in \
+             TOKEN_DESCRIPTIONS -- `snug --list-tokens` would print them bare: \
+             {undocumented:?}\n  add a line describing what the launcher passes"
+        );
+
+        let stale: Vec<&String> = documented.difference(&used).collect();
+        assert!(
+            stale.is_empty(),
+            "TOKEN_DESCRIPTIONS describes token(s) the baseline no longer uses, so a \
+             translator would be given a confident answer about a slot that is never filled: \
+             {stale:?}\n  delete the line"
+        );
+    }
+
+    #[test]
+    fn no_description_is_blank() {
+        let blank: Vec<&str> = TOKEN_DESCRIPTIONS
+            .iter()
+            .filter(|(_, text)| text.trim().is_empty())
+            .map(|(name, _)| *name)
+            .collect();
+        assert!(blank.is_empty(), "blank description(s) for {blank:?}");
+    }
+
+    #[test]
+    fn describe_resolves_a_token_and_rejects_an_unknown_one() {
+        assert_eq!(describe("speed_mb_s"), Some("current download speed in MB/s"));
+        assert_eq!(describe("not_a_token"), None);
     }
 
     #[test]

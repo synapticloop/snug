@@ -1546,9 +1546,8 @@ pub fn failure(title: &str, content: &str) {
 /// on a window that a download waits for, so a window that fails to appear
 /// cannot strand anything.
 ///
-/// "Open in browser" is not consent — it hands the page over and stops,
-/// which is what the button says it does.
-pub fn consent(version: &str, size_mb: u32, url: &str, sha256: &str) -> bool {
+/// Two buttons, install or cancel, matching the Windows prompt.
+pub fn consent(version: &str, size_mb: u32, sha256: &str) -> bool {
     let d = dialogs::dialogs();
     let p = &d.jdk_install.prompt;
 
@@ -1557,7 +1556,6 @@ pub fn consent(version: &str, size_mb: u32, url: &str, sha256: &str) -> bool {
     let mut subs: Vec<(&str, &str)> = vec![
         ("version", &version),
         ("size_mb", &size_mb),
-        ("url", url),
         ("sha256", sha256),
     ];
 
@@ -1706,7 +1704,6 @@ mod tests {
             assert!(consent(
                 "25.0.4+101.0.LTS",
                 115,
-                "https://example.invalid/jdk.tar.gz",
                 "deadbeef",
             ));
         });
@@ -1736,7 +1733,7 @@ mod tests {
         // proceeding here would download 115 MB unasked.
         let _guard = SERIALISED.lock().unwrap_or_else(|e| e.into_inner());
         set_test_response(Some(1));
-        assert!(!consent("25.0.4", 115, "https://example.invalid", "deadbeef"));
+        assert!(!consent("25.0.4", 115, "deadbeef"));
         set_test_response(None);
     }
 

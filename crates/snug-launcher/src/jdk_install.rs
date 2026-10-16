@@ -8,8 +8,8 @@
 //! 3. **`prompt_window::show`** (in `prompt_window.rs`) renders the
 //!    "Java Runtime Required" dialog as a custom-painted modal on the
 //!    same paint path as `error_window` / `retry_window` /
-//!    `metadata_failed_window`. Three buttons (Download / Open in
-//!    browser / Cancel). The "do not show again" checkbox has been
+//!    `metadata_failed_window`. Two buttons (Install the runtime now
+//!    / Cancel). The "do not show again" checkbox has been
 //!    **removed** per product decision — the cache layer means the
 //!    user only sees the prompt when no usable JDK is on disk, so
 //!    re-asking is fine.
@@ -1677,7 +1677,6 @@ fn run_one_install_attempt(
         parent,
         &metadata.version,
         size_mb,
-        &metadata.package_link,
         &metadata.sha256,
     ) {
         log::log("user declined the install prompt; not downloading");
@@ -1863,15 +1862,15 @@ mod ui {
     /// worker kept waiting for a click nobody could make.
     ///
     /// So the ask is now a step in its own right, taken while the answer
-    /// is still the only thing in flight. `OpenBrowser` counts as consent
-    /// *not* given: it hands the page to the user and stops, which is what
-    /// the button says it does.
+    /// is still the only thing in flight. Two buttons: install, or
+    /// cancel. There was an "Open the download page in my browser"
+    /// escape hatch, but it never opened anything — only `Download`
+    /// counted as consent — so it closed the dialog and did nothing.
     #[cfg(windows)]
     pub fn consent(
         parent: ParentWindow,
         version: &str,
         size_mb: u32,
-        url: &str,
         sha256: &str,
     ) -> bool {
         let d = dialogs::dialogs();
@@ -1892,7 +1891,6 @@ mod ui {
                 &d.jdk_install.prompt,
                 version,
                 size_mb,
-                url,
                 sha256,
             )
         };
@@ -1904,10 +1902,9 @@ mod ui {
         _parent: ParentWindow,
         version: &str,
         size_mb: u32,
-        url: &str,
         sha256: &str,
     ) -> bool {
-        crate::appkit::consent(version, size_mb, url, sha256)
+        crate::appkit::consent(version, size_mb, sha256)
     }
 
     /// Adoptium unreachable. Returns `true` if the user asked for the
