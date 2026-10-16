@@ -133,14 +133,14 @@ pub unsafe fn show(parent: HWND, dlg: ErrorDialog<'_>) -> i32 {
         dlg.subheading
     };
 
-    // Resolve the single button label once. `unwrap_or_else` keeps
-    // the lifetimes independent — the `&'static str` fallback is
-    // only constructed when needed, so the resolved label can have
-    // either the caller's lifetime (when present) or `'static` (when
-    // falling back to the module default).
+    // Resolve the single button label once. `unwrap_or_else` keeps the
+    // lifetimes independent — the `&'static str` fallback is only
+    // constructed when needed. There is no module default any more:
+    // an omitted label falls back to this dialog's own catalog key,
+    // which is copy a translator chose rather than copy we invented.
     let button_label_str: &str = match button_label.as_deref() {
         Some(s) => s,
-        None => modal_window::default_button_label(),
+        None => failure.button_label.as_str(),
     };
     let button = modal_window::Button::Primary(button_label_str);
 

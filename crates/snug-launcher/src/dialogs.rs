@@ -75,9 +75,18 @@ pub struct JdkInstallDialogs {
 #[derive(Debug, Clone)]
 pub struct InstallPromptDialog {
     pub title: String,
-    pub main: String,
+    pub heading: String,
+    /// Sentence below the headline. The baseline splits the prompt's
+    /// one-line `main` into a headline and this; the modal's
+    /// `subheading` slot was already there and empty.
+    pub subheading: String,
     pub content: String,
-    pub expanded: String,
+    /// Info-box heading line (light-blue box, bottom-left). Every
+    /// dialog in the family carries these three, so the prompt has
+    /// them too rather than rendering an empty box.
+    pub info_heading: String,
+    pub info_subtext: String,
+    pub info_subtext_2: String,
     pub button_download: String,
     pub button_cancel: String,
 }
@@ -111,15 +120,12 @@ pub struct MetadataFailedDialog {
 #[derive(Debug, Clone)]
 pub struct ProgressDialog {
     pub title: String,
-    pub main: String,
-    pub content_initial: String,
-
-    // Strings used by the custom-painted v5 fallback window
-    // (`progress_window.rs`). Mirrors the user-facing mockup layout
-    // — large heading, subtitle, percent label, phase description,
-    // transfer speed + ETA, info-box copy.
     pub heading: String,
-    pub subtitle: String,
+    pub subheading: String,
+    /// The runtime line under the subheading — "Runtime 25.0.4.1
+    /// (~192 MB)". Was `.main`; renamed so every dialog names its
+    /// body `.content` and nothing carries a second spelling.
+    pub content: String,
     pub pct_label: String,
     pub phase_label: String,
     pub detail_with_size: String,
@@ -288,9 +294,12 @@ fn assemble() -> Dialogs {
             jdk_install: JdkInstallDialogs {
                 prompt: InstallPromptDialog {
                     title: lookup("jdk_install.prompt.title"),
-                    main: lookup("jdk_install.prompt.main"),
+                    heading: lookup("jdk_install.prompt.heading"),
+                    subheading: lookup("jdk_install.prompt.subheading"),
                     content: lookup("jdk_install.prompt.content"),
-                    expanded: lookup("jdk_install.prompt.expanded"),
+                    info_heading: lookup("jdk_install.prompt.info_heading"),
+                    info_subtext: lookup("jdk_install.prompt.info_subtext"),
+                    info_subtext_2: lookup("jdk_install.prompt.info_subtext_2"),
                     button_download: lookup("jdk_install.prompt.button_download"),
                     button_cancel: lookup("jdk_install.prompt.button_cancel"),
                 },
@@ -307,10 +316,9 @@ fn assemble() -> Dialogs {
                 },
                 progress: ProgressDialog {
                     title: lookup("jdk_install.progress.title"),
-                    main: lookup("jdk_install.progress.main"),
-                    content_initial: lookup("jdk_install.progress.content_initial"),
                     heading: lookup("jdk_install.progress.heading"),
-                    subtitle: lookup("jdk_install.progress.subtitle"),
+                    subheading: lookup("jdk_install.progress.subheading"),
+                    content: lookup("jdk_install.progress.content"),
                     pct_label: lookup("jdk_install.progress.pct_label"),
                     phase_label: lookup("jdk_install.progress.phase_label"),
                     detail_with_size: lookup("jdk_install.progress.detail_with_size"),
@@ -429,15 +437,18 @@ mod tests {
         let d = dialogs();
         for (name, value) in [
             ("prompt.title", &d.jdk_install.prompt.title),
-            ("prompt.main", &d.jdk_install.prompt.main),
+            ("prompt.heading", &d.jdk_install.prompt.heading),
+            ("prompt.subheading", &d.jdk_install.prompt.subheading),
             ("prompt.content", &d.jdk_install.prompt.content),
-            ("prompt.expanded", &d.jdk_install.prompt.expanded),
             ("prompt.button_download", &d.jdk_install.prompt.button_download),
             ("prompt.button_cancel", &d.jdk_install.prompt.button_cancel),
             ("metadata_failed.title", &d.jdk_install.metadata_failed.title),
             ("metadata_failed.content", &d.jdk_install.metadata_failed.content),
             ("metadata_failed.button_cancel", &d.jdk_install.metadata_failed.button_cancel),
             ("progress.title", &d.jdk_install.progress.title),
+            ("progress.heading", &d.jdk_install.progress.heading),
+            ("progress.subheading", &d.jdk_install.progress.subheading),
+            ("progress.content", &d.jdk_install.progress.content),
             ("progress.pct_label", &d.jdk_install.progress.pct_label),
             ("progress.detail_with_size", &d.jdk_install.progress.detail_with_size),
             ("progress.cancel_during_download", &d.jdk_install.progress.cancel_button_during_download),
@@ -469,23 +480,21 @@ mod tests {
         // catalog is single-line with `\n` escapes. This is the
         // regression guard for that conversion.
         let d = dialogs();
+        // The prompt body carries three paragraphs in one value now:
+        // the offer, the digest, and the JDK explainer. `expanded` used
+        // to be the second and third, concatenated at paint time.
         let prompt = &d.jdk_install.prompt.content;
         assert!(
             prompt.contains("a runtime to launch"),
             "prompt body changed shape: {prompt:?}"
         );
-        assert!(!prompt.contains("\\n"), "escapes were not decoded");
-
-        // The prompt body is one paragraph now that the digest and the
-        // JDK explainer moved to `expanded`; the paragraph-break guard
-        // belongs with the key that still carries one.
-        let expanded = &d.jdk_install.prompt.expanded;
         assert!(
-            expanded.contains("\n\n"),
-            "expanded body lost its paragraph break: {expanded:?}"
+            prompt.contains("\n\n"),
+            "prompt body lost its paragraph breaks: {prompt:?}"
         );
-        assert!(!expanded.contains("\\n"), "escapes were not decoded");
-        assert!(expanded.contains("SHA-256: {sha256}"));
+        assert!(prompt.contains("SHA-256: {sha256}"), "{prompt:?}");
+        assert!(prompt.contains("What's a JDK?"), "{prompt:?}");
+        assert!(!prompt.contains("\\n"), "escapes were not decoded");
 
         let failed = &d.jdk_install.metadata_failed.content;
         assert!(failed.starts_with("Technical detail:\n{error}"), "{failed:?}");

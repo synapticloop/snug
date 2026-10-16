@@ -645,18 +645,31 @@ const ID_BTN_CLOSE: usize = 1099;
 /// `WM_COMMAND` id match can't confuse the two.
 const ID_COMBO_LANGUAGE: usize = 1100;
 
-/// The dialog buttons, in display order. Hoisted to module scope so
-/// [`launcher_client_height`] can derive the window height from
-/// `DIALOG_BUTTONS.len()` — adding a dialog here resizes the window
-/// automatically.
+/// The dialog buttons, **in the order a user meets them**, so the list
+/// doubles as the install flow: offer the runtime, watch it download,
+/// and only then meet the failure dialogs. A reader who works down the
+/// window sees the same sequence they would see in a real launch.
+///
+/// Hoisted to module scope so [`launcher_client_height`] can derive the
+/// window height from `DIALOG_BUTTONS.len()` — adding a dialog here
+/// resizes the window automatically.
+///
+/// The order here is presentation only. The `ID_BTN_*` values above are
+/// deliberately **not** renumbered to match: they identify a control to
+/// `WM_COMMAND`, so renumbering would be churn that could only ever
+/// break something.
 const DIALOG_BUTTONS: &[(&str, usize)] = &[
+    // 1. The runtime offer. Everything below is downstream of it.
+    ("Install prompt (custom-painted)", ID_BTN_PROMPT_V5),
+    // 2. Then the download the prompt just agreed to.
     ("Progress (animated)", ID_BTN_PROGRESS_ANIM),
     ("Progress (static @ 50%)", ID_BTN_PROGRESS_STATIC),
+    // 3. ...and the ways it can go wrong, in the order they can happen.
     ("Metadata failed", ID_BTN_METADATA_FAILED),
     ("Retry (try 2 of 3)", ID_BTN_RETRY),
     ("Error (post-install)", ID_BTN_ERROR),
     ("Java error (with update link)", ID_BTN_JAVA_ERROR),
-    ("Install prompt (custom-painted)", ID_BTN_PROMPT_V5),
+    // 4. Before a payload is even read: the bare-stub bail-out.
     ("Early bail (MessageBoxW)", ID_BTN_EARLY_BAIL),
 ];
 

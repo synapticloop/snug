@@ -330,10 +330,16 @@ const INFO_BOX_CORNER_DIAMETER: i32 = INFO_BOX_H / 4;
 //  Default copy (used when caller passes `None`)
 // ============================================================================
 
-const INFO_HEADING_DEFAULT: &str = "What happened?";
-const INFO_SUBTEXT_DEFAULT: &str =
-    "You can try again, or visit the download page manually.";
-const BUTTON_LABEL_DEFAULT: &str = "OK";
+// Resolve info labels. A caller that passes `None` gets **nothing** —
+// there is deliberately no module default.
+//
+// There used to be one: every dialog with `info_heading: None` was
+// given "What happened?" and "You can try again, or visit the
+// download page manually." The install prompt inherited it, so it
+// shipped a failure-flavoured info box it had never asked for,
+// advertising an escape route that did not exist. Inventing copy a
+// dialog did not request is worse than an absent box: an absent box
+// is a design, and invented copy reads as an oversight.
 
 // ============================================================================
 //  Public API
@@ -470,20 +476,19 @@ pub unsafe fn show<'a>(parent: HWND, dlg: &'a ModalDialog<'a>) -> i32 {
             })
     };
 
-    // Resolve info / button labels (caller → TOML → default).
+    // Resolve info / button labels. All three are absent rather than
+    // defaulted, so a caller that wants no info box gets none and one
+    // that wants one supplies every line itself.
     let info_heading_text: String = dlg
         .info_heading
         .map(str::to_string)
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| INFO_HEADING_DEFAULT.to_string());
+        .unwrap_or_default();
     let info_subtext_text: String = dlg
         .info_subtext
         .map(str::to_string)
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| INFO_SUBTEXT_DEFAULT.to_string());
-    // Unlike the two above, the third line has no module default: it
-    // is genuinely optional, and an absent key must leave the control
-    // uncreated rather than inventing copy a dialog never asked for.
+        .unwrap_or_default();
     let info_subtext2_text: String = dlg
         .info_subtext_2
         .map(str::to_string)
@@ -608,13 +613,6 @@ pub unsafe fn show<'a>(parent: HWND, dlg: &'a ModalDialog<'a>) -> i32 {
         }
     }
     msg.wParam as i32
-}
-
-/// Re-exported for the wrappers — keeps callers that used
-/// `error_window::show`'s default label from breaking when the
-/// button label is empty.
-pub fn default_button_label() -> &'static str {
-    BUTTON_LABEL_DEFAULT
 }
 
 // ============================================================================
@@ -1123,20 +1121,27 @@ const BUTTON_CLASS: &str = "BUTTON\0";
             FillRect(hdc, &bg_rc, bg_brush);
             DeleteObject(bg_brush as _);
 
-            // 2. Light-blue info box — rounded.
-            let info_rgn = CreateRoundRectRgn(
-                INFO_BOX_X,
-                INFO_BOX_Y,
-                INFO_BOX_X + INFO_BOX_W,
-                INFO_BOX_Y + INFO_BOX_H,
-                INFO_BOX_CORNER_DIAMETER,
-                INFO_BOX_CORNER_DIAMETER,
-            );
-            if !info_rgn.is_null() {
-                let info_brush = CreateSolidBrush(COLOR_INFO_BG);
-                FillRgn(hdc, info_rgn, info_brush);
-                DeleteObject(info_brush as _);
-                DeleteObject(info_rgn as _);
+            // 2. Light-blue info box — rounded. Always drawn: the box is part of
+            //    the family's shape, so every dialog has one whether or
+            //    not it supplies copy. What a caller passing `None`
+            //    now gets is an *empty* box rather than an invented
+            //    heading and subtext -- the info box stays, the
+            //    words we made up do not.
+            {
+                let info_rgn = CreateRoundRectRgn(
+                    INFO_BOX_X,
+                    INFO_BOX_Y,
+                    INFO_BOX_X + INFO_BOX_W,
+                    INFO_BOX_Y + INFO_BOX_H,
+                    INFO_BOX_CORNER_DIAMETER,
+                    INFO_BOX_CORNER_DIAMETER,
+                );
+                if !info_rgn.is_null() {
+                    let info_brush = CreateSolidBrush(COLOR_INFO_BG);
+                    FillRgn(hdc, info_rgn, info_brush);
+                    DeleteObject(info_brush as _);
+                    DeleteObject(info_rgn as _);
+                }
             }
 
             // 3. Mascot. Bitmap if non-zero, else EXE main icon (cached

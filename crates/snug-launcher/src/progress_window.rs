@@ -484,7 +484,7 @@ unsafe fn register_class() -> u16 {
             let hwnd_subtitle = CreateWindowExW(
                 0,
                 wide(STATIC_CLASS_NAME).as_ptr(),
-                wide(&d.jdk_install.progress.subtitle).as_ptr(),
+                wide(&d.jdk_install.progress.subheading).as_ptr(),
                 WS_CHILD | WS_VISIBLE | SS_LEFT,
                 TEXT_X,
                 SUBTITLE_Y,

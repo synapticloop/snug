@@ -912,7 +912,7 @@ pub(crate) fn progress(
     stack.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
     stack.setSpacing(10.0);
     stack.setFrame(rect(margin + inset, margin, inner_w - inset, stack_h));
-    stack.addArrangedSubview(&label(mtm, &p.subtitle, false));
+    stack.addArrangedSubview(&label(mtm, &p.subheading, false));
     stack.addArrangedSubview(&label(mtm, main, false));
 
     let bar = NSProgressIndicator::new(mtm);

@@ -15,7 +15,7 @@ members = [
 # pre-1.0 ceiling): micro for fixes, copy and refactors; minor for a new
 # CLI flag, a new dialog, or a launcher-runtime feature; and the major
 # stays 0 until the maintainer declares snug finished.
-version = "0.12.3"
+version = "0.12.5"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"

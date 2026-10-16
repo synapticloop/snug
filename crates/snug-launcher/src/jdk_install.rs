@@ -1714,7 +1714,7 @@ fn run_one_install_attempt(
 
     let dlg = dialogs::dialogs();
     let progress_main = dialogs::fill(
-        dlg.jdk_install.progress.main.as_str(),
+        dlg.jdk_install.progress.content.as_str(),
         &[
             ("version", metadata.version.as_str()),
             (

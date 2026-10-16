@@ -90,15 +90,11 @@ pub unsafe fn show(
 ) -> PromptChoice {
 	let size_mb_str = size_mb.to_string();
 
-	// Substitute placeholders in `content` and `expanded`, then
-	// concatenate. The expanded body has no toggle — it's always
-	// visible. Newlines in the TOML `"""..."""` strings are
-	// preserved verbatim.
-	let content = format!(
-		"{}\n\n{}",
-		substitute(&prompt.content, version, &size_mb_str, sha256),
-		substitute(&prompt.expanded, version, &size_mb_str, sha256),
-	);
+	// `content` is the whole body now. It used to be assembled here
+	// from a `content` + an `expanded` pair; the baseline carries the
+	// digest and the JDK explainer in the one value, joined by literal
+	// `\n\n` escapes, so the shape matches every other dialog.
+	let content = substitute(&prompt.content, version, &size_mb_str, sha256);
 
 	let download_label = substitute(&prompt.button_download, version, &size_mb_str, sha256);
 
@@ -118,15 +114,19 @@ pub unsafe fn show(
 			parent,
 			&modal_window::ModalDialog {
 				title: prompt.title.as_str(),
-				heading: prompt.main.as_str(),
-				subheading: "",
+				heading: prompt.heading.as_str(),
+				subheading: prompt.subheading.as_str(),
 				content: &content,
-				info_icon: modal_window::InfoIcon::Warning,
-				info_heading: None,
-				info_subtext: None,
-				// No info box on this dialog; the catalog key exists so
-				// adopting the third line is a one-word change.
-				info_subtext_2: None,
+				// The info box is populated from this dialog's own catalog keys, like
+				// every other member of the family. There is no module
+				// default any more: what used to fill these `None`s
+				// was "What happened?" / "You can try again, or visit
+				// the download page manually." -- retry advice about
+				// an escape route this dialog does not offer.
+				info_icon: modal_window::InfoIcon::Info,
+				info_heading: Some(prompt.info_heading.as_str()),
+				info_subtext: Some(prompt.info_subtext.as_str()),
+				info_subtext_2: Some(prompt.info_subtext_2.as_str()),
 				buttons: &buttons,
 				mascot_hbitmap,
 				link_url: None,
