@@ -919,4 +919,124 @@ mod tests {
              {unreferenced:?}"
         );
     }
+
+    /// The checked-in translation bundles must track the baseline.
+    ///
+    /// `test/localisations/*.txt` are hand-maintained copies of the built-in
+    /// English, not fixtures anything reads at runtime — they exist so a
+    /// bundle can be dropped into `--localization <path>` and eyeballed.
+    /// Nothing compared them, which is how `fr` and `de` drifted a full
+    /// release behind (still telling users to visit adoptium.net) without
+    /// anything going red. Every bundle in the directory is checked, so
+    /// adding `es.txt` is covered the day it lands rather than the day
+    /// someone remembers.
+    ///
+    /// Deliberately only the two things a machine can judge: the key set
+    /// and the placeholder set. Whether a translation is *accurate* needs
+    /// someone who reads the language, and that is not attempted here.
+    ///
+    /// Placeholder drift is the half that bites. `fill` leaves unknown
+    /// placeholders as-is by design — "so a typo doesn't silently swallow
+    /// text" — so a bundle carrying `{major}` for a key the baseline no
+    /// longer supplies `major` for renders a literal `{major}` in a dialog.
+    /// And it renders nothing at all until someone tidies the call site,
+    /// long after the drift appeared. Equality is checked in both
+    /// directions: a bundle *missing* a slot the baseline has is the
+    /// quieter failure, reading as a silently wrong sentence with no braces
+    /// to give it away.
+    ///
+    /// The scanner itself is `snug_format::placeholders`, shared with the
+    /// builder's build-time warning — one definition of "which slots does
+    /// this value use", so the test and the warning cannot disagree about
+    /// what a placeholder even is.
+    #[test]
+    fn the_checked_in_bundles_track_the_baseline() {
+        use std::collections::BTreeMap;
+        use std::path::{Path, PathBuf};
+
+        let slots = snug_format::placeholders;
+
+        let baseline_bundle =
+            Localization::parse(DEFAULT_TAG, DEFAULT_EN_TEXT).expect("built-in baseline parses");
+        let baseline: BTreeMap<&str, &str> = baseline_bundle
+            .entries
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test/localisations");
+        let mut paths: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .unwrap_or_else(|e| panic!("reading {}: {e}", dir.display()))
+            .map(|e| e.expect("dir entry").path())
+            .filter(|p| {
+                let n = p.file_name().unwrap_or_default().to_string_lossy();
+                n.starts_with("snug-localisations.") && n.ends_with(".txt")
+            })
+            .collect();
+        // Sorted so a failure names the same bundle first every run.
+        paths.sort();
+
+        let mut checked = 0usize;
+        for path in &paths {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            let tag = name
+                .trim_start_matches("snug-localisations.")
+                .trim_end_matches(".txt")
+                .to_string();
+            let text = std::fs::read_to_string(path)
+                .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+            let parsed =
+                Localization::parse(&tag, &text).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let copy: BTreeMap<&str, &str> =
+                parsed.entries.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+
+            let missing: Vec<&str> = baseline
+                .keys()
+                .filter(|k| !copy.contains_key(*k))
+                .copied()
+                .collect();
+            assert!(
+                missing.is_empty(),
+                "{name} is missing {} baseline key(s), so end users fall back to \
+                 English for them: {missing:?}",
+                missing.len()
+            );
+            let extra: Vec<&str> = copy
+                .keys()
+                .filter(|k| !baseline.contains_key(*k))
+                .copied()
+                .collect();
+            assert!(
+                extra.is_empty(),
+                "{name} has {} key(s) the baseline does not define, so nothing will \
+                 ever look them up: {extra:?}",
+                extra.len()
+            );
+
+            let mismatched: Vec<String> = baseline
+                .iter()
+                .filter_map(|(k, v)| {
+                    let want = slots(v);
+                    let got = slots(copy[*k]);
+                    (want != got).then(|| format!("\n    {k}: baseline {want:?} vs {got:?}"))
+                })
+                .collect();
+            assert!(
+                mismatched.is_empty(),
+                "{name} disagrees with the baseline on {} placeholder set(s):{}\n  \
+                 A slot the baseline dropped renders as literal `{{name}}` once the call \
+                 site stops supplying it. A slot it gained leaves the sentence silently \
+                 wrong, with no braces to give it away.",
+                mismatched.len(),
+                mismatched.concat()
+            );
+            checked += 1;
+        }
+        assert!(
+            checked > 0,
+            "no snug-localisations.*.txt found in {} — the drift this guards against \
+             would be invisible again",
+            dir.display()
+        );
+    }
 }

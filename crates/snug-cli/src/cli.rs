@@ -111,8 +111,10 @@ fn validate_cache_dir(s: &str) -> Result<PathBuf, String> {
                   \n\
                   Each `--localization your-locale.txt` you pass is embedded in the\n\
                   launcher alongside the built-in English baseline; the user's Windows\n\
-                  UI language picks the right bundle at runtime. See README and the\n\
-                  `snug-localisations.en.txt` baseline for the full key inventory.\n\n",
+                  UI language picks the right bundle at runtime. Bundles must match the\n\
+                  baseline in both keys and `{placeholders}`; snug warns at build time\n\
+                  when they disagree. Run `snug --list-tokens` for the full placeholder\n\
+                  contract, or scaffold a starter bundle with `snug --init-localizations`.\n",
     // The brief uses `--version <VER>` to set the application version,
     // which clashes with clap's auto-generated `--version` flag. We
     // disable the auto-version and treat our `--version` as the app
@@ -405,6 +407,26 @@ pub struct Cli {
     /// that don't pass this flag.
     #[arg(long = "find-main", help_heading = "Build behaviour")]
     pub find_main: bool,
+
+    /// Print the placeholder (`{token}`) contract for the built-in
+    /// English baseline: every key, which tokens its value uses, and
+    /// every distinct token in one list.
+    ///
+    /// A bundle's keys are only half of what has to match; the other
+    /// half is the `{version}` / `{size_mb}` / `{attempt}` slots inside
+    /// each value. Nothing documented that outside the English file, so
+    /// authoring a translation meant reading 107 lines and spotting the
+    /// braces by eye.
+    ///
+    /// Diagnostic, like `--find-main`: reads only the compiled-in
+    /// baseline, touches no JAR and no options file, writes nothing, and
+    /// cannot fail a build. Runs in microseconds with no build context
+    /// at all — `snug --list-tokens` is the whole invocation.
+    ///
+    /// The build-time counterpart is the placeholder warning snug emits
+    /// for `--localization` bundles that disagree with the baseline.
+    #[arg(long = "list-tokens", help_heading = "CLI tooling")]
+    pub list_tokens: bool,
 
     /// Print snug's own version (from `Cargo.toml`) and exit.
     ///

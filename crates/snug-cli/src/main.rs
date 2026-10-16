@@ -99,6 +99,15 @@ fn run() -> Result<()> {
         return snug_cli::find_main::run(&cli);
     }
 
+    // `--list-tokens` is the same shape of diagnostic and is handled in
+    // the same place: print, exit. It reads only the compiled-in
+    // baseline, so it needs no JAR — which is why it has to sit above
+    // the no-input bail rather than after it, or `snug --list-tokens`
+    // would answer "no input JAR" to a question that needed none.
+    if cli.list_tokens {
+        return snug_cli::list_tokens::run();
+    }
+
     // `--init-localizations-tag` carries a value, so unlike the
     // boolean modifiers it can't quietly do nothing: reaching here
     // means the user passed a locale without asking to scaffold one,

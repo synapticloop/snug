@@ -37,6 +37,7 @@
 //! `SnugPayload` sees the same shape.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
 /// BCP 47 tag of the built-in English baseline bundle.
 pub const DEFAULT_EN_TAG: &str = "en";
@@ -220,6 +221,47 @@ fn is_valid_key(key: &str) -> bool {
         })
 }
 
+/// The placeholder names a value uses — deduplicated and sorted.
+///
+/// Sorted so two values compare equal regardless of the order their
+/// slots appear in, which is what makes it usable as a drift check:
+/// "does this translation use the same slots the English does?" has to
+/// be an order-independent question, or a reworded sentence reports a
+/// mismatch it doesn't have.
+///
+/// Only `{name}` counts, where `name` is ASCII alphanumeric or `_`. A
+/// brace pair whose contents are not identifier-shaped is skipped
+/// **entirely**, not truncated to its identifier prefix: the grammar
+/// documents `{name:.2}`-style format specifiers as unsupported, and
+/// `fill` does a literal replace per supplied argument, so `{name:.2}`
+/// is *not* substituted by `name`. Calling it a `name` placeholder
+/// would claim the slot resolves when it actually renders literally in
+/// a dialog — the precise failure this function exists to detect.
+/// Skipping it keeps that failure visible.
+///
+/// Slicing is by byte, and that is safe here: `{` and `}` are ASCII, so
+/// every index this cuts at is necessarily a character boundary. A
+/// multi-byte UTF-8 sequence can never be split, because its
+/// continuation bytes are >= 0x80 and match neither delimiter.
+pub fn placeholders(value: &str) -> BTreeSet<&str> {
+    let mut out = BTreeSet::new();
+    let mut rest = value;
+    while let Some(open) = rest.find('{') {
+        let after = &rest[open + 1..];
+        let close = match after.find('}') {
+            Some(c) => c,
+            // An unterminated `{` is literal text, not a placeholder.
+            None => break,
+        };
+        let name = &after[..close];
+        if !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            out.insert(name);
+        }
+        rest = &after[close + 1..];
+    }
+    out
+}
+
 // ===========================================================================
 //  Locating bundle files on disk
 // ===========================================================================
@@ -341,6 +383,73 @@ pub fn discover_localization_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- placeholders() ----
+
+    #[test]
+    fn placeholders_are_sorted_and_deduplicated() {
+        // Sorting and dedup are what make this usable as a drift check:
+        // two values with the same slots must compare equal no matter how
+        // their sentences are ordered.
+        assert_eq!(
+            placeholders("{version} needs {size_mb} MB, not {version}"),
+            BTreeSet::from(["size_mb", "version"])
+        );
+    }
+
+    #[test]
+    fn a_value_with_no_braces_has_no_placeholders() {
+        assert!(placeholders("Application failed to launch - Snug").is_empty());
+    }
+
+    #[test]
+    fn an_unsupported_format_specifier_is_not_mistaken_for_a_name() {
+        // `{name:.2}` is documented as unsupported, and the launcher's
+        // `fill` does a literal replace per supplied argument — so
+        // `{name:.2}` is NOT substituted by `name`. Reporting it as a
+        // placeholder would suggest the slot resolves when it renders
+        // literally in a dialog, which is exactly the bug this check
+        // exists to catch. Skipped entirely, which is the truth.
+        assert_eq!(placeholders("{name:.2} of {n}"), BTreeSet::from(["n"]));
+        assert!(placeholders("{name:.2}").is_empty());
+    }
+
+    #[test]
+    fn an_unterminated_brace_is_literal_text() {
+        assert!(placeholders("a { brace").is_empty());
+        assert!(placeholders("{}").is_empty());
+    }
+
+    #[test]
+    fn placeholders_survive_multibyte_text() {
+        // Byte slicing next to `{`/`}` must never split a UTF-8 sequence.
+        // If it did, this would panic rather than return a set.
+        assert_eq!(
+            placeholders("Größe: {size_mb} MB —fertig {version}"),
+            BTreeSet::from(["size_mb", "version"])
+        );
+    }
+
+    #[test]
+    fn every_placeholder_in_the_shipped_baseline_is_identifier_shaped() {
+        // If this fails, a bundle author reading `--list-tokens` would be
+        // shown a token they cannot usefully write into their translation.
+        let bundle = Localization::parse(DEFAULT_EN_TAG, DEFAULT_EN_TEXT).expect("baseline parses");
+        let odd: Vec<String> = bundle
+            .entries
+            .iter()
+            .filter_map(|(k, v)| {
+                let raw: Vec<&str> = v
+                    .match_indices('{')
+                    .filter_map(|(i, _)| v[i + 1..].find('}').map(|c| &v[i + 1..i + 1 + c]))
+                    .collect();
+                let named: Vec<&&str> =
+                    raw.iter().filter(|n| placeholders(v).contains(*n)).collect();
+                (raw.len() != named.len()).then(|| format!("{k}: {raw:?}"))
+            })
+            .collect();
+        assert!(odd.is_empty(), "unrecognised brace contents in the baseline: {odd:?}");
+    }
 
     #[test]
     fn parses_minimal_bundle() {

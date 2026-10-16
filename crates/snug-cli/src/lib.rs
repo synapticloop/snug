@@ -9,6 +9,7 @@ pub mod cli;
 pub mod find_main;
 pub mod init_localizations;
 pub mod init_options;
+pub mod list_tokens;
 pub mod localization;
 pub mod manifest;
 pub mod macos_bundle;

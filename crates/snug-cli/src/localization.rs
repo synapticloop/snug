@@ -35,6 +35,7 @@
 //! the build still succeeds (the launcher falls back to the built-in
 //! English for any key the user's bundle doesn't define).
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
@@ -193,6 +194,7 @@ pub fn collect(user_paths: &[PathBuf]) -> Result<Vec<Localization>> {
     //    back to the built-in English for those — but make it loud so
     //    the user notices.
     warn_on_missing_keys(&out);
+    warn_on_placeholder_drift(&out);
 
     Ok(out)
 }
@@ -255,6 +257,102 @@ fn warn_on_missing_keys(bundles: &[Localization]) {
         eprintln!(
             "snug:   (end users will see the built-in English text for these keys; \
              update the bundle to localise them)"
+        );
+    }
+}
+
+/// Emit a stderr warning for every key whose *placeholder set* in a
+/// user bundle disagrees with the built-in English baseline.
+///
+/// Advisory for the same reason as [`warn_on_missing_keys`] — the build
+/// still succeeds — but this one is the check that was missing, and the
+/// failure it catches is nastier than a missing key. A missing key
+/// shows up as English text in a dialog, which is visibly wrong. A
+/// stale placeholder shows up as *nothing at all*: the launcher
+/// substitutes by literal replace and leaves unknown slots alone, so a
+/// bundle carrying `{version}` for a key the baseline no longer passes
+/// `version` for renders perfectly — right up until someone tidies the
+/// corresponding call site, at which point the user sees `{version}`
+/// in a dialog, possibly days later and in a release nobody re-tested.
+///
+/// The reverse direction is quieter still: a bundle that dropped a slot
+/// the baseline still has is not broken, just *missing a fact*, and no
+/// warning anywhere would mention it. Both are reported.
+///
+/// Sets are compared sorted and deduplicated, so a translation that
+/// reorders or repeats its slots is not flagged. Keys the bundle does
+/// not define are skipped here — [`warn_on_missing_keys`] already
+/// covers those, and reporting them twice would just be noise.
+fn warn_on_placeholder_drift(bundles: &[Localization]) {
+    let baseline = &bundles[0];
+    let user_bundles = &bundles[1..];
+    if user_bundles.is_empty() {
+        return;
+    }
+    let baseline_slots: std::collections::HashMap<&str, BTreeSet<&str>> = baseline
+        .entries
+        .iter()
+        .map(|(k, v)| (k.as_str(), snug_format::placeholders(v)))
+        .collect();
+
+    for bundle in user_bundles {
+        let drift: Vec<(&str, BTreeSet<&str>, BTreeSet<&str>)> = bundle
+            .entries
+            .iter()
+            .filter_map(|(k, v)| {
+                let want = baseline_slots.get(k.as_str())?;
+                let got = snug_format::placeholders(v);
+                (want != &got).then_some((k.as_str(), want.clone(), got))
+            })
+            .collect();
+        if drift.is_empty() {
+            continue;
+        }
+        eprintln!(
+            "snug: warning: localization file `{}` (tag `{}`) uses different placeholders \
+             than the built-in English baseline on {} key(s):",
+            bundle
+                .entries
+                .first()
+                .map(|_| bundle.tag.as_str())
+                .unwrap_or("?"),
+            bundle.tag,
+            drift.len(),
+        );
+        for (key, want, got) in &drift {
+            let format = |set: &BTreeSet<&str>| {
+                if set.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    set.iter().map(|s| format!("{{{s}}}")).collect::<Vec<_>>().join(" ")
+                }
+            };
+            let (extra, dropped): (Vec<&&str>, Vec<&&str>) = (
+                got.difference(want).collect(),
+                want.difference(got).collect(),
+            );
+            let mut notes: Vec<String> = Vec::new();
+            if !extra.is_empty() {
+                notes.push(format!(
+                    "not in the baseline, so nothing will fill them and they print literally: \
+                     {}",
+                    extra.iter().map(|s| format!("{{{s}}}")).collect::<Vec<_>>().join(" ")
+                ));
+            }
+            if !dropped.is_empty() {
+                notes.push(format!(
+                    "present in the baseline but missing here, so the translated sentence \
+                     silently loses that value: {}",
+                    dropped.iter().map(|s| format!("{{{s}}}")).collect::<Vec<_>>().join(" ")
+                ));
+            }
+            eprintln!("snug:   - {key}: baseline {}, bundle {}", format(want), format(got));
+            for note in notes {
+                eprintln!("snug:       {note}");
+            }
+        }
+        eprintln!(
+            "snug:   (run `snug --list-tokens` for the full baseline contract)"
         );
     }
 }

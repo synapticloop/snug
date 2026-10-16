@@ -538,6 +538,58 @@ use `{name}` placeholders (no `{name:.spec}` formatters — apply
 formatting to values in Rust before substitution). Unknown placeholders
 are left intact so a typo never silently swallows text.
 
+### Placeholders are part of the contract
+
+A bundle has to match the baseline in **two** ways: the same keys, and
+the same `{placeholders}` inside each value. Matching keys is what the
+missing-key warning checks; matching placeholders is its own failure
+mode, and a nastier one.
+
+```console
+$ snug --list-tokens
+snug: localisation inventory for the built-in `en` baseline
+      107 keys, 43 carry placeholders, 26 distinct tokens
+...
+  jdk_install.prompt.content  {size_mb, version}
+  jdk_install.retry.subheading  {attempt, max_attempts}
+  launcher.error.content  {error}
+```
+
+`snug --list-tokens` prints that whole table offline — no JAR, no
+options file, no build. `snug --init-localizations --init-localizations-tag
+de` then scaffolds a bundle whose values already carry the right slots,
+so you translate rather than reconstruct.
+
+Why the care: the launcher substitutes by literal replace and leaves
+unknown slots alone. A bundle that keeps `{version}` for a key that
+dropped it renders perfectly, right up until the matching call site
+stops passing `version` — and *then* the end user sees `{version}` in a
+dialog. Nothing goes red in between. So `snug` warns at build time:
+
+```console
+$ snug App.jar --localization localisations/
+snug: warning: localization file `fr` (tag `fr`) uses different placeholders
+than the built-in English baseline on 2 key(s):
+snug:   - jdk_install.progress.pct_label: baseline {pct}, bundle (none)
+snug:       present in the baseline but missing here, so the translated sentence
+             silently loses that value: {pct}
+snug:   - jdk_install.retry.subheading: baseline {attempt} {max_attempts},
+         bundle {attempt} {max_attempts} {version}
+snug:       not in the baseline, so nothing will fill them and they print
+             literally: {version}
+snug:   (run `snug --list-tokens` for the full baseline contract)
+```
+
+Advisory, like the missing-key warning — the build still succeeds,
+because the launcher falls back to English and a half-translated bundle
+is better than a failed build. Both directions are reported, since the
+silent one (a slot the baseline has and the translation dropped) is the
+one that produces a sentence missing a fact with nothing to look wrong.
+
+The `err.*` and several `jdk.err.*` keys use positional `{0}` rather
+than a named slot; those are substituted by index, not name, and a
+translation keeps its `{0}` in the same position.
+
 Because the chrome is in the same bundle as the errors, `--localization`
 translates the whole window, not just its contents — a localised build
 gets a translated title *and* a translated "Cancel" button, and an app

@@ -37,7 +37,7 @@ pub use config::{
 pub use embedded::{SnugEmbedded, FORMAT_VERSION, MAGIC};
 pub use error::FormatError;
 pub use localization::{
-    discover_localization_files, expected_filename, tag_from_path, Localization,
+    discover_localization_files, expected_filename, placeholders, tag_from_path, Localization,
     LocalizationLoadError, LocalizationParseError, DEFAULT_EN_TAG, DEFAULT_EN_TEXT,
 };
 pub use payload::{EmbeddedFile, SnugPayload};
