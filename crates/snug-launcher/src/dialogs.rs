@@ -223,6 +223,100 @@ pub struct GenericDialogs {
     pub info_dialog_continue: String,
 }
 
+/// The six fields every launcher dialog reads out of the
+/// localization catalog.
+///
+/// All six catalog structs -- `InstallPromptDialog`,
+/// `MetadataFailedDialog`, `ProgressDialog`, `FailureDialog`,
+/// `RetryDialog` and `LauncherErrorDialogs` -- declare these under
+/// these exact names, because every dialog in the family renders the
+/// same frame: title bar, heading, subheading, and the three-line
+/// light-blue info box.
+///
+/// It exists so the override-or-catalog fallback has one
+/// implementation instead of one per wrapper module, and so a
+/// renderer can ask for "this dialog's heading" without caring which
+/// of the six it is holding.
+pub trait DialogCopy {
+    /// Title-bar text.
+    fn title(&self) -> &str;
+    /// Heading -- the large bold line at the top of the body.
+    fn heading(&self) -> &str;
+    /// Subheading -- the smaller grey line below the heading.
+    fn subheading(&self) -> &str;
+    /// Info-box heading line.
+    fn info_heading(&self) -> &str;
+    /// Info-box subtext, first line.
+    fn info_subtext(&self) -> &str;
+    /// Info-box subtext, optional second line. Empty means the line
+    /// is not painted at all.
+    fn info_subtext_2(&self) -> &str;
+}
+
+/// Implement [`DialogCopy`] for a catalog struct by field name.
+///
+/// A macro rather than six hand-written impls because the six are
+/// literally identical. A hand-written impl that forgot a method would
+/// fail to compile, which is correct but noisier than the problem
+/// deserves.
+macro_rules! impl_dialog_copy {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl DialogCopy for $ty {
+                fn title(&self) -> &str { &self.title }
+                fn heading(&self) -> &str { &self.heading }
+                fn subheading(&self) -> &str { &self.subheading }
+                fn info_heading(&self) -> &str { &self.info_heading }
+                fn info_subtext(&self) -> &str { &self.info_subtext }
+                fn info_subtext_2(&self) -> &str { &self.info_subtext_2 }
+            }
+        )+
+    };
+}
+
+impl_dialog_copy!(
+    InstallPromptDialog,
+    MetadataFailedDialog,
+    ProgressDialog,
+    FailureDialog,
+    RetryDialog,
+    LauncherErrorDialogs,
+);
+
+/// Caller copy wins; an empty string means "use the catalog's", and
+/// the catalog's own empty string means "render nothing at all".
+///
+/// This is the convention the window wrappers used to spell out by
+/// hand, nine times over, as a
+/// `map(str::to_string).filter(|s| !s.is_empty()).or_else(...)` chain.
+/// Borrowing instead of cloning also drops an allocation per info
+/// line per dialog.
+///
+/// Note there is deliberately no module-level default copy. An absent
+/// line means the dialog did not ask for one, and inventing "What
+/// happened?" on its behalf is worse than an absent box: an absent
+/// box is a design, and invented copy reads as an oversight.
+pub fn resolve<'a>(caller: Option<&'a str>, catalog: &'a str) -> Option<&'a str> {
+    match caller {
+        Some(s) if !s.is_empty() => Some(s),
+        _ if !catalog.is_empty() => Some(catalog),
+        _ => None,
+    }
+}
+
+/// [`resolve`] for a field that is never optional.
+///
+/// Heading and subheading always render -- there is no "absent" state
+/// to hand back -- so an empty caller string falls through to the
+/// catalog rather than painting nothing.
+pub fn pick<'a>(caller: &'a str, catalog: &'a str) -> &'a str {
+    if caller.is_empty() {
+        catalog
+    } else {
+        caller
+    }
+}
+
 /// The assembled copy plus the [`crate::localize::generation`] it was
 /// built from.
 ///

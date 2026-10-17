@@ -5,9 +5,10 @@
 //! doesn't change.
 //!
 //! All layout / paint / WndProc logic now lives in
-//! [`crate::modal_window`] — this module only maps the two-button
-//! `MetadataFailedDialog` onto the modal `&[Button]` slice and
-//! resolves the per-dialog TOML fallback for info copy.
+//! [`crate::modal_window`], and the shared frame in [`crate::frame`].
+//! This module only maps the two-button `MetadataFailedDialog` onto
+//! the modal `&[Button]` slice and resolves the caller-copy-or-catalog
+//! choice via [`crate::dialogs::resolve`].
 
 #![cfg(windows)]
 
@@ -28,11 +29,11 @@ pub struct MetadataFailedDialog<'a> {
     pub subheading: &'a str,
     pub error_content: &'a str,
     /// Optional override for the info-box heading. `None` ⇒
-    /// `[runtime.metadata_failed].info_heading` from
-    /// the localization bundle, falling back to the module default.
+    /// `[runtime.metadata_failed].info_heading` from the localization
+    /// bundle.
     pub info_heading: Option<&'a str>,
-    /// Optional override for the info-box subtext. `None` ⇒ TOML,
-    /// falling back to the module default.
+    /// Optional override for the info-box subtext. `None` ⇒ the
+    /// bundle's `info_subtext`.
     pub info_subtext: Option<&'a str>,
     /// Optional third info-box line, same override-or-catalog
     /// resolution as info_subtext above.
@@ -55,53 +56,9 @@ pub struct MetadataFailedDialog<'a> {
 /// `NULL` or a live `HWND` owned by that thread, and with any non-zero
 /// `mascot_hbitmap` a live handle that outlives the call.
 pub unsafe fn show(parent: HWND, dlg: MetadataFailedDialog<'_>) -> i32 {
-    let dialogs = crate::dialogs::dialogs();
-    let mfd = &dialogs.runtime.metadata_failed;
+    use crate::dialogs::{dialogs, pick, resolve, DialogCopy};
 
-    let info_heading = dlg
-        .info_heading
-        .map(str::to_string)
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            if mfd.info_heading.is_empty() {
-                None
-            } else {
-                Some(mfd.info_heading.clone())
-            }
-        });
-    let info_subtext = dlg
-        .info_subtext
-        .map(str::to_string)
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            if mfd.info_subtext.is_empty() {
-                None
-            } else {
-                Some(mfd.info_subtext.clone())
-            }
-        });
-
-    let info_subtext_2 = dlg
-        .info_subtext_2
-        .map(str::to_string)
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            if mfd.info_subtext_2.is_empty() {
-                None
-            } else {
-                Some(mfd.info_subtext_2.clone())
-            }
-        });
-    let heading = if dlg.heading.is_empty() {
-        mfd.heading.as_str()
-    } else {
-        dlg.heading
-    };
-    let subheading = if dlg.subheading.is_empty() {
-        mfd.subheading.as_str()
-    } else {
-        dlg.subheading
-    };
+    let mfd = &dialogs().runtime.metadata_failed;
 
     let buttons = [
         modal_window::Button::Primary(dlg.primary_label),
@@ -113,13 +70,13 @@ pub unsafe fn show(parent: HWND, dlg: MetadataFailedDialog<'_>) -> i32 {
             parent,
             &modal_window::ModalDialog {
                 title: dlg.title,
-                heading,
-                subheading,
+                heading: pick(dlg.heading, mfd.heading()),
+                subheading: pick(dlg.subheading, mfd.subheading()),
                 content: dlg.error_content,
                 info_icon: modal_window::InfoIcon::Warning,
-                info_heading: info_heading.as_deref(),
-                info_subtext: info_subtext.as_deref(),
-                info_subtext_2: info_subtext_2.as_deref(),
+                info_heading: resolve(dlg.info_heading, mfd.info_heading()),
+                info_subtext: resolve(dlg.info_subtext, mfd.info_subtext()),
+                info_subtext_2: resolve(dlg.info_subtext_2, mfd.info_subtext_2()),
                 buttons: &buttons,
                 mascot_hbitmap: dlg.mascot_hbitmap,
                 link_url: None,

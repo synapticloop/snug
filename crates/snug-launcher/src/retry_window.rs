@@ -4,9 +4,10 @@
 //! [`crate::jdk_install::show_retry_dialog`] doesn't change.
 //!
 //! All layout / paint / WndProc logic now lives in
-//! [`crate::modal_window`] — this module only maps the two-button
-//! `RetryDialog` onto the modal `&[Button]` slice and resolves the
-//! per-dialog TOML fallback for info copy.
+//! [`crate::modal_window`], and the shared frame in [`crate::frame`].
+//! This module only maps the two-button `RetryDialog` onto the modal
+//! `&[Button]` slice and resolves the caller-copy-or-catalog choice
+//! via [`crate::dialogs::resolve`].
 
 #![cfg(windows)]
 
@@ -45,53 +46,9 @@ pub struct RetryDialog<'a> {
 /// `NULL` or a live `HWND` owned by that thread, and with any non-zero
 /// `mascot_hbitmap` a live handle that outlives the call.
 pub unsafe fn show(parent: HWND, dlg: RetryDialog<'_>) -> i32 {
-    let dialogs = crate::dialogs::dialogs();
-    let retry = &dialogs.runtime.retry;
+    use crate::dialogs::{dialogs, pick, resolve, DialogCopy};
 
-    let info_heading = dlg
-        .info_heading
-        .map(str::to_string)
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            if retry.info_heading.is_empty() {
-                None
-            } else {
-                Some(retry.info_heading.clone())
-            }
-        });
-    let info_subtext = dlg
-        .info_subtext
-        .map(str::to_string)
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            if retry.info_subtext.is_empty() {
-                None
-            } else {
-                Some(retry.info_subtext.clone())
-            }
-        });
-
-    let info_subtext_2 = dlg
-        .info_subtext_2
-        .map(str::to_string)
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            if retry.info_subtext_2.is_empty() {
-                None
-            } else {
-                Some(retry.info_subtext_2.clone())
-            }
-        });
-    let heading = if dlg.heading.is_empty() {
-        retry.heading.as_str()
-    } else {
-        dlg.heading
-    };
-    let subheading = if dlg.subheading.is_empty() {
-        retry.subheading.as_str()
-    } else {
-        dlg.subheading
-    };
+    let retry = &dialogs().runtime.retry;
 
     let buttons = [
         modal_window::Button::Primary(dlg.primary_label),
@@ -103,13 +60,13 @@ pub unsafe fn show(parent: HWND, dlg: RetryDialog<'_>) -> i32 {
             parent,
             &modal_window::ModalDialog {
                 title: dlg.title,
-                heading,
-                subheading,
+                heading: pick(dlg.heading, retry.heading()),
+                subheading: pick(dlg.subheading, retry.subheading()),
                 content: dlg.error_content,
                 info_icon: modal_window::InfoIcon::Error,
-                info_heading: info_heading.as_deref(),
-                info_subtext: info_subtext.as_deref(),
-                info_subtext_2: info_subtext_2.as_deref(),
+                info_heading: resolve(dlg.info_heading, retry.info_heading()),
+                info_subtext: resolve(dlg.info_subtext, retry.info_subtext()),
+                info_subtext_2: resolve(dlg.info_subtext_2, retry.info_subtext_2()),
                 buttons: &buttons,
                 mascot_hbitmap: dlg.mascot_hbitmap,
                 link_url: None,

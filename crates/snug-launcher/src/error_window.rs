@@ -73,98 +73,43 @@ pub struct ErrorDialog<'a> {
 /// `NULL` or a live `HWND` owned by that thread, and with any non-zero
 /// `mascot_hbitmap` a live handle that outlives the call.
 pub unsafe fn show(parent: HWND, dlg: ErrorDialog<'_>) -> i32 {
-    let dialogs = crate::dialogs::dialogs();
-    let failure = &dialogs.runtime.failure;
+    use crate::dialogs::{pick, resolve, DialogCopy};
 
-    // Resolve per-dialog info / button fallback (caller → TOML →
-    // module default). `modal_window::show` handles an empty `None`
-    // by using its own defaults; here we substitute TOML-derived
-    // values up-front so the per-dialog copy from
-    // `[runtime.failure]` is what the user actually sees.
-    let info_heading = dlg
-        .info_heading
-        .map(str::to_string)
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            if failure.info_heading.is_empty() {
-                None
-            } else {
-                Some(failure.info_heading.clone())
-            }
-        });
-    let info_subtext = dlg
-        .info_subtext
-        .map(str::to_string)
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            if failure.info_subtext.is_empty() {
-                None
-            } else {
-                Some(failure.info_subtext.clone())
-            }
-        });
-    let button_label: Option<String> = dlg
-        .button_label
-        .map(str::to_string)
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            if failure.button_label.is_empty() {
-                None
-            } else {
-                Some(failure.button_label.clone())
-            }
-        });
+    let all = crate::dialogs::dialogs();
+    let failure = &all.runtime.failure;
 
-    // Heading / subheading use the TOML value when the caller
-    // passes an empty string (the existing convention); content is
-    // always caller-supplied.
-    let heading = if dlg.heading.is_empty() {
-        failure.heading.as_str()
-    } else {
-        dlg.heading
-    };
-    let subheading = if dlg.subheading.is_empty() {
-        failure.subheading.as_str()
-    } else {
-        dlg.subheading
-    };
-
-    // Resolve the single button label once. `unwrap_or_else` keeps the
-    // lifetimes independent — the `&'static str` fallback is only
-    // constructed when needed. There is no module default any more:
-    // an omitted label falls back to this dialog's own catalog key,
-    // which is copy a translator chose rather than copy we invented.
-    let button_label_str: &str = match button_label.as_deref() {
-        Some(s) => s,
-        None => failure.button_label.as_str(),
-    };
+    // Resolve the single button label. There is no module default any
+    // more: an omitted label falls back to this dialog's own catalog
+    // key, which is copy a translator chose rather than copy we
+    // invented.
+    let button_label = pick(
+        dlg.button_label.unwrap_or_default(),
+        failure.button_label.as_str(),
+    );
 
     // The update button sits to the *right* of the dismissal button.
-    // `Primary` is the rightmost slot in `modal_window`'s button row, so
-    // it is the update action and `Secondary` is the dismiss — which
+    // `Primary` is the rightmost slot in `modal_window`'s button row,
+    // so it is the update action and `Secondary` is the dismiss -- which
     // also keeps the two results distinct: `IDYES` opens the browser,
     // `IDCANCEL` (Close / X / Alt+F4) just closes.
     //
     // The old clickable link row above the info box is no longer
     // requested: `link_url` / `link_label` go in as `None` below.
-    let update_url = dlg
-        .update_url
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+    let update_url = dlg.update_url.map(str::trim).filter(|s| !s.is_empty());
     let mut buttons: Vec<modal_window::Button> =
         Vec::with_capacity(if update_url.is_some() { 2 } else { 1 });
     if update_url.is_some() {
         buttons.push(modal_window::Button::Primary(
-            &dialogs.launcher.error.button_update,
+            &all.launcher.error.button_update,
         ));
     }
-    buttons.push(modal_window::Button::Secondary(button_label_str));
+    buttons.push(modal_window::Button::Secondary(button_label));
     if update_url.is_none() {
         // With one button it must be Primary, or a lone button would
         // report `IDCANCEL` and read as a dismissal rather than the
         // dialog's only action.
         buttons.clear();
-        buttons.push(modal_window::Button::Primary(button_label_str));
+        buttons.push(modal_window::Button::Primary(button_label));
     }
 
     unsafe {
@@ -172,13 +117,13 @@ pub unsafe fn show(parent: HWND, dlg: ErrorDialog<'_>) -> i32 {
             parent,
             &modal_window::ModalDialog {
                 title: dlg.title,
-                heading,
-                subheading,
+                heading: pick(dlg.heading, failure.heading()),
+                subheading: pick(dlg.subheading, failure.subheading()),
                 content: dlg.error_content,
                 info_icon: dlg.info_icon,
-                info_heading: info_heading.as_deref(),
-                info_subtext: info_subtext.as_deref(),
-                info_subtext_2: dlg.info_subtext_2,
+                info_heading: resolve(dlg.info_heading, failure.info_heading()),
+                info_subtext: resolve(dlg.info_subtext, failure.info_subtext()),
+                info_subtext_2: resolve(dlg.info_subtext_2, failure.info_subtext_2()),
                 buttons: &buttons,
                 mascot_hbitmap: dlg.mascot_hbitmap,
                 link_url: None,
