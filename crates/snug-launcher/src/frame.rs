@@ -80,10 +80,16 @@ pub(crate) const SUBTITLE_H: i32 = 50;
 /// consumer knows about is how a gap silently appears.
 pub(crate) const BODY_Y: i32 = 108;
 
-/// Height of the band. 88 is set by the modal dialog's four-line body
-/// copy; the progress dialog's body is shorter, and [`BODY_BOTTOM`] is
-/// sized for whichever is taller so the family shares one height.
-pub(crate) const BODY_H: i32 = 88;
+/// Height of the band.
+///
+/// This is the only thing standing between the body copy and the info
+/// box, so it is also the only lever for making the dialog shorter: the
+/// mascot is never the constraint, because the body sits below it. It
+/// was 88, which held four lines of the install prompt's body copy, and
+/// is now 72 -- about a line less. Every dialog in the family got that
+/// shorter, which is the point of the shared band, but the install
+/// prompt is the one that was using the space.
+pub(crate) const BODY_H: i32 = 72;
 
 /// Bottom edge of the body band — the lowest the body may reach.
 pub(crate) const BODY_BOTTOM: i32 = BODY_Y + BODY_H;
@@ -214,8 +220,8 @@ mod tests {
     /// `WINDOW_H`, so these cannot drift — but pinning the number
     /// catches an edit to the stack above that was not meant to change
     /// the overall height.
-    const _: () = assert!(WINDOW_H == 335);
-    const _: () = assert!(INFO_BOX_Y == 212);
+    const _: () = assert!(WINDOW_H == 319);
+    const _: () = assert!(INFO_BOX_Y == 196);
 
     /// The derivations themselves, so a reordering or a dropped term
     /// fails here rather than as a misplaced pixel.

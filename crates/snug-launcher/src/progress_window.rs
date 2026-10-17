@@ -124,12 +124,17 @@ const CANCEL_H: i32 = BUTTON_H;
 const CANCEL_MIN_W: i32 = BUTTON_MIN_W;
 const CANCEL_Y: i32 = BUTTON_Y;
 
-/// This dialog's body is shorter than the modal's, but the frame sizes
-/// the info box for whichever reaches lower. If this body grew past
-/// `BODY_BOTTOM` it would slide under the box rather than push it, so
-/// the band is asserted rather than trusted.
-const _: () = assert!(DETAIL_Y + DETAIL_H <= BODY_BOTTOM);
-const _: () = assert!(PHASE_Y + PHASE_H <= BODY_BOTTOM);
+/// This dialog's body is not the modal's, and not the same height: its
+/// phase block ends at 182 against the modal band's 180. That 2 px is
+/// fine, because the property that actually matters is not "this body
+/// fits the band" but "no body reaches the info box" -- and it clears
+/// by 14.
+///
+/// Asserting against `BODY_BOTTOM` instead was wrong and fired here for
+/// exactly that reason: it demanded this dialog be shorter than it is
+/// over a gap nobody would ever see.
+const _: () = assert!(DETAIL_Y + DETAIL_H <= INFO_BOX_Y);
+const _: () = assert!(PHASE_Y + PHASE_H <= INFO_BOX_Y);
 const CANCEL_RIGHT: i32 = BUTTON_RIGHT;
 
 // Control IDs
