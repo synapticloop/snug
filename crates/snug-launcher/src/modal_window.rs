@@ -64,7 +64,7 @@ use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM}
 use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, CreateCompatibleDC, CreateFontW, CreateRoundRectRgn, CreateSolidBrush, DeleteDC,
     DeleteObject, DrawTextW, DT_EDITCONTROL, DT_WORDBREAK, EndPaint, FillRect, FillRgn, GetTextExtentPoint32W,
-    FW_BOLD, FW_NORMAL,
+    FW_NORMAL,
     FW_SEMIBOLD,
     GetStockObject, GetTextMetricsW, HBRUSH, HDC, HFONT, NULL_BRUSH, PAINTSTRUCT, SelectObject,
     SetBkMode, SetTextColor, TEXTMETRICW, TRANSPARENT,
@@ -86,6 +86,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 use crate::jdk_install::{find_best_icon_hicon, load_exe_main_icon_hicon, mascot_icon_override};
 use crate::log;
+
+use crate::frame::*;
 
 // `SS_*` / `BS_DEFPUSHBUTTON` constants that windows-sys 0.59 doesn't
 // export as named constants. Values from winuser.h — kept here rather
@@ -129,34 +131,10 @@ pub const IDNO_I32: i32 = 7;
 pub const IDCANCEL_I32: i32 = 2;
 
 // ============================================================================
-//  Layout constants — single source of truth
+//  Layout constants — dialog-specific; the shared frame lives in`r`n//  `crate::frame`
 // ============================================================================
 
 const CLASS_NAME: &str = "snug_modal_dialog_v1\0";
-const WINDOW_W: i32 = 640;
-/// Height of the **client** area, and the same value the whole dialog
-/// family uses (`progress_window` mirrors this stack exactly).
-///
-/// Derived upward from the info box rather than hardcoded:
-/// `INFO_BOX_Y` is the anchor both modules share, then the box,
-/// `INFO_TO_BUTTON_GAP`, the button row, and `BOTTOM_PAD`. Change any
-/// one of those and the window follows.
-const WINDOW_H: i32 = INFO_BOX_Y + INFO_BOX_H + INFO_TO_BUTTON_GAP + BUTTON_H + BOTTOM_PAD;
-
-const MARGIN: i32 = 16;
-const MASCOT_X: i32 = MARGIN;
-const MASCOT_Y: i32 = MARGIN;
-const MASCOT_W: i32 = 154;
-const MASCOT_H: i32 = 154;
-
-const TEXT_X: i32 = MASCOT_X + MASCOT_W + MARGIN;
-const TEXT_W: i32 = WINDOW_W - TEXT_X - MARGIN - MARGIN;
-
-const HEADING_Y: i32 = 8;
-const HEADING_H: i32 = 48;
-
-const SUBTITLE_Y: i32 = 50;
-const SUBTITLE_H: i32 = 50;
 
 const CONTENT_Y: i32 = 108;
 const CONTENT_H: i32 = 88;
@@ -179,75 +157,11 @@ fn content_height(has_link: bool) -> i32 {
     }
 }
 
-const INFO_BOX_X: i32 = MARGIN;
-/// Symmetric: the box used to be `WINDOW_W - MARGIN * 3`, which left
-/// twice the left margin as whitespace on the right (16 px in, 32 px
-/// out) because the buttons used to sit inside the box's band. With the
-/// buttons moved to their own row the extra reserve has no owner.
-const INFO_BOX_W: i32 = WINDOW_W - MARGIN * 2;
-/// Where the info box sat before it was pushed down toward the button
-/// row. Named so the offset applied below stays visible rather than
-/// being folded into a magic 228.
-const INFO_BOX_Y_BASE: i32 = 220;
-/// The box moves down by exactly the difference between the two gaps,
-/// so `WINDOW_H` lands on the same value it did before. Deriving it is
-/// what keeps "move the box closer to the buttons" and "do not resize
-/// the dialog" from becoming two edits that can disagree.
-const INFO_BOX_Y: i32 = INFO_BOX_Y_BASE + (BOTTOM_PAD - INFO_TO_BUTTON_GAP);
-/// Height of the light-blue info box. Sized for the heading plus
-/// **two** subtext lines: `INFO_HEADING_Y_OFFSET` .. plus two rows of
-/// `INFO_SUBTEXT_H`, with `INFO_PAD` top and bottom. `WINDOW_H` is
-/// derived from this, so growing the box here grows the dialog.
-const INFO_BOX_H: i32 = 74;
-const INFO_PAD: i32 = 8;
-const INFO_ICON_SIZE: i32 = 16;
-
-const INFO_ICON_Y_OFFSET: i32 = INFO_PAD + 2;
-const INFO_HEADING_Y_OFFSET: i32 = INFO_PAD - 2;
-const INFO_SUBTEXT_Y_OFFSET: i32 = INFO_PAD + 20;
-/// Height reserved for one subtext row. The second line sits directly
-/// below the first, so both are laid out from these two constants
-/// rather than from a second hand-picked Y.
-const INFO_SUBTEXT_H: i32 = 16;
-const INFO_SUBTEXT2_Y_OFFSET: i32 = INFO_SUBTEXT_Y_OFFSET + INFO_SUBTEXT_H + 2;
-const INFO_TEXT_X: i32 = INFO_BOX_X + INFO_PAD + INFO_ICON_SIZE + 28;
-const INFO_TEXT_W: i32 = INFO_BOX_W - (INFO_TEXT_X - INFO_BOX_X) - INFO_PAD;
-
-/// Padding between the button row and the bottom of the window.
-const BOTTOM_PAD: i32 = 16;
-
-/// Gap between the bottom of the info box and the button row.
-///
-/// Deliberately tighter than [`BOTTOM_PAD`]. The box used to sit a full
-/// `BOTTOM_PAD` above the buttons *and* a full `BOTTOM_PAD` below them,
-/// so it floated between two equal gaps and read as detached from both.
-/// Halving the upper gap and pushing the box down by the difference
-/// brings it toward the buttons and leaves `WINDOW_H` untouched.
-const INFO_TO_BUTTON_GAP: i32 = 8;
-
-/// Buttons sit in their own row *below* the info box, right-aligned.
-/// Widths are measured from each label (see `measure_button_width`)
-/// rather than hardcoded, so a translated label of any length fits
-/// without a width table to maintain.
-/// Button captions get a real font of their own rather than the
-/// system default. That is not cosmetic: sizing a button from the
-/// stock GUI font while it *renders* in the themed UI font
-/// under-measures by ~15%, which clipped the longest labels. Applying
-/// and measuring the same HFONT makes the two agree by construction.
-const BUTTON_PT: i32 = 9;
 const BUTTON_WEIGHT: i32 = FW_NORMAL as i32;
-const BUTTON_H: i32 = 25;
 /// Symmetric horizontal padding inside a button, added to the measured
 /// text width.
 const BUTTON_PAD_X: i32 = 20;
-/// Floor, so a two-letter label like `OK` still looks like a button
-/// rather than a sliver.
-const BUTTON_MIN_W: i32 = 80;
 const BUTTON_GAP: i32 = INFO_PAD;
-/// Right edge of the button group, and the leftward step between
-/// buttons.
-const BUTTON_RIGHT: i32 = WINDOW_W - MARGIN;
-const BUTTON_Y: i32 = INFO_BOX_Y + INFO_BOX_H + INFO_TO_BUTTON_GAP;
 
 /// Optional "Check for a newer version" block, painted as **two
 /// stacked rows under the mascot**: the label, then the URL beneath it.
@@ -273,32 +187,12 @@ const LINK_BLOCK_H: i32 = LINK_LABEL_H + LINK_URL_H;
 const LINK_LABEL_Y: i32 = INFO_BOX_Y - LINK_GAP - LINK_BLOCK_H;
 const LINK_URL_Y: i32 = LINK_LABEL_Y + LINK_LABEL_H;
 
-/// Width/height we ask for when loading the EXE icon for the mascot
-/// slot. Asking for 256 selects a detailed source for the 154 px
-/// mascot box rather than enlarging the 32 px title-bar icon.
-const MASCOT_LOAD_CX: i32 = 256;
-const MASCOT_LOAD_CY: i32 = 256;
-
 // ============================================================================
 //  Fonts (per-element)
 // ============================================================================
 
-const FONT_FACE: &str = "Segoe UI\0";
-
-const HEADING_PT: i32 = 22;
-const HEADING_WEIGHT: i32 = FW_SEMIBOLD as i32;
-
-const SUBTITLE_PT: i32 = 14;
-const SUBTITLE_WEIGHT: i32 = FW_NORMAL as i32;
-
 const CONTENT_PT: i32 = 13;
 const CONTENT_WEIGHT: i32 = FW_NORMAL as i32;
-
-const INFO_HEADING_PT: i32 = 12;
-const INFO_HEADING_WEIGHT: i32 = FW_BOLD as i32;
-
-const INFO_SUBTEXT_PT: i32 = 9;
-const INFO_SUBTEXT_WEIGHT: i32 = FW_NORMAL as i32;
 
 // URL portion of the link row — bold + underline. The label portion
 // reuses the body font (`hfont_content`).
@@ -309,8 +203,6 @@ const LINK_URL_WEIGHT: i32 = FW_SEMIBOLD as i32;
 //  Colours (COLORREF = 0x00BBGGRR)
 // ============================================================================
 
-const COLOR_BG: u32 = 0x00FFFFFF;
-const COLOR_SUBTITLE: u32 = 0x005F6368;
 const COLOR_CONTENT: u32 = 0x00303030;
 const COLOR_INFO_BG: u32 = 0x00FEF0E8;
 // Link URL colour — brand blue (`#1A73E8`), identical to
@@ -323,8 +215,6 @@ const COLOR_LINK: u32 = 0x00E8731A;
 // ============================================================================
 //  Corner rounding
 // ============================================================================
-
-const INFO_BOX_CORNER_DIAMETER: i32 = INFO_BOX_H / 4;
 
 // ============================================================================
 //  Default copy (used when caller passes `None`)

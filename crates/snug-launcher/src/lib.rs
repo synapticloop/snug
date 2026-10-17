@@ -26,6 +26,7 @@ pub mod cache;
 pub mod dialogs;
 pub mod error;
 pub mod error_window;
+pub(crate) mod frame;
 pub mod jdk_install;
 pub mod localize;
 pub mod log;

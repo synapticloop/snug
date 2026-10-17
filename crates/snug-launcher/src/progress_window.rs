@@ -48,8 +48,8 @@ use windows_sys::Win32::Graphics::Gdi::{
     AC_SRC_ALPHA, AC_SRC_OVER, AlphaBlend, BeginPaint, BITMAP,
     BLENDFUNCTION, CreateCompatibleDC, CreateFontW,
     CreateRoundRectRgn, CreateSolidBrush, DeleteDC, DeleteObject, EndPaint,
-    FillRect, FillRgn, FW_BOLD, FW_NORMAL, GetObjectW, GetStockObject, HBRUSH, HDC, HBITMAP,
-    HFONT, InvalidateRect, NULL_BRUSH, PAINTSTRUCT, SelectObject, FW_SEMIBOLD, WHITE_BRUSH,
+    FillRect, FillRgn, FW_NORMAL, GetObjectW, GetStockObject, HBRUSH, HDC, HBITMAP,
+    HFONT, InvalidateRect, NULL_BRUSH, PAINTSTRUCT, SelectObject, WHITE_BRUSH,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
@@ -73,6 +73,8 @@ use crate::jdk_install::{
 };
 use crate::log;
 
+use crate::frame::*;
+
 // `SS_*` constants that windows-sys 0.59 doesn't export. Values come
 // from winuser.h — kept here rather than enabling the full
 // `Win32_UI_WindowsAndMessaging` features just for these.
@@ -86,13 +88,6 @@ const SS_LEFTNOWORDWRAP: u32 = 0x000C;
 const WM_SETFONT: u32 = 0x0030;
 const STM_SETICON: u32 = 0x0170;
 
-/// Width/height we ask for when loading the EXE icon for the mascot
-/// slot. Windows ICO files typically contain 16, 32, 48, and 256 px
-/// sizes — asking for 256 selects a detailed source for the 154 px
-/// mascot box rather than enlarging the 32 px title-bar icon.
-const MASCOT_LOAD_CX: i32 = 256;
-const MASCOT_LOAD_CY: i32 = 256;
-
 // ===========================================================================
 //  Layout constants
 // ===========================================================================
@@ -101,29 +96,6 @@ const CLASS_NAME: &str = "snug_progress_dialog_v2\0";
 
 const TIMER_ID: usize = 1;
 const TIMER_MS: u32 = 200;
-
-const WINDOW_W: i32 = 640;
-/// Padding between the button row and the bottom of the window. See
-/// `modal_window` for the full derivation -- the whole family shares
-/// one height, and these constants mirror it exactly.
-const BOTTOM_PAD: i32 = 16;
-/// Gap between the bottom of the info box and the button row. Tighter
-/// than `BOTTOM_PAD` on purpose; see `modal_window::INFO_TO_BUTTON_GAP`.
-const INFO_TO_BUTTON_GAP: i32 = 8;
-const MARGIN: i32 = 16;
-const MASCOT_X: i32 = MARGIN;
-const MASCOT_Y: i32 = MARGIN;
-const MASCOT_W: i32 = 154;
-const MASCOT_H: i32 = 154;
-
-const TEXT_X: i32 = MASCOT_X + MASCOT_W + MARGIN;
-const TEXT_W: i32 = WINDOW_W - TEXT_X - MARGIN - MARGIN;
-
-const HEADING_Y: i32 = 8;
-const HEADING_H: i32 = 48;
-
-const SUBTITLE_Y: i32 = 50;
-const SUBTITLE_H: i32 = 50;
 
 const PROGRESS_X: i32 = TEXT_X;
 const PROGRESS_Y: i32 = 108;
@@ -138,61 +110,20 @@ const PHASE_H: i32 = 50;
 const DETAIL_Y: i32 = 154;
 const DETAIL_H: i32 = 16;
 
-const INFO_BOX_X: i32 = MARGIN;
-/// Symmetric: was `WINDOW_W - MARGIN * 3`, leaving twice the left
-/// margin as whitespace on the right. The buttons no longer sit inside
-/// the box's band, so the extra reserve has no owner.
-const INFO_BOX_W: i32 = WINDOW_W - MARGIN * 2;
-/// The family's shared anchor. The button row hangs below the box and
-/// the window is sized from the stack, so this dialog is exactly the
-/// same height as every `modal_window` dialog.
-const INFO_BOX_Y_BASE: i32 = 220;
-/// The family's shared anchor, offset by the same difference as in
-/// `modal_window` so both dialogs stay pixel-identical in this band.
-/// The button row hangs below the box and the window is sized from the
-/// stack, so this dialog is exactly the same height as every
-/// `modal_window` dialog.
-const INFO_BOX_Y: i32 = INFO_BOX_Y_BASE + (BOTTOM_PAD - INFO_TO_BUTTON_GAP);
-/// Sized for the heading plus **two** subtext lines. Aligned with
-/// modal_window::INFO_BOX_H; see that file for the derivation.
-const INFO_BOX_H: i32 = 74;
-const INFO_PAD: i32 = 8;
-// Aligned with `modal_window::INFO_ICON_SIZE`. The 16 px size was
-// already the family default; this dialog was using the smaller
-// 12 px version, which made the info icon look out of place next
-// to the rest of the family.
-const INFO_ICON_SIZE: i32 = 16;
-
-// Vertical offsets inside the info box. Currently the icon is
-// aligned with the heading baseline (`INFO_PAD - 2` nudges up by 2
-// px so the 12 px icon top sits level with the 12 pt heading cap).
-// Set `INFO_ICON_Y_OFFSET` to `(INFO_BOX_H - INFO_ICON_SIZE) / 2`
-// for vertical centering; `INFO_PAD` for top-aligned with full
-// padding; `INFO_BOX_H - INFO_ICON_SIZE - INFO_PAD` for bottom-
-// aligned.
-const INFO_ICON_Y_OFFSET: i32 = INFO_PAD + 2;
-const INFO_HEADING_Y_OFFSET: i32 = INFO_PAD - 2;
-const INFO_SUBTEXT_Y_OFFSET: i32 = INFO_PAD + 20;
-/// One subtext row, with the second line derived from it -- see
-/// modal_window::INFO_SUBTEXT_H.
-const INFO_SUBTEXT_H: i32 = 16;
-const INFO_SUBTEXT2_Y_OFFSET: i32 = INFO_SUBTEXT_Y_OFFSET + INFO_SUBTEXT_H + 2;
-const INFO_TEXT_X: i32 = INFO_BOX_X + INFO_PAD + INFO_ICON_SIZE + 28;
-const INFO_TEXT_W: i32 = INFO_BOX_W - (INFO_TEXT_X - INFO_BOX_X) - INFO_PAD;
-
 /// Cancel button, in its own row below the info box rather than
-/// centred inside it. Mirrors `modal_window`'s button constants so the
-/// family stays consistent; the horizontal padding deliberately lives
-/// only in the shared `measure_button_width`, so the two modules
-/// cannot drift apart on it.
-const CANCEL_PT: i32 = 9;
-const CANCEL_H: i32 = 25;
-const CANCEL_MIN_W: i32 = 80;
-const CANCEL_Y: i32 = INFO_BOX_Y + INFO_BOX_H + INFO_TO_BUTTON_GAP;
-const CANCEL_RIGHT: i32 = WINDOW_W - MARGIN;
-/// Client height, mirroring `modal_window::WINDOW_H` so every dialog in
-/// the family is the same size.
-const WINDOW_H: i32 = INFO_BOX_Y + INFO_BOX_H + INFO_TO_BUTTON_GAP + CANCEL_H + BOTTOM_PAD;
+/// centred inside it.
+///
+/// These are the family's button metrics under the name this dialog
+/// uses for them. Aliasing rather than retyping the numbers means
+/// the progress cancel button cannot drift away from the modal
+/// dialog's button row -- and a single left-anchored button stays a
+/// genuinely different layout from a right-aligned group of up to
+/// three, which is why the names survive at all.
+const CANCEL_PT: i32 = BUTTON_PT;
+const CANCEL_H: i32 = BUTTON_H;
+const CANCEL_MIN_W: i32 = BUTTON_MIN_W;
+const CANCEL_Y: i32 = BUTTON_Y;
+const CANCEL_RIGHT: i32 = BUTTON_RIGHT;
 
 // Control IDs
 const IDC_HEADING: i32 = 1001;
@@ -231,17 +162,11 @@ const BUTTON_CLASS_NAME: &str = "BUTTON\0";
 //
 // `FW_NORMAL` = 400, `FW_BOLD` = 700, per `winuser.h`.
 
-const FONT_FACE: &str = "Segoe UI\0";
-
 // "Downloading Runtime Components" — main heading.
 // Aligned with `modal_window::HEADING_PT` so the progress dialog
 // matches the rest of the family.
-const HEADING_PT: i32 = 22;
-const HEADING_WEIGHT: i32 = FW_SEMIBOLD as i32;
 
 // "We are downloading the runtime components..." — subtitle.
-const SUBTITLE_PT: i32 = 14;
-const SUBTITLE_WEIGHT: i32 = FW_NORMAL as i32;
 
 // "0%", "47%", etc. — to the right of the progress bar.
 const PCT_PT: i32 = 14;
@@ -260,16 +185,10 @@ const DETAIL_RIGHT_PT: i32 = 9;
 const DETAIL_RIGHT_WEIGHT: i32 = FW_NORMAL as i32;
 
 // "This only needs to be downloaded..." — info-box heading.
-const INFO_HEADING_PT: i32 = 12;
-const INFO_HEADING_WEIGHT: i32 = FW_BOLD as i32;
 
 // "We will reuse this runtime..." — info-box subtext.
-const INFO_SUBTEXT_PT: i32 = 9;
-const INFO_SUBTEXT_WEIGHT: i32 = FW_NORMAL as i32;
 
 // Colours (COLORREF = 0x00BBGGRR).
-const COLOR_BG: u32 = 0x00FFFFFF;
-const COLOR_SUBTITLE: u32 = 0x005F6368;
 const COLOR_PROGRESS_FILL: u32 = 0x00E8731A; // RGB(0x1A, 0x73, 0xE8) — brand blue
 const COLOR_PROGRESS_TRACK: u32 = 0x00E0E0E0; // RGB(0xE0, 0xE0, 0xE0) — neutral light grey
 const COLOR_INFO_BG: u32 = 0x00FEF0E8; // RGB(0xE8, 0xF0, 0xFE) — info-box blue
@@ -282,7 +201,6 @@ const PROGRESS_CORNER_DIAMETER: i32 = PROGRESS_H / 3;
 // Corner rounding for the info box. ~`INFO_BOX_H / 4` diameter
 // (radius ~4 px on a 36 px box) — visible without intruding on the
 // info icon / text inside the box.
-const INFO_BOX_CORNER_DIAMETER: i32 = INFO_BOX_H / 4;
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
