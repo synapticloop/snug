@@ -245,19 +245,27 @@ fn is_valid_key(key: &str) -> bool {
 /// continuation bytes are >= 0x80 and match neither delimiter.
 pub fn placeholders(value: &str) -> BTreeSet<&str> {
     let mut out = BTreeSet::new();
-    let mut rest = value;
-    while let Some(open) = rest.find('{') {
-        let after = &rest[open + 1..];
-        let close = match after.find('}') {
-            Some(c) => c,
-            // An unterminated `{` is literal text, not a placeholder.
-            None => break,
-        };
-        let name = &after[..close];
-        if !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-            out.insert(name);
+    let bytes = value.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+            i += 2; // escaped literal `{`, not a slot
+            continue;
         }
-        rest = &after[close + 1..];
+        if bytes[i] == b'{' {
+            if let Some(close) = value[i + 1..].find('}') {
+                let name = &value[i + 1..i + 1 + close];
+                if !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                {
+                    out.insert(name);
+                }
+                i = i + close + 2;
+                continue;
+            }
+        }
+        // Step one whole char so a multi-byte sequence is never split.
+        let c = value[i..].chars().next().unwrap_or('\u{fffd}');
+        i += c.len_utf8();
     }
     out
 }
@@ -465,6 +473,19 @@ mod tests {
     use super::*;
 
     // ---- placeholders() ----
+
+    #[test]
+    fn placeholders_ignore_an_escaped_brace() {
+        // `\{name}` is a slot the author chose to *show*, not fill, so
+        // it must not count as a placeholder -- otherwise the drift
+        // check would demand a bundle supply a value the bundle is
+        // deliberately not using.
+        assert!(placeholders(r"literal \{size_mb}").is_empty());
+        assert_eq!(
+            placeholders(r"{size_mb} then \{size_mb}"),
+            BTreeSet::from(["size_mb"])
+        );
+    }
 
     #[test]
     fn placeholders_are_sorted_and_deduplicated() {

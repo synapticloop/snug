@@ -1896,7 +1896,7 @@ mod ui {
                 mascot,
                 &d.jdk_install.prompt,
                 version,
-                size_mb,
+                &size_mb.to_string(),
                 sha256,
             )
         };

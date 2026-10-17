@@ -2058,9 +2058,9 @@ fn run_install_prompt_v5() {
             std::ptr::null_mut(),
             0,
             prompt,
-            "21.0.2",
-            192,
-            "9c629caaccc4e64aa0ea58bd0a3f43eaf903a4c1a3e2c2a6e9c5b1a8e8b3f1a0",
+            "{version}",
+            "{size_mb}",
+            "{sha256}",
         )
     };
     eprintln!("snug-preview: install-prompt choice = {choice:?}");

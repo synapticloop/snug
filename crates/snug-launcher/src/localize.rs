@@ -377,18 +377,75 @@ pub fn t1(key: &str, name: &str, value: &str) -> String {
 /// the `{0}` / `{1}` style and the caller should pass
 /// `&[("0", "..."), ("1", "...")]`.
 ///
+/// Substitute `{name}` slots in `template`, resolving each name through
+/// `resolve`.
+///
+/// ## `\{` is a literal brace
+///
+/// A bundle author who needs to *show* a slot rather than fill one --
+/// a book scaffold documenting which string takes which value, say --
+/// writes `\{size_mb}` and gets `{size_mb}` back, unfilled. Only the
+/// opening brace needs escaping; the closing `}` is ordinary text.
+///
+/// This is why substitution cannot be a loop of `str::replace`: the
+/// substring `{size_mb}` is present *inside* `\{size_mb}`, so a
+/// literal replace would fill it and the escape would mean nothing.
+///
+/// Unknown names are copied through verbatim rather than dropped, so a
+/// typo leaves the text visible instead of silently swallowing it.
+///
+/// One implementation on purpose. `dialogs::fill` (named) and
+/// `t_positional` (indexed) both route through here, and so does
+/// `prompt_window::substitute`. When each did its own `replace`, the
+/// same bundle rendered three different ways depending on which dialog
+/// opened it, and an escape honoured by one would have been silently
+/// ignored by the others -- the build and snug_preview disagreeing on
+/// the same string.
+pub(crate) fn substitute_slots(
+    template: &str,
+    mut resolve: impl FnMut(&str) -> Option<String>,
+) -> String {
+    let mut out = String::with_capacity(template.len());
+    let bytes = template.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // `\{` -> literal `{`, resuming after it so the name that
+        // follows is copied as ordinary text.
+        if bytes[i] == b'\\' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+            out.push('{');
+            i += 2;
+            continue;
+        }
+        if bytes[i] == b'{' {
+            if let Some(close) = template[i + 1..].find('}') {
+                let name = &template[i + 1..i + 1 + close];
+                if let Some(value) = resolve(name) {
+                    out.push_str(&value);
+                    i = i + close + 2;
+                    continue;
+                }
+            }
+        }
+        // Copy one whole char, so a multi-byte sequence is never split.
+        let c = template[i..].chars().next().unwrap_or('\u{fffd}');
+        out.push(c);
+        i += c.len_utf8();
+    }
+    out
+}
+
 /// This helper does a single linear pass through the template
 /// replacing each `{i}` with `values[i]`. Unknown indices (e.g.
 /// `{3}` when only two values were passed) are left as-is so a typo
-/// is visible.
+/// is visible. `\{i}` is a literal `{i}`, not a slot -- see
+/// [`substitute_slots`].
 pub fn t_positional(key: &str, values: &[&str]) -> String {
-    let raw = lookup(key);
-    let mut out = raw;
-    for (i, v) in values.iter().enumerate() {
-        let needle = format!("{{{i}}}");
-        out = out.replace(&needle, v);
-    }
-    out
+    substitute_slots(&lookup(key), |name| {
+        name.parse::<usize>()
+            .ok()
+            .and_then(|i| values.get(i))
+            .map(|v| (*v).to_string())
+    })
 }
 
 /// The user's language preferences as BCP 47 tags, most-preferred

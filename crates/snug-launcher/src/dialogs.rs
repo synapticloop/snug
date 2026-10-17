@@ -388,18 +388,67 @@ fn assemble() -> Dialogs {
 /// `{name:>5}` etc.) are not supported — apply them to the values
 /// in Rust before calling. Unknown placeholders are left as-is so
 /// a typo in the TOML doesn't silently swallow text.
+///
+/// `\{name}` escapes to a literal `{name}` and is **not** substituted,
+/// so a bundle can show a slot instead of filling one. See
+/// [`crate::localize::substitute_slots`], which is also what makes
+/// this and `prompt_window`'s substitution agree byte for byte.
 pub fn fill(template: &str, subs: &[(&str, &str)]) -> String {
-    let mut out = template.to_string();
-    for (key, val) in subs {
-        let needle = format!("{{{key}}}");
-        out = out.replace(&needle, val);
-    }
-    out
+    crate::localize::substitute_slots(template, |name| {
+        subs.iter()
+            .find(|(k, _)| *k == name)
+            .map(|(_, v)| (*v).to_string())
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_escaped_brace_is_a_literal_brace_not_a_slot() {
+        // The whole point: a bundle can *show* a slot instead of
+        // filling one, and it must do so identically in a shipped
+        // build and in snug_preview. `str::replace` would have filled
+        // this, because `{size_mb}` is present inside `\{size_mb}` --
+        // which is why substitution is a scan and not a replace.
+        assert_eq!(
+            fill(r"needs \{size_mb} MB", &[("size_mb", "192")]),
+            "needs {size_mb} MB"
+        );
+        // Only the opening brace is escaped; the closing one is
+        // ordinary text.
+        assert_eq!(fill(r"\{version}", &[("version", "25")]), "{version}");
+    }
+
+    #[test]
+    fn an_escape_is_local_to_its_own_brace() {
+        let subs = [("size_mb", "7"), ("total_mb", "9")];
+        // Escaped, live: the escape affects only its own brace.
+        assert_eq!(
+            fill(r"\{size_mb} of {total_mb}", &subs),
+            "{size_mb} of 9"
+        );
+        // Both escaped: both survive verbatim, which is what a book
+        // scaffold wants when it is documenting slots rather than
+        // filling them.
+        assert_eq!(
+            fill(r"\{size_mb} of \{total_mb}", &subs),
+            "{size_mb} of {total_mb}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_slot_is_still_left_visible() {
+        // Escape support must not weaken the existing contract: a typo
+        // shows rather than swallowing text.
+        assert_eq!(fill("{nope}", &[("size_mb", "192")]), "{nope}");
+    }
+
+    #[test]
+    fn substitution_never_splits_a_multibyte_character() {
+        assert_eq!(fill("Größe {n}", &[("n", "1")]), "Größe 1");
+    }
 
     #[test]
     fn dialogs_resolve_from_the_baseline() {

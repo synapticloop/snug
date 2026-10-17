@@ -85,18 +85,16 @@ pub unsafe fn show(
 	mascot_hbitmap: isize,
 	prompt: &InstallPromptDialog,
 	version: &str,
-	size_mb: u32,
+	size_mb: &str,
 	sha256: &str,
 ) -> PromptChoice {
-	let size_mb_str = size_mb.to_string();
-
 	// `content` is the whole body now. It used to be assembled here
 	// from a `content` + an `expanded` pair; the baseline carries the
 	// digest and the JDK explainer in the one value, joined by literal
 	// `\n\n` escapes, so the shape matches every other dialog.
-	let content = substitute(&prompt.content, version, &size_mb_str, sha256);
+	let content = substitute(&prompt.content, version, size_mb, sha256);
 
-	let download_label = substitute(&prompt.button_download, version, &size_mb_str, sha256);
+	let download_label = substitute(&prompt.button_download, version, size_mb, sha256);
 
 	// Two buttons. There was a third -- "Open the download page in my
 	// browser" -- and it did nothing: `jdk_install::consent` only ever
@@ -142,11 +140,17 @@ pub unsafe fn show(
 	}
 }
 
-/// Cheap placeholder substitution. Avoids pulling in `format!` for
-/// each placeholder so the call site stays readable.
+/// Cheap placeholder substitution.
+///
+/// Delegates to [`crate::dialogs::fill`] rather than doing its own
+/// replaces, so the three call paths that touch bundle values — this,
+/// `dialogs::fill` from the launcher, and `localize::t_positional` —
+/// cannot drift apart on what `\{name}` means. It used to be its own
+/// pair of `replace` calls, which is how a bundle could render the
+/// filled value in a real build and the raw token in the preview.
 fn substitute(template: &str, version: &str, size_mb: &str, sha256: &str) -> String {
-	template
-		.replace("{version}", version)
-		.replace("{size_mb}", size_mb)
-		.replace("{sha256}", sha256)
+    crate::dialogs::fill(
+        template,
+        &[("version", version), ("size_mb", size_mb), ("sha256", sha256)],
+    )
 }
