@@ -1898,6 +1898,7 @@ mod ui {
                 version,
                 &size_mb.to_string(),
                 sha256,
+                crate::prompt_window::Fill::Values,
             )
         };
         choice == crate::prompt_window::PromptChoice::Download

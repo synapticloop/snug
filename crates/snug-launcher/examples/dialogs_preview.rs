@@ -474,9 +474,10 @@ fn run_install_prompt_v5() -> Option<i32> {
             std::ptr::null_mut(),
             0,
             prompt,
-            "21.0.2",
-            "192",
-            "9c629caaccc4e64aa0ea58bd0a3f43eaf903a4c1a3e2c2a6e9c5b1a8e8b3f1a0",
+            "",
+            "",
+            "",
+            snug_launcher::prompt_window::Fill::Nothing,
         )
     };
     eprintln!(

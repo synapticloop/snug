@@ -422,6 +422,29 @@ mod tests {
     }
 
     #[test]
+    fn the_rule_is_a_brace_that_starts_with_a_backslash_is_not_replaced() {
+        // The contract, in the form the book scaffold uses it: a token
+        // whose opening brace is escaped shows itself, a bare one is
+        // filled. Order does not matter -- each brace decides for
+        // itself and only for itself.
+        assert_eq!(
+            fill(
+                r"prompt.content \{size_mb} {size_mb}",
+                &[("size_mb", "192")],
+            ),
+            "prompt.content {size_mb} 192"
+        );
+        // Same value, reversed, to pin that neither position wins.
+        assert_eq!(
+            fill(
+                r"prompt.content {size_mb} \{size_mb}",
+                &[("size_mb", "192")],
+            ),
+            "prompt.content 192 {size_mb}"
+        );
+    }
+
+    #[test]
     fn an_escape_is_local_to_its_own_brace() {
         let subs = [("size_mb", "7"), ("total_mb", "9")];
         // Escaped, live: the escape affects only its own brace.

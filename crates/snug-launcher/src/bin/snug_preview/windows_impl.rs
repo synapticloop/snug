@@ -2050,6 +2050,18 @@ fn run_progress(static_mode: bool) {
 /// production. `mascot_hbitmap = 0` makes `modal_window` fall back
 /// to the EXE's main icon, so the preview shows the brand-correct
 /// Snug character without us having to load anything here.
+///
+/// `Fill::Nothing`: the preview shows the dialog as *authored*. Every
+/// slot stays visible -- `{size_mb}` and `\{size_mb}` alike -- because
+/// its job is inspecting a bundle, and a fabricated `21.0.2` / `192`
+/// tells a translator nothing the baseline does not already say while
+/// looking like a real result.
+///
+/// This used to pass each token as its own value (`size_mb` ->
+/// `"{size_mb}"`), which renders the same but for the wrong reason: it
+/// makes substitution a no-op, so a bare `{size_mb}` gets replaced by
+/// the value `{size_mb}` and every slot looks unfilled. That is what
+/// made `\{size_mb} {size_mb}` look broken rather than intentional.
 fn run_install_prompt_v5() {
     let d = dialogs::dialogs();
     let prompt = &d.jdk_install.prompt;
@@ -2058,9 +2070,10 @@ fn run_install_prompt_v5() {
             std::ptr::null_mut(),
             0,
             prompt,
-            "{version}",
-            "{size_mb}",
-            "{sha256}",
+            "",
+            "",
+            "",
+            snug_launcher::prompt_window::Fill::Nothing,
         )
     };
     eprintln!("snug-preview: install-prompt choice = {choice:?}");

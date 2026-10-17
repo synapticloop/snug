@@ -75,11 +75,47 @@ pub enum PromptChoice {
 ///
 /// Blocks the calling thread until the user dismisses the dialog.
 ///
+/// `fill` decides whether `version` / `size_mb` / `sha256` are
+/// substituted into the bundle's slots at all. A shipped launcher
+/// passes [`Fill::Values`]; `snug_preview` passes [`Fill::Nothing`] so
+/// the dialog shows the template as authored.
+///
 /// # Safety
 ///
 /// `parent` must be null or a live window handle; it becomes the
 /// dialog's owner HWND in Win32. `mascot_hbitmap`, when non-zero, must
 /// be a live HBITMAP, since it is painted into the dialog.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Fill {
+	/// Substitute. What a shipped launcher does.
+	Values,
+	/// Substitute nothing, so every slot stays visible -- bare ones
+	/// included, because a name the resolver does not know is copied
+	/// through by design.
+	///
+	/// `snug_preview` uses this. Its job is showing a dialog as
+	/// authored, and a fabricated `21.0.2` / `192` tells a translator
+	/// nothing the baseline does not already say, while looking like a
+	/// real result.
+	///
+	/// The alternative -- passing each token as its own value, so
+	/// substitution becomes a no-op -- renders identically today, and had
+	/// already caused one real bug: it made *every* slot look unfilled,
+	/// so `\{size_mb} {size_mb}` came out with both halves unchanged and
+	/// read as though the escape were broken. Naming the mode beats
+	/// relying on that coincidence.
+	Nothing,
+}
+impl Fill {
+	/// Apply `f` to `template`, or leave it alone when this is
+	/// [`Fill::Nothing`].
+	fn apply(self, template: &str, f: impl Fn(&str) -> String) -> String {
+		match self {
+			Fill::Values => f(template),
+			Fill::Nothing => template.to_string(),
+		}
+	}
+}
 pub unsafe fn show(
 	parent: HWND,
 	mascot_hbitmap: isize,
@@ -87,14 +123,16 @@ pub unsafe fn show(
 	version: &str,
 	size_mb: &str,
 	sha256: &str,
+	fill: Fill,
 ) -> PromptChoice {
 	// `content` is the whole body now. It used to be assembled here
 	// from a `content` + an `expanded` pair; the baseline carries the
 	// digest and the JDK explainer in the one value, joined by literal
 	// `\n\n` escapes, so the shape matches every other dialog.
-	let content = substitute(&prompt.content, version, size_mb, sha256);
+	let content = fill.apply(&prompt.content, |t| substitute(t, version, size_mb, sha256));
 
-	let download_label = substitute(&prompt.button_download, version, size_mb, sha256);
+	let download_label =
+		fill.apply(&prompt.button_download, |t| substitute(t, version, size_mb, sha256));
 
 	// Two buttons. There was a third -- "Open the download page in my
 	// browser" -- and it did nothing: `jdk_install::consent` only ever
