@@ -163,7 +163,7 @@ launcher.error.content = {error}
 #
 # `snug_launcher::dialogs::Dialogs` is hand-assembled from these keys rather
 # than deserialized from a file, so the typed struct and its compile-checked
-# accessors (`dialogs().jdk_install.prompt.title`) survive the merge - only
+# accessors (`dialogs().runtime.prompt.title`) survive the merge - only
 # the source of the strings moved. The practical consequence for you: a
 # localised app can now reword the chrome as well as the errors, e.g. "Acme
 # requires Java 25" instead of "Eclipse Temurin JDK was not found".
@@ -171,63 +171,63 @@ launcher.error.content = {error}
 # Escaping reminder: these are single-line values. Real newlines are literal
 # `\n`; a literal `#` in a value must be written `\#`.
 
-jdk_install.prompt.title = Environnement d'exécution Java requis - Snug
-jdk_install.prompt.heading = Le JDK Eclipse Temurin est introuvable sur cette machine
-jdk_install.prompt.subheading = L'environnement d'exécution requise est introuvable sur cette machine.
-jdk_install.prompt.content = Cette application nécessite un environnement d'exécution pour démarrer. Snug peut télécharger l'environnement d'exécution pour vous (~{size_mb} Mo) et l'installer.
-jdk_install.prompt.info_heading = Avant l'installation
-jdk_install.prompt.info_subtext = L'environnement d'exécution est installé pour votre compte utilisateur : les droits d'administrateur ne sont pas nécessaires.
-jdk_install.prompt.info_subtext_2 = D'autres applications l'utilisent également : il n'est donc téléchargé qu'une seule fois.
-jdk_install.prompt.button_download = Installer l'environnement d'exécution maintenant
-jdk_install.prompt.button_cancel = Annuler
+runtime.prompt.title = Environnement d'exécution Java requis - Snug
+runtime.prompt.heading = Le JDK Eclipse Temurin est introuvable sur cette machine
+runtime.prompt.subheading = L'environnement d'exécution requise est introuvable sur cette machine.
+runtime.prompt.content = Cette application nécessite un environnement d'exécution pour démarrer. Snug peut télécharger l'environnement d'exécution pour vous (~{size_mb} Mo) et l'installer.
+runtime.prompt.info_heading = Avant l'installation
+runtime.prompt.info_subtext = L'environnement d'exécution est installé pour votre compte utilisateur : les droits d'administrateur ne sont pas nécessaires.
+runtime.prompt.info_subtext_2 = D'autres applications l'utilisent également : il n'est donc téléchargé qu'une seule fois.
+runtime.prompt.button_download = Installer l'environnement d'exécution maintenant
+runtime.prompt.button_cancel = Annuler
 
-jdk_install.metadata_failed.title = Serveur injoignable - Snug
-jdk_install.metadata_failed.heading = Nous n'avons pas pu joindre le serveur
-jdk_install.metadata_failed.subheading = Cette application nécessite un téléchargement, mais notre requête n'a pas atteint le serveur.
-jdk_install.metadata_failed.content = Détail technique :\n{error}
-jdk_install.metadata_failed.info_heading = Pourquoi cela s'est-il produit ?
-jdk_install.metadata_failed.info_subtext = Votre connexion réseau est peut-être interrompue, ou l'API d'exécution est temporairement injoignable.
-jdk_install.metadata_failed.info_subtext_2 = Vérifiez votre connexion réseau et réessayez dans un instant.
-jdk_install.metadata_failed.button_open_browser = Ouvrir la page de téléchargement
-jdk_install.metadata_failed.button_cancel = Annuler
+runtime.metadata_failed.title = Serveur injoignable - Snug
+runtime.metadata_failed.heading = Nous n'avons pas pu joindre le serveur
+runtime.metadata_failed.subheading = Cette application nécessite un téléchargement, mais notre requête n'a pas atteint le serveur.
+runtime.metadata_failed.content = Détail technique :\n{error}
+runtime.metadata_failed.info_heading = Pourquoi cela s'est-il produit ?
+runtime.metadata_failed.info_subtext = Votre connexion réseau est peut-être interrompue, ou l'API d'exécution est temporairement injoignable.
+runtime.metadata_failed.info_subtext_2 = Vérifiez votre connexion réseau et réessayez dans un instant.
+runtime.metadata_failed.button_open_browser = Ouvrir la page de téléchargement
+runtime.metadata_failed.button_cancel = Annuler
 
-jdk_install.progress.title = Installer l'environnement d'exécution
-jdk_install.progress.content = Environnement d'exécution {version} (~{size_mb} Mo)
-jdk_install.progress.heading = Installer l'environnement d'exécution
-jdk_install.progress.subheading = Nous devons installer un environnement d'exécution pour que l'application puisse démarrer
-jdk_install.progress.pct_label = {pct}%
-jdk_install.progress.phase_label = Téléchargement de l'environnement d'exécution ({arch})
-jdk_install.progress.arch_macos_arm64 = macOS arm64
-jdk_install.progress.arch_macos_x86_64 = macOS x86_64
-jdk_install.progress.arch_windows_x86_64 = Windows x86_64
-jdk_install.progress.detail_with_size = {done_mb} Mo sur {total_mb} Mo ({speed_mb_s} Mo/s)
-jdk_install.progress.detail_no_size = Téléchargement… ({pct}%)
-jdk_install.progress.detail_eta_seconds = Encore {n} secondes
-jdk_install.progress.detail_eta_second = Encore 1 seconde
-jdk_install.progress.detail_eta_done = Presque terminé
-jdk_install.progress.info_heading = Ce téléchargement n'est nécessaire qu'une seule fois.
-jdk_install.progress.info_subtext = Cet environnement d'exécution sera utilisé pour les prochains démarrages de l'application
-jdk_install.progress.info_subtext_2 = L'environnement d'exécution est installé pour votre compte utilisateur et réutilisé par les autres applications Java.
-jdk_install.progress.cancel_button_during_download = Installer
+runtime.progress.title = Installer l'environnement d'exécution
+runtime.progress.content = Environnement d'exécution {version} (~{size_mb} Mo)
+runtime.progress.heading = Installer l'environnement d'exécution
+runtime.progress.subheading = Nous devons installer un environnement d'exécution pour que l'application puisse démarrer
+runtime.progress.pct_label = {pct}%
+runtime.progress.phase_label = Téléchargement de l'environnement d'exécution ({arch})
+runtime.progress.arch_macos_arm64 = macOS arm64
+runtime.progress.arch_macos_x86_64 = macOS x86_64
+runtime.progress.arch_windows_x86_64 = Windows x86_64
+runtime.progress.detail_with_size = {done_mb} Mo sur {total_mb} Mo ({speed_mb_s} Mo/s)
+runtime.progress.detail_no_size = Téléchargement… ({pct}%)
+runtime.progress.detail_eta_seconds = Encore {n} secondes
+runtime.progress.detail_eta_second = Encore 1 seconde
+runtime.progress.detail_eta_done = Presque terminé
+runtime.progress.info_heading = Ce téléchargement n'est nécessaire qu'une seule fois.
+runtime.progress.info_subtext = Cet environnement d'exécution sera utilisé pour les prochains démarrages de l'application
+runtime.progress.info_subtext_2 = L'environnement d'exécution est installé pour votre compte utilisateur et réutilisé par les autres applications Java.
+runtime.progress.cancel_button_during_download = Installer
 
-jdk_install.failure.title = Échec de l'installation de l'environnement d'exécution
-jdk_install.failure.heading = L'installation a échoué
-jdk_install.failure.subheading = Toutes les tentatives de téléchargement sont épuisées, nous allons essayer de lancer l'application.
-jdk_install.failure.content = Eclipse Temurin {version} n'a pas pu être installé. Détail technique :\n{error}
-jdk_install.failure.info_heading = Que puis-je faire ?
-jdk_install.failure.info_subtext = Vérifiez votre connexion réseau, et réessayez plus tard.
-jdk_install.failure.info_subtext_2 = L'application va tenter de démarrer avec le Java déjà présent sur cette machine.
-jdk_install.failure.button_label = OK
+runtime.failure.title = Échec de l'installation de l'environnement d'exécution
+runtime.failure.heading = L'installation a échoué
+runtime.failure.subheading = Toutes les tentatives de téléchargement sont épuisées, nous allons essayer de lancer l'application.
+runtime.failure.content = Eclipse Temurin {version} n'a pas pu être installé. Détail technique :\n{error}
+runtime.failure.info_heading = Que puis-je faire ?
+runtime.failure.info_subtext = Vérifiez votre connexion réseau, et réessayez plus tard.
+runtime.failure.info_subtext_2 = L'application va tenter de démarrer avec le Java déjà présent sur cette machine.
+runtime.failure.button_label = OK
 
-jdk_install.retry.title = Téléchargement échoué - Réessayer ?
-jdk_install.retry.heading = Échec du téléchargement de l'environnement d'exécution
-jdk_install.retry.subheading = La tentative {attempt} sur {max_attempts} a échoué lors du téléchargement de l'environnement d'exécution.
-jdk_install.retry.content = {error}
-jdk_install.retry.info_heading = Pourquoi cela s'est-il produit ?
-jdk_install.retry.info_subtext = Une cause fréquente est une micro-coupure réseau. Vérifiez que vous êtes connecté au réseau.
-jdk_install.retry.info_subtext_2 = Vous pouvez réessayer, ou annuler et réessayer plus tard.
-jdk_install.retry.button_retry = Réessayer
-jdk_install.retry.button_cancel = Annuler
+runtime.retry.title = Téléchargement échoué - Réessayer ?
+runtime.retry.heading = Échec du téléchargement de l'environnement d'exécution
+runtime.retry.subheading = La tentative {attempt} sur {max_attempts} a échoué lors du téléchargement de l'environnement d'exécution.
+runtime.retry.content = {error}
+runtime.retry.info_heading = Pourquoi cela s'est-il produit ?
+runtime.retry.info_subtext = Une cause fréquente est une micro-coupure réseau. Vérifiez que vous êtes connecté au réseau.
+runtime.retry.info_subtext_2 = Vous pouvez réessayer, ou annuler et réessayer plus tard.
+runtime.retry.button_retry = Réessayer
+runtime.retry.button_cancel = Annuler
 
 # Generic shells for the stock TaskDialog fallbacks (`show_error_dialog`,
 # `show_info_dialog`). The title/main come from the caller, so these are

@@ -36,11 +36,11 @@ pub struct ErrorDialog<'a> {
     pub error_content: &'a str,
     pub info_icon: InfoIcon,
     /// Optional override for the info-box heading. `None` ⇒
-    /// `[jdk_install.failure].info_heading` from the localization bundle,
+    /// `[runtime.failure].info_heading` from the localization bundle,
     /// falling back to the module default.
     pub info_heading: Option<&'a str>,
     /// Optional override for the info-box subtext. `None` ⇒
-    /// `[jdk_install.failure].info_subtext` from the localization bundle,
+    /// `[runtime.failure].info_subtext` from the localization bundle,
     /// falling back to the module default.
     pub info_subtext: Option<&'a str>,
     /// Optional third info-box line. None or empty ⇒ no third
@@ -48,7 +48,7 @@ pub struct ErrorDialog<'a> {
     /// info_subtext_2 when this dialog is built from a group.
     pub info_subtext_2: Option<&'a str>,
     /// Optional override for the button label. `None` ⇒
-    /// `[jdk_install.failure].button_label` from the localization bundle,
+    /// `[runtime.failure].button_label` from the localization bundle,
     /// falling back to the module default.
     pub button_label: Option<&'a str>,
     /// Optional HBITMAP (cast to `isize`) for the mascot slot. `0` ⇒
@@ -74,13 +74,13 @@ pub struct ErrorDialog<'a> {
 /// `mascot_hbitmap` a live handle that outlives the call.
 pub unsafe fn show(parent: HWND, dlg: ErrorDialog<'_>) -> i32 {
     let dialogs = crate::dialogs::dialogs();
-    let failure = &dialogs.jdk_install.failure;
+    let failure = &dialogs.runtime.failure;
 
     // Resolve per-dialog info / button fallback (caller → TOML →
     // module default). `modal_window::show` handles an empty `None`
     // by using its own defaults; here we substitute TOML-derived
     // values up-front so the per-dialog copy from
-    // `[jdk_install.failure]` is what the user actually sees.
+    // `[runtime.failure]` is what the user actually sees.
     let info_heading = dlg
         .info_heading
         .map(str::to_string)

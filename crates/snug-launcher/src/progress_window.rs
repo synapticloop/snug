@@ -468,7 +468,7 @@ unsafe fn register_class() -> u16 {
             let hwnd_heading = CreateWindowExW(
                 0,
                 wide(STATIC_CLASS_NAME).as_ptr(),
-                wide(&d.jdk_install.progress.heading).as_ptr(),
+                wide(&d.runtime.progress.heading).as_ptr(),
                 WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP,
                 TEXT_X,
                 HEADING_Y,
@@ -484,7 +484,7 @@ unsafe fn register_class() -> u16 {
             let hwnd_subtitle = CreateWindowExW(
                 0,
                 wide(STATIC_CLASS_NAME).as_ptr(),
-                wide(&d.jdk_install.progress.subheading).as_ptr(),
+                wide(&d.runtime.progress.subheading).as_ptr(),
                 WS_CHILD | WS_VISIBLE | SS_LEFT,
                 TEXT_X,
                 SUBTITLE_Y,
@@ -531,10 +531,10 @@ unsafe fn register_class() -> u16 {
             // one `appkit::progress_status` does, deliberately, because the
             // slot is not a shell-like placeholder to be left visible.
             let phase_text = crate::dialogs::fill(
-                d.jdk_install.progress.phase_label.as_str(),
+                d.runtime.progress.phase_label.as_str(),
                 &[(
                     "arch",
-                    &d.jdk_install.progress.arch_windows_x86_64,
+                    &d.runtime.progress.arch_windows_x86_64,
                 )],
             );
 
@@ -612,7 +612,7 @@ unsafe fn register_class() -> u16 {
             let hwnd_info_heading = CreateWindowExW(
                 0,
                 wide(STATIC_CLASS_NAME).as_ptr(),
-                wide(&d.jdk_install.progress.info_heading).as_ptr(),
+                wide(&d.runtime.progress.info_heading).as_ptr(),
                 WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP,
                 INFO_TEXT_X,
                 INFO_BOX_Y + INFO_HEADING_Y_OFFSET,
@@ -628,7 +628,7 @@ unsafe fn register_class() -> u16 {
             let hwnd_info_subtext = CreateWindowExW(
                 0,
                 wide(STATIC_CLASS_NAME).as_ptr(),
-                wide(&d.jdk_install.progress.info_subtext).as_ptr(),
+                wide(&d.runtime.progress.info_subtext).as_ptr(),
                 WS_CHILD | WS_VISIBLE | SS_LEFT,
                 INFO_TEXT_X,
                 INFO_BOX_Y + INFO_SUBTEXT_Y_OFFSET,
@@ -650,7 +650,7 @@ unsafe fn register_class() -> u16 {
             let hwnd_info_subtext2 = CreateWindowExW(
                 0,
                 wide(STATIC_CLASS_NAME).as_ptr(),
-                wide(&d.jdk_install.progress.info_subtext_2).as_ptr(),
+                wide(&d.runtime.progress.info_subtext_2).as_ptr(),
                 WS_CHILD | WS_VISIBLE | SS_LEFT,
                 INFO_TEXT_X,
                 INFO_BOX_Y + INFO_SUBTEXT2_Y_OFFSET,
@@ -666,7 +666,7 @@ unsafe fn register_class() -> u16 {
             let hwnd_cancel = CreateWindowExW(
                 0,
                 wide(BUTTON_CLASS_NAME).as_ptr(),
-                wide(&d.jdk_install.progress.cancel_button_during_download).as_ptr(),
+                wide(&d.runtime.progress.cancel_button_during_download).as_ptr(),
                 WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON as u32,
                 // Provisional: created at the left edge, then measured
                 // and moved flush right below.
@@ -686,7 +686,7 @@ unsafe fn register_class() -> u16 {
             apply_font(hwnd_cancel, hfont_cancel);
             let cancel_w = measure_button_width(
                 hfont_cancel,
-                &d.jdk_install.progress.cancel_button_during_download,
+                &d.runtime.progress.cancel_button_during_download,
             );
             SetWindowPos(
                 hwnd_cancel,
@@ -923,7 +923,7 @@ unsafe fn register_class() -> u16 {
 
             let d = crate::dialogs::dialogs();
             let elapsed = started_at.elapsed().as_secs_f64();
-            let view = format_view(phase, pct, bytes, total, elapsed, &d.jdk_install.progress);
+            let view = format_view(phase, pct, bytes, total, elapsed, &d.runtime.progress);
 
             // Invalidate just the progress bar rect when pct moved.
             // Skipping ticks where pct didn't change avoids a
@@ -952,9 +952,9 @@ unsafe fn register_class() -> u16 {
             let desired_started: i32 = if started { 1 } else { 0 };
             if desired_started != last_label_phase {
                 let label = if started {
-                    d.jdk_install.prompt.button_cancel.as_str()
+                    d.runtime.prompt.button_cancel.as_str()
                 } else {
-                    d.jdk_install.progress.cancel_button_during_download.as_str()
+                    d.runtime.progress.cancel_button_during_download.as_str()
                 };
                 if !hwnd_cancel.is_null() {
                     let s = wide(label);
@@ -1007,7 +1007,7 @@ unsafe fn register_class() -> u16 {
                             // change without waiting for the next
                             // 200 ms tick.
                             let cancel_label = crate::dialogs::dialogs()
-                                .jdk_install
+                                .runtime
                                 .prompt
                                 .button_cancel
                                 .clone();

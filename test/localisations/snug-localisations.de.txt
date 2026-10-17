@@ -163,7 +163,7 @@ launcher.error.content = {error}
 #
 # `snug_launcher::dialogs::Dialogs` is hand-assembled from these keys rather
 # than deserialized from a file, so the typed struct and its compile-checked
-# accessors (`dialogs().jdk_install.prompt.title`) survive the merge - only
+# accessors (`dialogs().runtime.prompt.title`) survive the merge - only
 # the source of the strings moved. The practical consequence for you: a
 # localised app can now reword the chrome as well as the errors, e.g. "Acme
 # requires Java 25" instead of "Eclipse Temurin JDK was not found".
@@ -171,63 +171,63 @@ launcher.error.content = {error}
 # Escaping reminder: these are single-line values. Real newlines are literal
 # `\n`; a literal `#` in a value must be written `\#`.
 
-jdk_install.prompt.title = Java-Laufzeit erforderlich - Snug
-jdk_install.prompt.heading = Eclipse Temurin JDK wurde auf diesem Rechner nicht gefunden
-jdk_install.prompt.subheading = Die erforderliche Laufzeit wurde auf diesem Rechner nicht gefunden.
-jdk_install.prompt.content = Diese Anwendung benötigt eine Laufzeit, um zu starten. Snug kann die Laufzeit für Sie herunterladen (~{size_mb} MB) und installieren.
-jdk_install.prompt.info_heading = Vor der Installation
-jdk_install.prompt.info_subtext = Die Laufzeit wird für Ihr Benutzerkonto installiert, dafür sind keine Administratorrechte nötig.
-jdk_install.prompt.info_subtext_2 = Andere Anwendungen verwenden sie ebenfalls, sie wird also nur einmal heruntergeladen.
-jdk_install.prompt.button_download = Laufzeit jetzt installieren
-jdk_install.prompt.button_cancel = Abbrechen
+runtime.prompt.title = Java-Laufzeit erforderlich - Snug
+runtime.prompt.heading = Eclipse Temurin JDK wurde auf diesem Rechner nicht gefunden
+runtime.prompt.subheading = Die erforderliche Laufzeit wurde auf diesem Rechner nicht gefunden.
+runtime.prompt.content = Diese Anwendung benötigt eine Laufzeit, um zu starten. Snug kann die Laufzeit für Sie herunterladen (~{size_mb} MB) und installieren.
+runtime.prompt.info_heading = Vor der Installation
+runtime.prompt.info_subtext = Die Laufzeit wird für Ihr Benutzerkonto installiert, dafür sind keine Administratorrechte nötig.
+runtime.prompt.info_subtext_2 = Andere Anwendungen verwenden sie ebenfalls, sie wird also nur einmal heruntergeladen.
+runtime.prompt.button_download = Laufzeit jetzt installieren
+runtime.prompt.button_cancel = Abbrechen
 
-jdk_install.metadata_failed.title = Server nicht erreichbar - Snug
-jdk_install.metadata_failed.heading = Der Server konnte nicht erreicht werden
-jdk_install.metadata_failed.subheading = Diese Anwendung erfordert einen Download, aber unsere Anfrage hat den Server nicht erreicht.
-jdk_install.metadata_failed.content = Technische Details:\n{error}
-jdk_install.metadata_failed.info_heading = Warum ist das passiert?
-jdk_install.metadata_failed.info_subtext = Ihre Netzwerkverbindung ist möglicherweise ausgefallen, oder die Laufzeit-API ist vorübergehend nicht erreichbar.
-jdk_install.metadata_failed.info_subtext_2 = Prüfen Sie Ihre Netzwerkverbindung und versuchen Sie es in einem Moment erneut.
-jdk_install.metadata_failed.button_open_browser = Download-Seite öffnen
-jdk_install.metadata_failed.button_cancel = Abbrechen
+runtime.metadata_failed.title = Server nicht erreichbar - Snug
+runtime.metadata_failed.heading = Der Server konnte nicht erreicht werden
+runtime.metadata_failed.subheading = Diese Anwendung erfordert einen Download, aber unsere Anfrage hat den Server nicht erreicht.
+runtime.metadata_failed.content = Technische Details:\n{error}
+runtime.metadata_failed.info_heading = Warum ist das passiert?
+runtime.metadata_failed.info_subtext = Ihre Netzwerkverbindung ist möglicherweise ausgefallen, oder die Laufzeit-API ist vorübergehend nicht erreichbar.
+runtime.metadata_failed.info_subtext_2 = Prüfen Sie Ihre Netzwerkverbindung und versuchen Sie es in einem Moment erneut.
+runtime.metadata_failed.button_open_browser = Download-Seite öffnen
+runtime.metadata_failed.button_cancel = Abbrechen
 
-jdk_install.progress.title = Laufzeit installieren
-jdk_install.progress.content = Laufzeit {version} (~{size_mb} MB)
-jdk_install.progress.heading = Laufzeit installieren
-jdk_install.progress.subheading = Wir müssen eine Laufzeit installieren, damit die Anwendung gestartet werden kann
-jdk_install.progress.pct_label = {pct}%
-jdk_install.progress.phase_label = Laufzeit wird heruntergeladen ({arch})
-jdk_install.progress.arch_macos_arm64 = macOS arm64
-jdk_install.progress.arch_macos_x86_64 = macOS x86_64
-jdk_install.progress.arch_windows_x86_64 = Windows x86_64
-jdk_install.progress.detail_with_size = {done_mb} MB von {total_mb} MB ({speed_mb_s} MB/s)
-jdk_install.progress.detail_no_size = Wird heruntergeladen… ({pct}%)
-jdk_install.progress.detail_eta_seconds = Noch {n} Sekunden
-jdk_install.progress.detail_eta_second = Noch 1 Sekunde
-jdk_install.progress.detail_eta_done = Fast fertig
-jdk_install.progress.info_heading = Dies muss nur einmal heruntergeladen werden.
-jdk_install.progress.info_subtext = Diese Laufzeit wird für künftige Starts der Anwendung verwendet
-jdk_install.progress.info_subtext_2 = Die Laufzeit wird für Ihr Benutzerkonto installiert und von anderen Java-Anwendungen mitgenutzt.
-jdk_install.progress.cancel_button_during_download = Installieren
+runtime.progress.title = Laufzeit installieren
+runtime.progress.content = Laufzeit {version} (~{size_mb} MB)
+runtime.progress.heading = Laufzeit installieren
+runtime.progress.subheading = Wir müssen eine Laufzeit installieren, damit die Anwendung gestartet werden kann
+runtime.progress.pct_label = {pct}%
+runtime.progress.phase_label = Laufzeit wird heruntergeladen ({arch})
+runtime.progress.arch_macos_arm64 = macOS arm64
+runtime.progress.arch_macos_x86_64 = macOS x86_64
+runtime.progress.arch_windows_x86_64 = Windows x86_64
+runtime.progress.detail_with_size = {done_mb} MB von {total_mb} MB ({speed_mb_s} MB/s)
+runtime.progress.detail_no_size = Wird heruntergeladen… ({pct}%)
+runtime.progress.detail_eta_seconds = Noch {n} Sekunden
+runtime.progress.detail_eta_second = Noch 1 Sekunde
+runtime.progress.detail_eta_done = Fast fertig
+runtime.progress.info_heading = Dies muss nur einmal heruntergeladen werden.
+runtime.progress.info_subtext = Diese Laufzeit wird für künftige Starts der Anwendung verwendet
+runtime.progress.info_subtext_2 = Die Laufzeit wird für Ihr Benutzerkonto installiert und von anderen Java-Anwendungen mitgenutzt.
+runtime.progress.cancel_button_during_download = Installieren
 
-jdk_install.failure.title = Fehler bei der Installation der Laufzeit
-jdk_install.failure.heading = Die Installation ist fehlgeschlagen
-jdk_install.failure.subheading = Alle Download-Versuche sind erschöpft, wir versuchen, die Anwendung zu starten.
-jdk_install.failure.content = Eclipse Temurin {version} konnte nicht installiert werden. Technische Details:\n{error}
-jdk_install.failure.info_heading = Was kann ich tun?
-jdk_install.failure.info_subtext = Prüfen Sie Ihre Netzwerkverbindung und versuchen Sie es später erneut.
-jdk_install.failure.info_subtext_2 = Die Anwendung versucht zu starten, egal welches Java auf diesem Rechner bereits vorhanden ist.
-jdk_install.failure.button_label = OK
+runtime.failure.title = Fehler bei der Installation der Laufzeit
+runtime.failure.heading = Die Installation ist fehlgeschlagen
+runtime.failure.subheading = Alle Download-Versuche sind erschöpft, wir versuchen, die Anwendung zu starten.
+runtime.failure.content = Eclipse Temurin {version} konnte nicht installiert werden. Technische Details:\n{error}
+runtime.failure.info_heading = Was kann ich tun?
+runtime.failure.info_subtext = Prüfen Sie Ihre Netzwerkverbindung und versuchen Sie es später erneut.
+runtime.failure.info_subtext_2 = Die Anwendung versucht zu starten, egal welches Java auf diesem Rechner bereits vorhanden ist.
+runtime.failure.button_label = OK
 
-jdk_install.retry.title = Download fehlgeschlagen - Erneut versuchen?
-jdk_install.retry.heading = Download der Laufzeit fehlgeschlagen
-jdk_install.retry.subheading = Versuch {attempt} von {max_attempts} ist beim Download der Laufzeit fehlgeschlagen.
-jdk_install.retry.content = {error}
-jdk_install.retry.info_heading = Warum ist das passiert?
-jdk_install.retry.info_subtext = Eine häufige Ursache ist ein kurzzeitiger Netzausfall. Stellen Sie sicher, dass Sie mit dem Netzwerk verbunden sind.
-jdk_install.retry.info_subtext_2 = Sie können es erneut versuchen oder abbrechen und es später noch einmal versuchen.
-jdk_install.retry.button_retry = Erneut versuchen
-jdk_install.retry.button_cancel = Abbrechen
+runtime.retry.title = Download fehlgeschlagen - Erneut versuchen?
+runtime.retry.heading = Download der Laufzeit fehlgeschlagen
+runtime.retry.subheading = Versuch {attempt} von {max_attempts} ist beim Download der Laufzeit fehlgeschlagen.
+runtime.retry.content = {error}
+runtime.retry.info_heading = Warum ist das passiert?
+runtime.retry.info_subtext = Eine häufige Ursache ist ein kurzzeitiger Netzausfall. Stellen Sie sicher, dass Sie mit dem Netzwerk verbunden sind.
+runtime.retry.info_subtext_2 = Sie können es erneut versuchen oder abbrechen und es später noch einmal versuchen.
+runtime.retry.button_retry = Erneut versuchen
+runtime.retry.button_cancel = Abbrechen
 
 # Generic shells for the stock TaskDialog fallbacks (`show_error_dialog`,
 # `show_info_dialog`). The title/main come from the caller, so these are

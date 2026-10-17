@@ -2064,7 +2064,7 @@ fn run_progress(static_mode: bool) {
 /// made `\{size_mb} {size_mb}` look broken rather than intentional.
 fn run_install_prompt_v5() {
     let d = dialogs::dialogs();
-    let prompt = &d.jdk_install.prompt;
+    let prompt = &d.runtime.prompt;
     let choice = unsafe {
         snug_launcher::prompt_window::show(
             std::ptr::null_mut(),
@@ -2630,12 +2630,12 @@ mod tests {
         let dir = tmpdir();
         std::fs::write(
             dir.join("snug-localisations.de.txt"),
-            "jdk_install.prompt.button_cancel = Abbrechen\n",
+            "runtime.prompt.button_cancel = Abbrechen\n",
         )
         .unwrap();
         std::fs::write(
             dir.join("snug-localisations.ja.txt"),
-            "jdk_install.prompt.button_cancel = Cancel\n",
+            "runtime.prompt.button_cancel = Cancel\n",
         )
         .unwrap();
 

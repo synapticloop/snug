@@ -446,7 +446,7 @@ commit — useful history, not a live list.
     because on Windows that label belongs to the *prompt* window where
     pressing it means "go ahead" — here the download is already running,
     so "Install" would be a lie).
-  - `jdk_install.progress.phase_label` used to hardcode
+  - `runtime.progress.phase_label` used to hardcode
     "Downloading runtime (Windows x64)" in the *shared* baseline, so a
     macOS download announced itself as a Windows one. It now takes
     `{arch}` and each platform fills it in. **Watch for this class of
@@ -1356,7 +1356,7 @@ by accident.
   localization catalog.** `crates/snug-format/assets/
   snug-localisations.en.txt` holds the error messages (`err.*`), the
   splash strings (`splash.*`), the JDK-install errors (`jdk.err.*`)
-  *and* the dialog chrome (`jdk_install.*`, `generic.*`,
+  *and* the dialog chrome (`runtime.*`, `generic.*`,
   `launcher.error.*`). There is deliberately no second file: a
   `dialogs.toml` existed until 0.4.0 and was merged in, because
   compile-time-only copy meant a localized app got a translated error
@@ -1374,7 +1374,7 @@ by accident.
     literal at runtime — late and user-visible. `dialogs::dialogs()`
     therefore builds the struct out of `localize::lookup` calls, which
     keeps compile-checked field access at all ~16 call sites
-    (`dialogs().jdk_install.prompt.title`) and confines key literals to
+    (`dialogs().runtime.prompt.title`) and confines key literals to
     one place. `localize::tests::every_localize_key_is_in_the_baseline`
     guards it in both directions: a looked-up key missing from the
     baseline fails, and a baseline key nothing reads fails (escape
@@ -1383,7 +1383,7 @@ by accident.
   - **`localize::lookup` falls back to the built-in baseline before
     `init` runs.** `DIALOGS` is a `OnceLock`, so a pre-`init` call
     would cache unresolved values permanently — a cached
-    `jdk_install.prompt.title` is a permanently broken window. Since
+    `runtime.prompt.title` is a permanently broken window. Since
     the English baseline is compiled in, pre-`init` lookups resolve
     against it (untranslated but correct) rather than returning keys.
     Only a key in neither the chain nor the baseline returns the key
@@ -1403,11 +1403,11 @@ by accident.
     `set_bundles` and no longer first-call-wins.**
   - **Values are single-line.** A real newline is a literal `\n`; a
     literal `#` must be `\#`. The old TOML triple-quoted bodies
-    (`jdk_install.prompt.content`, `.expanded`,
+    (`runtime.prompt.content`, `.expanded`,
     `metadata_failed.content`) became one long line each —
     `multi_line_bodies_decoded_from_escapes` is the regression guard
     for that conversion.
-  - `jdk_install.failure.content` is deliberately **empty**;
+  - `runtime.failure.content` is deliberately **empty**;
     `error_window` reads empty as "use the module default", and
     `failure_content_is_intentionally_empty` pins that.
 - **Bundle *file* discovery lives in `snug-format`, not the CLI.**
@@ -1464,7 +1464,7 @@ by accident.
     `INFO_BOX_H` is 74 px (was 50) and `info_subtext_2` is a real
     catalog key on all five dialog groups, matching the existing
     `info_heading` / `info_subtext` pattern. Only `launcher.error` and
-    `jdk_install.progress` render a box today — the other three pass
+    `runtime.progress` render a box today — the other three pass
     `None` — so adopting the line elsewhere is a one-field flip with
     no catalog change. In `modal_window` the third line is
     `Option<&str>` and its control *and font* are only allocated when
@@ -1765,7 +1765,7 @@ by accident.
     `started` gate had quietly replaced it. So wiring `ui::consent` to it
     revives dead code and removes the gate on both platforms at once.
     Check for that class of thing before writing a new one: the
-    localisation baseline had seven `jdk_install.prompt.*` keys, also
+    localisation baseline had seven `runtime.prompt.*` keys, also
     entirely unused.
   - Generalisable: **never gate a worker thread on the UI.** A UI that
     fails to appear is not an error path, it is a hang, and it is

@@ -28,7 +28,7 @@ pub struct MetadataFailedDialog<'a> {
     pub subheading: &'a str,
     pub error_content: &'a str,
     /// Optional override for the info-box heading. `None` ⇒
-    /// `[jdk_install.metadata_failed].info_heading` from
+    /// `[runtime.metadata_failed].info_heading` from
     /// the localization bundle, falling back to the module default.
     pub info_heading: Option<&'a str>,
     /// Optional override for the info-box subtext. `None` ⇒ TOML,
@@ -56,7 +56,7 @@ pub struct MetadataFailedDialog<'a> {
 /// `mascot_hbitmap` a live handle that outlives the call.
 pub unsafe fn show(parent: HWND, dlg: MetadataFailedDialog<'_>) -> i32 {
     let dialogs = crate::dialogs::dialogs();
-    let mfd = &dialogs.jdk_install.metadata_failed;
+    let mfd = &dialogs.runtime.metadata_failed;
 
     let info_heading = dlg
         .info_heading

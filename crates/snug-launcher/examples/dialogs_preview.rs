@@ -382,7 +382,7 @@ fn run_error(_opts: Options) -> Option<i32> {
     // Mirrors `error_window::show` invocation from
     // `show_error_dialog`. The heading / subheading /
     // info-heading / info-subtext / button-label come from
-    // `[jdk_install.failure]` in the localization bundle — the caller
+    // `[runtime.failure]` in the localization bundle — the caller
     // only supplies the title and the multi-line error content.
     //
     // The mascot slot is left to the EXE-icon fallback: `build.rs`
@@ -468,7 +468,7 @@ fn run_install_prompt_v5() -> Option<i32> {
     // to the EXE's main icon, so the preview shows the brand-correct
     // Snug character without us having to load anything here.
     let d = snug_launcher::dialogs::dialogs();
-    let prompt = &d.jdk_install.prompt;
+    let prompt = &d.runtime.prompt;
     let choice = unsafe {
         snug_launcher::prompt_window::show(
             std::ptr::null_mut(),

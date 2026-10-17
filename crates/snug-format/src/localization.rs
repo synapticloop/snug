@@ -674,6 +674,31 @@ err.bar = multi\\nline
         assert_eq!(unescape(r"x\yz"), "x\\yz");
     }
 
+    // --- Brace escapes ---------------------------------------------------
+    //
+    // `\{name}` is the display-time escape that lets a bundle *show* a
+    // slot instead of filling one. It is deliberately not a parse-time
+    // escape: `unescape` only knows \n \t \r \\ \# \= and passes any other
+    // `\X` through untouched, which is what leaves `\{` intact for
+    // `substitute_slots` to act on at display time.
+    //
+    // The pairing is load-bearing, and the failure it guards against is
+    // silent. If `{` were ever added to the known-escape list, every
+    // brace escape in every bundle would stop escaping and the slots
+    // would start filling -- in shipped copy, where nobody is reading
+    // the diff.
+
+    #[test]
+    fn a_brace_escape_survives_parsing() {
+        assert_eq!(unescape(r"\{size_mb}"), r"\{size_mb}");
+        let bundle = Localization::parse("en", concat!(r"jdk.size = \{size_mb}", "\n")).unwrap();
+        assert_eq!(
+            bundle.get("jdk.size"),
+            Some(r"\{size_mb}"),
+            "the escape must still be in the stored value for the display pass to use"
+        );
+    }
+
     // --- Escaped hashes (F-12) ------------------------------------------
     //
     // These deliberately go through `parse`, not `unescape` directly. The

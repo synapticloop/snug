@@ -5,8 +5,8 @@
 //!
 //! A translation bundle is a flat `key = value` file, and the keys are
 //! only half the contract. The other half is *which `{slots}` each
-//! value uses*: `jdk_install.prompt.content` needs `{size_mb}` and
-//! `{version}`, `jdk_install.retry.subheading` needs `{attempt}` and
+//! value uses*: `runtime.prompt.content` needs `{size_mb}` and
+//! `{version}`, `runtime.retry.subheading` needs `{attempt}` and
 //! `{max_attempts}`. Nothing documented that relationship outside the
 //! English file itself, so a translator had to read 107 lines and spot
 //! the braces by eye.

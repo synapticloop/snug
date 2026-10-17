@@ -163,7 +163,7 @@ launcher.error.content = {error}
 #
 # `snug_launcher::dialogs::Dialogs` is hand-assembled from these keys rather
 # than deserialized from a file, so the typed struct and its compile-checked
-# accessors (`dialogs().jdk_install.prompt.title`) survive the merge - only
+# accessors (`dialogs().runtime.prompt.title`) survive the merge - only
 # the source of the strings moved. The practical consequence for you: a
 # localised app can now reword the chrome as well as the errors, e.g. "Acme
 # requires Java 25" instead of "Eclipse Temurin JDK was not found".
@@ -171,63 +171,63 @@ launcher.error.content = {error}
 # Escaping reminder: these are single-line values. Real newlines are literal
 # `\n`; a literal `#` in a value must be written `\#`.
 
-jdk_install.prompt.title = prompt.title
-jdk_install.prompt.heading = prompt.heading
-jdk_install.prompt.subheading = prompt.subheading
-jdk_install.prompt.content = prompt.content \{size_mb} {size_mb}
-jdk_install.prompt.info_heading = prompt.info_heading
-jdk_install.prompt.info_subtext = prompt.info_subtext
-jdk_install.prompt.info_subtext_2 = prompt.info_subtext_2
-jdk_install.prompt.button_download = prompt.button_download
-jdk_install.prompt.button_cancel = prompt.button_cancel
+runtime.prompt.title = prompt.title
+runtime.prompt.heading = prompt.heading
+runtime.prompt.subheading = prompt.subheading
+runtime.prompt.content = prompt.content {size_mb}
+runtime.prompt.info_heading = prompt.info_heading
+runtime.prompt.info_subtext = prompt.info_subtext
+runtime.prompt.info_subtext_2 = prompt.info_subtext_2
+runtime.prompt.button_download = prompt.button_download
+runtime.prompt.button_cancel = prompt.button_cancel
 
-jdk_install.metadata_failed.title = Could not reach Server - Snug
-jdk_install.metadata_failed.heading = We could not reach the Server
-jdk_install.metadata_failed.subheading = This application requires a download, but our request didn't reach the server.
-jdk_install.metadata_failed.content = Technical detail:\n{error}
-jdk_install.metadata_failed.info_heading = Why did this happen?
-jdk_install.metadata_failed.info_subtext = Your network connection may be down, or the Runtime server is temporarily unreachable.
-jdk_install.metadata_failed.info_subtext_2 = Check your network connection and try again in a moment.
-jdk_install.metadata_failed.button_open_browser = Open the download page
-jdk_install.metadata_failed.button_cancel = Cancel
+runtime.metadata_failed.title = Could not reach Server - Snug
+runtime.metadata_failed.heading = We could not reach the Server
+runtime.metadata_failed.subheading = This application requires a download, but our request didn't reach the server.
+runtime.metadata_failed.content = Technical detail:\n{error}
+runtime.metadata_failed.info_heading = Why did this happen?
+runtime.metadata_failed.info_subtext = Your network connection may be down, or the Runtime server is temporarily unreachable.
+runtime.metadata_failed.info_subtext_2 = Check your network connection and try again in a moment.
+runtime.metadata_failed.button_open_browser = Open the download page
+runtime.metadata_failed.button_cancel = Cancel
 
-jdk_install.progress.title = Install Runtime
-jdk_install.progress.content = Runtime {version} (~{size_mb} MB)
-jdk_install.progress.heading = Install Runtime
-jdk_install.progress.subheading = We need to install a runtime so that the application can launch
-jdk_install.progress.pct_label = {pct}%
-jdk_install.progress.phase_label = Downloading runtime ({arch})
-jdk_install.progress.arch_macos_arm64 = macOS arm64
-jdk_install.progress.arch_macos_x86_64 = macOS x86_64
-jdk_install.progress.arch_windows_x86_64 = Windows x86_64
-jdk_install.progress.detail_with_size = {done_mb} MB of {total_mb} MB ({speed_mb_s} MB/s)
-jdk_install.progress.detail_no_size = Downloading… ({pct}%)
-jdk_install.progress.detail_eta_seconds = {n} seconds remaining
-jdk_install.progress.detail_eta_second = 1 second remaining
-jdk_install.progress.detail_eta_done = Almost done
-jdk_install.progress.info_heading = This only needs to be downloaded once.
-jdk_install.progress.info_subtext = This runtime will be used for future application launches
-jdk_install.progress.info_subtext_2 = The runtime is installed for your user account and is reused by other Java applications.
-jdk_install.progress.cancel_button_during_download = Install
+runtime.progress.title = Install Runtime
+runtime.progress.content = Runtime {version} (~{size_mb} MB)
+runtime.progress.heading = Install Runtime
+runtime.progress.subheading = We need to install a runtime so that the application can launch
+runtime.progress.pct_label = {pct}%
+runtime.progress.phase_label = Downloading runtime ({arch})
+runtime.progress.arch_macos_arm64 = macOS arm64
+runtime.progress.arch_macos_x86_64 = macOS x86_64
+runtime.progress.arch_windows_x86_64 = Windows x86_64
+runtime.progress.detail_with_size = {done_mb} MB of {total_mb} MB ({speed_mb_s} MB/s)
+runtime.progress.detail_no_size = Downloading… ({pct}%)
+runtime.progress.detail_eta_seconds = {n} seconds remaining
+runtime.progress.detail_eta_second = 1 second remaining
+runtime.progress.detail_eta_done = Almost done
+runtime.progress.info_heading = This only needs to be downloaded once.
+runtime.progress.info_subtext = This runtime will be used for future application launches
+runtime.progress.info_subtext_2 = The runtime is installed for your user account and is reused by other Java applications.
+runtime.progress.cancel_button_during_download = Install
 
-jdk_install.failure.title = Runtime Installation Failure
-jdk_install.failure.heading = Install runtime failure
-jdk_install.failure.subheading = All download attempts were exhausted, we will attempt to launch the application.
-jdk_install.failure.content = Eclipse Temurin {version} could not be installed. Technical detail:\n{error}
-jdk_install.failure.info_heading = What can I do?
-jdk_install.failure.info_subtext = Check your network, and retry later.
-jdk_install.failure.info_subtext_2 = The application will try to start with whatever Java is already on this machine.
-jdk_install.failure.button_label = OK
+runtime.failure.title = Runtime Installation Failure
+runtime.failure.heading = Install runtime failure
+runtime.failure.subheading = All download attempts were exhausted, we will attempt to launch the application.
+runtime.failure.content = Eclipse Temurin {version} could not be installed. Technical detail:\n{error}
+runtime.failure.info_heading = What can I do?
+runtime.failure.info_subtext = Check your network, and retry later.
+runtime.failure.info_subtext_2 = The application will try to start with whatever Java is already on this machine.
+runtime.failure.button_label = OK
 
-jdk_install.retry.title = Download failed - Try again?
-jdk_install.retry.heading = Runtime download failed
-jdk_install.retry.subheading = Attempt {attempt} of {max_attempts} failed while downloading the runtime.
-jdk_install.retry.content = {error}
-jdk_install.retry.info_heading = Why did this happen?
-jdk_install.retry.info_subtext = A common cause is a transient network blip. Ensure that you are connected to the network.
-jdk_install.retry.info_subtext_2 = You can retry, or cancel and try again later.
-jdk_install.retry.button_retry = Try again
-jdk_install.retry.button_cancel = Cancel
+runtime.retry.title = Download failed - Try again?
+runtime.retry.heading = Runtime download failed
+runtime.retry.subheading = Attempt {attempt} of {max_attempts} failed while downloading the runtime.
+runtime.retry.content = {error}
+runtime.retry.info_heading = Why did this happen?
+runtime.retry.info_subtext = A common cause is a transient network blip. Ensure that you are connected to the network.
+runtime.retry.info_subtext_2 = You can retry, or cancel and try again later.
+runtime.retry.button_retry = Try again
+runtime.retry.button_cancel = Cancel
 
 # Generic shells for the stock TaskDialog fallbacks (`show_error_dialog`,
 # `show_info_dialog`). The title/main come from the caller, so these are

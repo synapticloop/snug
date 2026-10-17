@@ -510,7 +510,7 @@ Every user-facing string the launcher shows lives in one place:
 `snug-format/assets/snug-localisations.en.txt`. That covers the error
 messages (`err.*`), the splash strings (`splash.*`), the JDK-install
 errors (`jdk.err.*`) **and** the dialog chrome — titles, headings,
-info-box copy, progress text and button labels (`jdk_install.*`,
+info-box copy, progress text and button labels (`runtime.*`,
 `generic.*`, `launcher.error.*`). Edit the file, rerun
 `scripts\build-windows.cmd`, and the rebuilt EXE picks up the change
 with no Rust edits needed.
@@ -523,13 +523,13 @@ the copy compiled into the launcher's in-binary fallback are the same
 bytes by construction.
 
 ```text
-jdk_install.prompt.title = Java Runtime Required - Snug
-jdk_install.prompt.main = Eclipse Temurin JDK was not found on this machine
-jdk_install.prompt.content = This application needs a Java {version} or higher. Snug can download the official Eclipse Temurin {version} (~{size_mb} MB) and install it to a per-user location, or open the download page in your browser.\n\nDownload will be verified against the official SHA-256.
-jdk_install.prompt.button_download = Download Temurin {version} now
-jdk_install.prompt.button_cancel = Cancel
+runtime.prompt.title = Java Runtime Required - Snug
+runtime.prompt.heading = Eclipse Temurin JDK was not found on this machine
+runtime.prompt.content = This application needs a Java {version} or higher. Snug can download the official Eclipse Temurin {version} (~{size_mb} MB) and install it to a per-user location, or open the download page in your browser.\n\nDownload will be verified against the official SHA-256.
+runtime.prompt.button_download = Download Temurin {version} now
+runtime.prompt.button_cancel = Cancel
 
-jdk_install.metadata_failed.title = Could not reach Server - Snug
+runtime.metadata_failed.title = Could not reach Server - Snug
 ```
 
 Values are single-line. A real newline is a literal `\n`, a literal
@@ -550,8 +550,8 @@ $ snug --list-tokens
 snug: localisation inventory for the built-in `en` baseline
       107 keys, 42 carry placeholders, 25 distinct tokens
 ...
-  jdk_install.prompt.content  {size_mb}
-  jdk_install.retry.subheading  {attempt, max_attempts}
+  runtime.prompt.content  {size_mb}
+  runtime.retry.subheading  {attempt, max_attempts}
   launcher.error.content  {error}
 ```
 
@@ -570,10 +570,10 @@ dialog. Nothing goes red in between. So `snug` warns at build time:
 $ snug App.jar --localization localisations/
 snug: warning: localization file `fr` (tag `fr`) uses different placeholders
 than the built-in English baseline on 2 key(s):
-snug:   - jdk_install.progress.pct_label: baseline {pct}, bundle (none)
+snug:   - runtime.progress.pct_label: baseline {pct}, bundle (none)
 snug:       present in the baseline but missing here, so the translated sentence
              silently loses that value: {pct}
-snug:   - jdk_install.retry.subheading: baseline {attempt} {max_attempts},
+snug:   - runtime.retry.subheading: baseline {attempt} {max_attempts},
          bundle {attempt} {max_attempts} {version}
 snug:       not in the baseline, so nothing will fill them and they print
              literally: {version}
@@ -600,7 +600,7 @@ is decoded.
 
 `snug_launcher::dialogs::Dialogs` is assembled from these keys rather
 than deserialized, so all ~16 call sites keep compile-checked field
-access (`dialogs().jdk_install.prompt.title`) and the key literals live
+access (`dialogs().runtime.prompt.title`) and the key literals live
 in exactly one place. A lookup that matches nothing in the chain returns
 the key itself, so the
 `every_localize_key_is_in_the_baseline` test in `localize.rs` keeps that

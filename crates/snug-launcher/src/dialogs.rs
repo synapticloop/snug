@@ -3,7 +3,7 @@
 //! Sourced from the localization bundle — the same chain the error
 //! strings use — rather than a dedicated file. The strings live in
 //! `snug-format/assets/snug-localisations.en.txt` under
-//! `jdk_install.*`, `generic.*` and `launcher.error.*` keys, which
+//! `runtime.*`, `generic.*` and `launcher.error.*` keys, which
 //! means a `--localization <tag>` bundle translates the whole window
 //! rather than just the error text inside it.
 //!
@@ -14,7 +14,7 @@
 //! literals, and a typo in one resolves to the key itself at runtime
 //! — loud in the UI, but late. Keeping the struct preserves
 //! compile-checked field access at every call site
-//! (`dialogs().jdk_install.prompt.title`), so key literals appear in
+//! (`dialogs().runtime.prompt.title`), so key literals appear in
 //! exactly one place — this constructor — and the
 //! `every_localize_key_is_in_the_baseline` test in
 //! [`crate::localize`] checks them against the baseline.
@@ -27,18 +27,18 @@
 use std::sync::RwLock;
 
 /// Top-level container. Field names mirror the key prefixes in the
-/// localization catalog one-for-one — `dialogs.jdk_install.prompt`
-/// is `jdk_install.prompt.*`, and so on.
+/// localization catalog one-for-one — `dialogs.runtime.prompt`
+/// is `runtime.prompt.*`, and so on.
 #[derive(Debug, Clone)]
 pub struct Dialogs {
-    pub jdk_install: JdkInstallDialogs,
+    pub runtime: RuntimeDialogs,
     pub generic: GenericDialogs,
     pub launcher: LauncherDialogs,
 }
 
 /// Launcher-runtime error strings (Java launch failures, JNI errors,
 /// Main-Class not found, Java `main` exceptions, etc.). Same physical
-/// window as `[jdk_install.failure]` — different copy.
+/// window as `[runtime.failure]` — different copy.
 #[derive(Debug, Clone)]
 pub struct LauncherDialogs {
     pub error: LauncherErrorDialogs,
@@ -64,7 +64,7 @@ pub struct LauncherErrorDialogs {
 }
 
 #[derive(Debug, Clone)]
-pub struct JdkInstallDialogs {
+pub struct RuntimeDialogs {
     pub prompt: InstallPromptDialog,
     pub metadata_failed: MetadataFailedDialog,
     pub progress: ProgressDialog,
@@ -252,7 +252,7 @@ static DIALOGS: RwLock<Option<(u64, &'static Dialogs)>> = RwLock::new(None);
 /// `OnceLock` would cache whatever it saw, which is why the
 /// pre-`init` path in [`crate::localize::lookup`] falls back to the
 /// compiled-in English baseline rather than handing back bare keys:
-/// a cached `jdk_install.prompt.title` would be a permanently broken
+/// a cached `runtime.prompt.title` would be a permanently broken
 /// window, and a cached English string is merely untranslated.
 pub fn dialogs() -> &'static Dialogs {
     let gen_id = crate::localize::generation();
@@ -291,73 +291,73 @@ pub fn dialogs() -> &'static Dialogs {
 fn assemble() -> Dialogs {
     use crate::localize::lookup;
     Dialogs {
-            jdk_install: JdkInstallDialogs {
+            runtime: RuntimeDialogs {
                 prompt: InstallPromptDialog {
-                    title: lookup("jdk_install.prompt.title"),
-                    heading: lookup("jdk_install.prompt.heading"),
-                    subheading: lookup("jdk_install.prompt.subheading"),
-                    content: lookup("jdk_install.prompt.content"),
-                    info_heading: lookup("jdk_install.prompt.info_heading"),
-                    info_subtext: lookup("jdk_install.prompt.info_subtext"),
-                    info_subtext_2: lookup("jdk_install.prompt.info_subtext_2"),
-                    button_download: lookup("jdk_install.prompt.button_download"),
-                    button_cancel: lookup("jdk_install.prompt.button_cancel"),
+                    title: lookup("runtime.prompt.title"),
+                    heading: lookup("runtime.prompt.heading"),
+                    subheading: lookup("runtime.prompt.subheading"),
+                    content: lookup("runtime.prompt.content"),
+                    info_heading: lookup("runtime.prompt.info_heading"),
+                    info_subtext: lookup("runtime.prompt.info_subtext"),
+                    info_subtext_2: lookup("runtime.prompt.info_subtext_2"),
+                    button_download: lookup("runtime.prompt.button_download"),
+                    button_cancel: lookup("runtime.prompt.button_cancel"),
                 },
                 metadata_failed: MetadataFailedDialog {
-                    title: lookup("jdk_install.metadata_failed.title"),
-                    heading: lookup("jdk_install.metadata_failed.heading"),
-                    subheading: lookup("jdk_install.metadata_failed.subheading"),
-                    content: lookup("jdk_install.metadata_failed.content"),
-                    info_heading: lookup("jdk_install.metadata_failed.info_heading"),
-                    info_subtext: lookup("jdk_install.metadata_failed.info_subtext"),
-                    info_subtext_2: lookup("jdk_install.metadata_failed.info_subtext_2"),
-                    button_open_browser: lookup("jdk_install.metadata_failed.button_open_browser"),
-                    button_cancel: lookup("jdk_install.metadata_failed.button_cancel"),
+                    title: lookup("runtime.metadata_failed.title"),
+                    heading: lookup("runtime.metadata_failed.heading"),
+                    subheading: lookup("runtime.metadata_failed.subheading"),
+                    content: lookup("runtime.metadata_failed.content"),
+                    info_heading: lookup("runtime.metadata_failed.info_heading"),
+                    info_subtext: lookup("runtime.metadata_failed.info_subtext"),
+                    info_subtext_2: lookup("runtime.metadata_failed.info_subtext_2"),
+                    button_open_browser: lookup("runtime.metadata_failed.button_open_browser"),
+                    button_cancel: lookup("runtime.metadata_failed.button_cancel"),
                 },
                 progress: ProgressDialog {
-                    title: lookup("jdk_install.progress.title"),
-                    heading: lookup("jdk_install.progress.heading"),
-                    subheading: lookup("jdk_install.progress.subheading"),
-                    content: lookup("jdk_install.progress.content"),
-                    pct_label: lookup("jdk_install.progress.pct_label"),
-                    phase_label: lookup("jdk_install.progress.phase_label"),
-                    detail_with_size: lookup("jdk_install.progress.detail_with_size"),
-                    detail_no_size: lookup("jdk_install.progress.detail_no_size"),
-                    detail_eta_seconds: lookup("jdk_install.progress.detail_eta_seconds"),
-                    detail_eta_second: lookup("jdk_install.progress.detail_eta_second"),
-                    detail_eta_done: lookup("jdk_install.progress.detail_eta_done"),
-                    info_heading: lookup("jdk_install.progress.info_heading"),
-                    info_subtext: lookup("jdk_install.progress.info_subtext"),
-                    info_subtext_2: lookup("jdk_install.progress.info_subtext_2"),
+                    title: lookup("runtime.progress.title"),
+                    heading: lookup("runtime.progress.heading"),
+                    subheading: lookup("runtime.progress.subheading"),
+                    content: lookup("runtime.progress.content"),
+                    pct_label: lookup("runtime.progress.pct_label"),
+                    phase_label: lookup("runtime.progress.phase_label"),
+                    detail_with_size: lookup("runtime.progress.detail_with_size"),
+                    detail_no_size: lookup("runtime.progress.detail_no_size"),
+                    detail_eta_seconds: lookup("runtime.progress.detail_eta_seconds"),
+                    detail_eta_second: lookup("runtime.progress.detail_eta_second"),
+                    detail_eta_done: lookup("runtime.progress.detail_eta_done"),
+                    info_heading: lookup("runtime.progress.info_heading"),
+                    info_subtext: lookup("runtime.progress.info_subtext"),
+                    info_subtext_2: lookup("runtime.progress.info_subtext_2"),
                     cancel_button_during_download: {
-                        lookup("jdk_install.progress.cancel_button_during_download")
+                        lookup("runtime.progress.cancel_button_during_download")
                     },
-                    arch_macos_arm64: lookup("jdk_install.progress.arch_macos_arm64"),
-                    arch_macos_x86_64: lookup("jdk_install.progress.arch_macos_x86_64"),
-                    arch_windows_x86_64: lookup("jdk_install.progress.arch_windows_x86_64"),
+                    arch_macos_arm64: lookup("runtime.progress.arch_macos_arm64"),
+                    arch_macos_x86_64: lookup("runtime.progress.arch_macos_x86_64"),
+                    arch_windows_x86_64: lookup("runtime.progress.arch_windows_x86_64"),
                 },
                 failure: FailureDialog {
-                    title: lookup("jdk_install.failure.title"),
-                    heading: lookup("jdk_install.failure.heading"),
-                    subheading: lookup("jdk_install.failure.subheading"),
+                    title: lookup("runtime.failure.title"),
+                    heading: lookup("runtime.failure.heading"),
+                    subheading: lookup("runtime.failure.subheading"),
                     // Intentionally empty in the baseline: `error_window`
                     // treats an empty body as "use the module default".
-                    content: lookup("jdk_install.failure.content"),
-                    info_heading: lookup("jdk_install.failure.info_heading"),
-                    info_subtext: lookup("jdk_install.failure.info_subtext"),
-                    info_subtext_2: lookup("jdk_install.failure.info_subtext_2"),
-                    button_label: lookup("jdk_install.failure.button_label"),
+                    content: lookup("runtime.failure.content"),
+                    info_heading: lookup("runtime.failure.info_heading"),
+                    info_subtext: lookup("runtime.failure.info_subtext"),
+                    info_subtext_2: lookup("runtime.failure.info_subtext_2"),
+                    button_label: lookup("runtime.failure.button_label"),
                 },
                 retry: RetryDialog {
-                    title: lookup("jdk_install.retry.title"),
-                    heading: lookup("jdk_install.retry.heading"),
-                    subheading: lookup("jdk_install.retry.subheading"),
-                    content: lookup("jdk_install.retry.content"),
-                    info_heading: lookup("jdk_install.retry.info_heading"),
-                    info_subtext: lookup("jdk_install.retry.info_subtext"),
-                    info_subtext_2: lookup("jdk_install.retry.info_subtext_2"),
-                    button_retry: lookup("jdk_install.retry.button_retry"),
-                    button_cancel: lookup("jdk_install.retry.button_cancel"),
+                    title: lookup("runtime.retry.title"),
+                    heading: lookup("runtime.retry.heading"),
+                    subheading: lookup("runtime.retry.subheading"),
+                    content: lookup("runtime.retry.content"),
+                    info_heading: lookup("runtime.retry.info_heading"),
+                    info_subtext: lookup("runtime.retry.info_subtext"),
+                    info_subtext_2: lookup("runtime.retry.info_subtext_2"),
+                    button_retry: lookup("runtime.retry.button_retry"),
+                    button_cancel: lookup("runtime.retry.button_cancel"),
                 },
             },
             generic: GenericDialogs {
@@ -480,9 +480,9 @@ mod tests {
         // itself, so these assertions are really "no dotted key text
         // leaked into a field".
         let d = dialogs();
-        assert!(!d.jdk_install.prompt.title.is_empty());
-        assert!(!d.jdk_install.prompt.button_download.is_empty());
-        assert!(d.jdk_install.prompt.content.contains("{size_mb}"));
+        assert!(!d.runtime.prompt.title.is_empty());
+        assert!(!d.runtime.prompt.button_download.is_empty());
+        assert!(d.runtime.prompt.content.contains("{size_mb}"));
         assert_eq!(d.generic.error_dialog_ok, "OK");
         // The brand suffix is defined by the baseline, and the
         // separator in front of it has changed once already -- it was
@@ -508,27 +508,27 @@ mod tests {
 
         let d = dialogs();
         for (name, value) in [
-            ("prompt.title", &d.jdk_install.prompt.title),
-            ("prompt.heading", &d.jdk_install.prompt.heading),
-            ("prompt.subheading", &d.jdk_install.prompt.subheading),
-            ("prompt.content", &d.jdk_install.prompt.content),
-            ("prompt.button_download", &d.jdk_install.prompt.button_download),
-            ("prompt.button_cancel", &d.jdk_install.prompt.button_cancel),
-            ("metadata_failed.title", &d.jdk_install.metadata_failed.title),
-            ("metadata_failed.content", &d.jdk_install.metadata_failed.content),
-            ("metadata_failed.button_cancel", &d.jdk_install.metadata_failed.button_cancel),
-            ("progress.title", &d.jdk_install.progress.title),
-            ("progress.heading", &d.jdk_install.progress.heading),
-            ("progress.subheading", &d.jdk_install.progress.subheading),
-            ("progress.content", &d.jdk_install.progress.content),
-            ("progress.pct_label", &d.jdk_install.progress.pct_label),
-            ("progress.detail_with_size", &d.jdk_install.progress.detail_with_size),
-            ("progress.cancel_during_download", &d.jdk_install.progress.cancel_button_during_download),
-            ("failure.title", &d.jdk_install.failure.title),
-            ("failure.button_label", &d.jdk_install.failure.button_label),
-            ("retry.title", &d.jdk_install.retry.title),
-            ("retry.content", &d.jdk_install.retry.content),
-            ("retry.button_retry", &d.jdk_install.retry.button_retry),
+            ("prompt.title", &d.runtime.prompt.title),
+            ("prompt.heading", &d.runtime.prompt.heading),
+            ("prompt.subheading", &d.runtime.prompt.subheading),
+            ("prompt.content", &d.runtime.prompt.content),
+            ("prompt.button_download", &d.runtime.prompt.button_download),
+            ("prompt.button_cancel", &d.runtime.prompt.button_cancel),
+            ("metadata_failed.title", &d.runtime.metadata_failed.title),
+            ("metadata_failed.content", &d.runtime.metadata_failed.content),
+            ("metadata_failed.button_cancel", &d.runtime.metadata_failed.button_cancel),
+            ("progress.title", &d.runtime.progress.title),
+            ("progress.heading", &d.runtime.progress.heading),
+            ("progress.subheading", &d.runtime.progress.subheading),
+            ("progress.content", &d.runtime.progress.content),
+            ("progress.pct_label", &d.runtime.progress.pct_label),
+            ("progress.detail_with_size", &d.runtime.progress.detail_with_size),
+            ("progress.cancel_during_download", &d.runtime.progress.cancel_button_during_download),
+            ("failure.title", &d.runtime.failure.title),
+            ("failure.button_label", &d.runtime.failure.button_label),
+            ("retry.title", &d.runtime.retry.title),
+            ("retry.content", &d.runtime.retry.content),
+            ("retry.button_retry", &d.runtime.retry.button_retry),
             ("generic.error_dialog_ok", &d.generic.error_dialog_ok),
             ("generic.info_dialog_continue", &d.generic.info_dialog_continue),
             ("launcher.error.title", &d.launcher.error.title),
@@ -553,14 +553,14 @@ mod tests {
         // still a multi-line value — the regression this test exists
         // for is about `\n` being decoded at all, not about which key
         // happens to carry one today.
-        let prompt = &d.jdk_install.prompt.content;
+        let prompt = &d.runtime.prompt.content;
         assert!(
             prompt.contains("a runtime to launch"),
             "prompt body changed shape: {prompt:?}"
         );
         assert!(!prompt.contains("\\n"), "escapes were not decoded");
 
-        let failed = &d.jdk_install.metadata_failed.content;
+        let failed = &d.runtime.metadata_failed.content;
         assert!(failed.contains("\n"), "metadata body lost its line break: {failed:?}");
         assert!(failed.starts_with("Technical detail:\n{error}"), "{failed:?}");
         assert!(!failed.contains("\\n"), "escapes were not decoded");
@@ -581,7 +581,7 @@ mod tests {
         // `error_window` so that a `--localization` bundle can translate it
         // by default, the same as every other key in the dialog.
         let content = crate::dialogs::fill(
-            dialogs().jdk_install.failure.content.as_str(),
+            dialogs().runtime.failure.content.as_str(),
             &[("version", "25.0.1+9"), ("error", "HTTP 503 from api.adoptium.net")],
         );
         assert!(

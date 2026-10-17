@@ -130,10 +130,10 @@ fn show(index: usize) {
             log("— all attempts exhausted —");
             let d = snug_launcher::dialogs::dialogs();
             let content = snug_launcher::dialogs::fill(
-                d.jdk_install.failure.content.as_str(),
+                d.runtime.failure.content.as_str(),
                 &[("version", DEMO_VERSION), ("error", DEMO_ERROR)],
             );
-            appkit::failure(&d.jdk_install.failure.title, &content);
+            appkit::failure(&d.runtime.failure.title, &content);
             log("  dismissed");
         }
         3 => {

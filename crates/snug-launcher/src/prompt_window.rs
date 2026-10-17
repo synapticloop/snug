@@ -29,8 +29,8 @@
 //! └────────────────────────────────────────────────────────────┘
 //! ```
 //!
-//! The TOML `[jdk_install.prompt.show_details]` /
-//! `[jdk_install.prompt.hide_details]` fields are dropped (see
+//! The TOML `[runtime.prompt.show_details]` /
+//! `[runtime.prompt.hide_details]` fields are dropped (see
 //! the localization bundle): this dialog does not have an expand/collapse
 //! toggle — both `content` and `expanded` are always rendered.
 
@@ -58,7 +58,7 @@ pub enum PromptChoice {
 /// * `mascot_hbitmap` — loaded Snug mascot, painted in the
 ///   upper-left of the dialog. `0` falls back to the EXE main
 ///   icon. See [`crate::modal_window::ModalDialog::mascot_hbitmap`].
-/// * `prompt` — strings from `[jdk_install.prompt]` in
+/// * `prompt` — strings from `[runtime.prompt]` in
 ///   the localization bundle.
 /// * `version` — replaces `{version}` placeholders in `content`
 ///   / `expanded` / `button_download`.

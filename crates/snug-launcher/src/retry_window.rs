@@ -46,7 +46,7 @@ pub struct RetryDialog<'a> {
 /// `mascot_hbitmap` a live handle that outlives the call.
 pub unsafe fn show(parent: HWND, dlg: RetryDialog<'_>) -> i32 {
     let dialogs = crate::dialogs::dialogs();
-    let retry = &dialogs.jdk_install.retry;
+    let retry = &dialogs.runtime.retry;
 
     let info_heading = dlg
         .info_heading

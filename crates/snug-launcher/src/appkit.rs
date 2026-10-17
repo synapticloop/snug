@@ -3,7 +3,7 @@
 //! This is the macOS half of the `jdk_install::ui` seam, and it exists to
 //! put the *same localised strings* on screen that Windows shows. Every
 //! piece of copy comes from [`crate::dialogs`], assembled with
-//! [`crate::dialogs::fill`] against the `[jdk_install.*]` keys — nothing
+//! [`crate::dialogs::fill`] against the `[runtime.*]` keys — nothing
 //! here formats a string of its own, so a `--localization <tag>` bundle
 //! translates the macOS windows exactly as it translates the Windows ones.
 //!
@@ -280,7 +280,7 @@ impl PickerResponder {
 /// never substituted there at all. See the Backlog.
 fn adoptium_arch_label() -> String {
     let d = dialogs::dialogs();
-    let p = &d.jdk_install.progress;
+    let p = &d.runtime.progress;
     if std::env::consts::ARCH == "aarch64" {
         p.arch_macos_arm64.clone()
     } else {
@@ -304,7 +304,7 @@ fn progress_status(
     arch: &str,
 ) -> String {
     let d = dialogs::dialogs();
-    let p = &d.jdk_install.progress;
+    let p = &d.runtime.progress;
 
     let phase_text = dialogs::fill(p.phase_label.as_str(), &[("arch", arch)]);
     let pct_text = dialogs::fill(p.pct_label.as_str(), &[("pct", &pct.to_string())]);
@@ -867,7 +867,7 @@ pub(crate) fn progress(
     use std::time::Instant;
 
     let d = dialogs::dialogs();
-    let p = &d.jdk_install.progress;
+    let p = &d.runtime.progress;
     let arch = adoptium_arch_label();
     let arch = arch.as_str();
 
@@ -942,7 +942,7 @@ pub(crate) fn progress(
     let cancel = unsafe {
         button(
             mtm,
-            &d.jdk_install.prompt.button_cancel,
+            &d.runtime.prompt.button_cancel,
             0,
             &responder,
             objc2::sel!(cancelClicked:),
@@ -1452,7 +1452,7 @@ fn log_only_progress(shared: &std::sync::Arc<crate::jdk_install::ProgressShared>
 /// the release page to be opened.
 pub fn metadata_failed(min_java: u16, error_detail: &str) -> i32 {
     let d = dialogs::dialogs();
-    let md = &d.jdk_install.metadata_failed;
+    let md = &d.runtime.metadata_failed;
     let major = min_java.to_string();
 
     // The placeholder is `{major}`, not `{min_java}` — the localisation
@@ -1490,7 +1490,7 @@ pub fn metadata_failed(min_java: u16, error_detail: &str) -> i32 {
 /// A download attempt failed. `true` means "retry".
 pub fn retry(attempt: u32, max_attempts: u32, version: &str, error: &str) -> bool {
     let d = dialogs::dialogs();
-    let r = &d.jdk_install.retry;
+    let r = &d.runtime.retry;
     let attempt_str = attempt.to_string();
     let max_str = max_attempts.to_string();
 
@@ -1527,7 +1527,7 @@ pub fn retry(attempt: u32, max_attempts: u32, version: &str, error: &str) -> boo
 /// Terminal failure, after the attempts are exhausted. No answer needed.
 pub fn failure(title: &str, content: &str) {
     let d = dialogs::dialogs();
-    let f = &d.jdk_install.failure;
+    let f = &d.runtime.failure;
     ask(
         "critical",
         title,
@@ -1549,7 +1549,7 @@ pub fn failure(title: &str, content: &str) {
 /// Two buttons, install or cancel, matching the Windows prompt.
 pub fn consent(version: &str, size_mb: u32, sha256: &str) -> bool {
     let d = dialogs::dialogs();
-    let p = &d.jdk_install.prompt;
+    let p = &d.runtime.prompt;
 
     let version = version.to_string();
     let size_mb = size_mb.to_string();

@@ -1588,7 +1588,7 @@ pub fn maybe_install(
                     ));
                     let dlg = dialogs::dialogs();
                     let content = dialogs::fill(
-                        dlg.jdk_install.failure.content.as_str(),
+                        dlg.runtime.failure.content.as_str(),
                         &[
                             ("version", metadata.version.as_str()),
                             ("error", err.as_str()),
@@ -1596,12 +1596,12 @@ pub fn maybe_install(
                     );
                     // Only the title and the error text are the caller's to
                     // supply. The heading and subheading come from
-                    // `[jdk_install.failure]` in the localisation bundle,
+                    // `[runtime.failure]` in the localisation bundle,
                     // because `show_error_dialog` passes an empty heading and
                     // `error_window::show` substitutes the bundle's value for
                     // an empty one. This call used to pass a third string that
                     // no platform ever read.
-                    ui::failure(parent, &dlg.jdk_install.failure.title, &content);
+                    ui::failure(parent, &dlg.runtime.failure.title, &content);
                     return Ok(None);
                 }
                 if !ui::retry(
@@ -1714,7 +1714,7 @@ fn run_one_install_attempt(
 
     let dlg = dialogs::dialogs();
     let progress_main = dialogs::fill(
-        dlg.jdk_install.progress.content.as_str(),
+        dlg.runtime.progress.content.as_str(),
         &[
             ("version", metadata.version.as_str()),
             (
@@ -1725,7 +1725,7 @@ fn run_one_install_attempt(
     );
     ui::progress(
         parent,
-        &dlg.jdk_install.progress.title,
+        &dlg.runtime.progress.title,
         &progress_main,
         shared.clone(),
     );
@@ -1894,7 +1894,7 @@ mod ui {
             crate::prompt_window::show(
                 parent,
                 mascot,
-                &d.jdk_install.prompt,
+                &d.runtime.prompt,
                 version,
                 &size_mb.to_string(),
                 sha256,
@@ -1951,7 +1951,7 @@ mod ui {
     /// Terminal failure, after the attempts are exhausted.
     ///
     /// The heading and subheading are deliberately *not* parameters. They are
-    /// read from `[jdk_install.failure]` in the localisation bundle, because
+    /// read from `[runtime.failure]` in the localisation bundle, because
     /// `show_error_dialog` passes an empty heading and `error_window::show`
     /// substitutes the bundle's value for an empty one.
     ///
@@ -2096,7 +2096,7 @@ pub unsafe fn show_retry_dialog(
     // (avoids the dangling-`dialogs::fill(...).as_str()` trap that
     // bit `show_metadata_failed_dialog`).
     let content = dialogs::fill(
-        d.jdk_install.retry.content.as_str(),
+        d.runtime.retry.content.as_str(),
         &[
             ("version", version),
             ("attempt", &attempt_str),
@@ -2105,7 +2105,7 @@ pub unsafe fn show_retry_dialog(
         ],
     );
     let subheading = dialogs::fill(
-        d.jdk_install.retry.subheading.as_str(),
+        d.runtime.retry.subheading.as_str(),
         &[
             ("version", version),
             ("attempt", &attempt_str),
@@ -2117,15 +2117,15 @@ pub unsafe fn show_retry_dialog(
         crate::retry_window::show(
             parent,
             crate::retry_window::RetryDialog {
-                title: d.jdk_install.retry.title.as_str(),
-                heading: d.jdk_install.retry.heading.as_str(),
+                title: d.runtime.retry.title.as_str(),
+                heading: d.runtime.retry.heading.as_str(),
                 subheading: subheading.as_str(),
                 error_content: content.as_str(),
                 info_heading: None,
                 info_subtext: None,
                 info_subtext_2: None,
-                primary_label: d.jdk_install.retry.button_retry.as_str(),
-                secondary_label: d.jdk_install.retry.button_cancel.as_str(),
+                primary_label: d.runtime.retry.button_retry.as_str(),
+                secondary_label: d.runtime.retry.button_cancel.as_str(),
                 mascot_hbitmap: 0,
             },
         )
@@ -2155,7 +2155,7 @@ pub unsafe fn show_metadata_failed_dialog(parent: HWND, min_java: u16, error_det
     let major = min_java.to_string();
 
     // The dialog reads heading / subheading / info_heading /
-    // info_subtext / button labels from `[jdk_install.metadata_failed]`.
+    // info_subtext / button labels from `[runtime.metadata_failed]`.
     // The launcher formats `content` itself (with `{major}` and
     // `{error}` filled) before passing it in.
     //
@@ -2165,26 +2165,26 @@ pub unsafe fn show_metadata_failed_dialog(parent: HWND, min_java: u16, error_det
     // the dialog reads it â€” see `metadata_failed_window::show`'s
     // `wide(dlg.title)` call).
     let error_content = dialogs::fill(
-        d.jdk_install.metadata_failed.content.as_str(),
+        d.runtime.metadata_failed.content.as_str(),
         &[("major", &major), ("error", error_detail)],
     );
     let subheading = dialogs::fill(
-        d.jdk_install.metadata_failed.subheading.as_str(),
+        d.runtime.metadata_failed.subheading.as_str(),
         &[("major", &major)],
     );
     let result = unsafe {
         crate::metadata_failed_window::show(
             parent,
             crate::metadata_failed_window::MetadataFailedDialog {
-                title: d.jdk_install.metadata_failed.title.as_str(),
-                heading: d.jdk_install.metadata_failed.heading.as_str(),
+                title: d.runtime.metadata_failed.title.as_str(),
+                heading: d.runtime.metadata_failed.heading.as_str(),
                 subheading: subheading.as_str(),
                 error_content: error_content.as_str(),
                 info_heading: None,
                 info_subtext: None,
                 info_subtext_2: None,
-                primary_label: d.jdk_install.metadata_failed.button_open_browser.as_str(),
-                secondary_label: d.jdk_install.metadata_failed.button_cancel.as_str(),
+                primary_label: d.runtime.metadata_failed.button_open_browser.as_str(),
+                secondary_label: d.runtime.metadata_failed.button_cancel.as_str(),
                 mascot_hbitmap: 0,
             },
         )
