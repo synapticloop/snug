@@ -136,8 +136,13 @@ pub const IDCANCEL_I32: i32 = 2;
 
 const CLASS_NAME: &str = "snug_modal_dialog_v1\0";
 
-const CONTENT_Y: i32 = 108;
-const CONTENT_H: i32 = 88;
+/// The body band, declared in `crate::frame` because the info box is
+/// anchored below it. This dialog is what fills it to the bottom — the
+/// progress dialog's body is shorter — so these are the numbers the
+/// frame's [`BODY_BOTTOM`] is sized against.
+const CONTENT_Y: i32 = BODY_Y;
+const CONTENT_H: i32 = BODY_H;
+const _: () = assert!(CONTENT_Y + CONTENT_H == BODY_BOTTOM);
 
 /// Height of the error-content control, which gives way to the link
 /// block when this dialog has one.

@@ -123,6 +123,13 @@ const CANCEL_PT: i32 = BUTTON_PT;
 const CANCEL_H: i32 = BUTTON_H;
 const CANCEL_MIN_W: i32 = BUTTON_MIN_W;
 const CANCEL_Y: i32 = BUTTON_Y;
+
+/// This dialog's body is shorter than the modal's, but the frame sizes
+/// the info box for whichever reaches lower. If this body grew past
+/// `BODY_BOTTOM` it would slide under the box rather than push it, so
+/// the band is asserted rather than trusted.
+const _: () = assert!(DETAIL_Y + DETAIL_H <= BODY_BOTTOM);
+const _: () = assert!(PHASE_Y + PHASE_H <= BODY_BOTTOM);
 const CANCEL_RIGHT: i32 = BUTTON_RIGHT;
 
 // Control IDs
