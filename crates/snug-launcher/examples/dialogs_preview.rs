@@ -410,8 +410,7 @@ fn run_error(_opts: Options) -> Option<i32> {
                 info_subtext_2: None,
                 button_label: None,
                 mascot_hbitmap: 0,
-                update_check_url: Some(fake_update_url),
-                update_check_label: None,
+                update_url: Some(fake_update_url),
             },
         )
     };
@@ -449,10 +448,9 @@ fn run_java_error() -> Option<i32> {
                 info_heading: Some(&dlg.launcher.error.info_heading),
                 info_subtext: Some(&dlg.launcher.error.info_subtext),
                 info_subtext_2: Some(&dlg.launcher.error.info_subtext_2),
-                button_label: Some(&dlg.launcher.error.button_label),
+                button_label: Some(&dlg.launcher.error.button_exit),
                 mascot_hbitmap: 0,
-                update_check_url: Some(fake_update_url),
-                update_check_label: None,
+                update_url: Some(fake_update_url),
             },
         )
     };

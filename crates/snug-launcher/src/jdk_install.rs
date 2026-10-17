@@ -2227,8 +2227,7 @@ pub unsafe fn show_error_dialog(parent: HWND, title: &str, content: &str) {
                 info_subtext_2: None,
                 button_label: None,
                 mascot_hbitmap: 0,
-                update_check_url: None,
-                update_check_label: None,
+                update_url: None,
             },
         );
     }
@@ -2241,7 +2240,7 @@ pub unsafe fn show_error_dialog(parent: HWND, title: &str, content: &str) {
 /// caller platform-agnostic. Only reached when the user has *asked* to
 /// see the release page, so the intrusiveness is already agreed.
 #[cfg(windows)]
-fn open_in_browser(url: &str) -> Result<(), JdkError> {
+pub(crate) fn open_in_browser(url: &str) -> Result<(), JdkError> {
     let url_w: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
     let result = unsafe {
         ShellExecuteW(
@@ -2262,7 +2261,7 @@ fn open_in_browser(url: &str) -> Result<(), JdkError> {
 }
 
 #[cfg(target_os = "macos")]
-fn open_in_browser(url: &str) -> Result<(), JdkError> {
+pub(crate) fn open_in_browser(url: &str) -> Result<(), JdkError> {
     let status = std::process::Command::new("/usr/bin/open")
         .arg(url)
         .status()

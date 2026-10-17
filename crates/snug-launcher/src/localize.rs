@@ -885,8 +885,8 @@ mod tests {
             "launcher.error.info_heading",
             "launcher.error.info_subtext",
             "launcher.error.info_subtext_2",
-            "launcher.error.button_label",
-            "launcher.error.update_check_label",
+            "launcher.error.button_exit",
+            "launcher.error.button_update",
         ];
 
         let baseline = Bundles::load(&[]);

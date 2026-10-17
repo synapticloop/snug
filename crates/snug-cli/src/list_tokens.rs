@@ -198,13 +198,13 @@ mod tests {
         for expected in [
             "version",
             "size_mb",
-            "sha256",
             "attempt",
             "max_attempts",
             "error",
             "pct",
             "arch",
             "min_java",
+            "update_link",
         ] {
             assert!(
                 inv.tokens.contains(expected),

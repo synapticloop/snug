@@ -467,13 +467,7 @@ pub unsafe fn show<'a>(parent: HWND, dlg: &'a ModalDialog<'a>) -> i32 {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string)
-            .unwrap_or_else(|| {
-                crate::dialogs::dialogs()
-                    .launcher
-                    .error
-                    .update_check_label
-                    .clone()
-            })
+            .unwrap_or_default()
     };
 
     // Resolve info / button labels. All three are absent rather than

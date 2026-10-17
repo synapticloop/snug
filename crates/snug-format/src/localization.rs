@@ -423,7 +423,10 @@ pub const TOKEN_DESCRIPTIONS: &[(&str, &str)] = &[
         "the JDK release being downloaded or installed, e.g. \"25.0.1+9\"",
     ),
     ("size_mb", "approximate download size in megabytes"),
-    ("sha256", "expected SHA-256 hex digest of that archive"),
+    (
+        "update_link",
+        "the URL to check for a newer release, from the payload's update_check_url",
+    ),
     // Retry loop.
     ("attempt", "which attempt this is, counting from 1"),
     ("max_attempts", "total number of attempts configured"),

@@ -54,16 +54,12 @@ pub struct ErrorDialog<'a> {
     /// Optional HBITMAP (cast to `isize`) for the mascot slot. `0` ⇒
     /// fall back to the EXE icon resource.
     pub mascot_hbitmap: isize,
-    /// Optional "Check for a newer version" URL. When `Some` and
-    /// non-empty, the dialog paints a clickable link below the info
-    /// box that opens via `ShellExecuteW(..., "open", url, ...)`.
-    /// `None` or empty → the link row is hidden.
-    pub update_check_url: Option<&'a str>,
-    /// Optional override for the label rendered before the URL
-    /// (e.g. `"Check for a newer version:"`). `None` or empty ⇒
-    /// the TOML `[launcher.error].update_check_label` (resolved
-    /// inside [`modal_window::show`]).
-    pub update_check_label: Option<&'a str>,
+    /// When `Some` and non-empty, a second button is added to the
+    /// right of the dismissal button; activating it opens the URL
+    /// via `ShellExecuteW(..., "open", url, ...)`. `None`, empty, or
+    /// whitespace ⇒ no second button, so a build with no update URL
+    /// never offers a control that would do nothing.
+    pub update_url: Option<&'a str>,
 }
 
 /// Show the error dialog modally. Returns
@@ -142,7 +138,34 @@ pub unsafe fn show(parent: HWND, dlg: ErrorDialog<'_>) -> i32 {
         Some(s) => s,
         None => failure.button_label.as_str(),
     };
-    let button = modal_window::Button::Primary(button_label_str);
+
+    // The update button sits to the *right* of the dismissal button.
+    // `Primary` is the rightmost slot in `modal_window`'s button row, so
+    // it is the update action and `Secondary` is the dismiss — which
+    // also keeps the two results distinct: `IDYES` opens the browser,
+    // `IDCANCEL` (Close / X / Alt+F4) just closes.
+    //
+    // The old clickable link row above the info box is no longer
+    // requested: `link_url` / `link_label` go in as `None` below.
+    let update_url = dlg
+        .update_url
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let mut buttons: Vec<modal_window::Button> =
+        Vec::with_capacity(if update_url.is_some() { 2 } else { 1 });
+    if update_url.is_some() {
+        buttons.push(modal_window::Button::Primary(
+            &dialogs.launcher.error.button_update,
+        ));
+    }
+    buttons.push(modal_window::Button::Secondary(button_label_str));
+    if update_url.is_none() {
+        // With one button it must be Primary, or a lone button would
+        // report `IDCANCEL` and read as a dismissal rather than the
+        // dialog's only action.
+        buttons.clear();
+        buttons.push(modal_window::Button::Primary(button_label_str));
+    }
 
     unsafe {
         modal_window::show(
@@ -156,10 +179,10 @@ pub unsafe fn show(parent: HWND, dlg: ErrorDialog<'_>) -> i32 {
                 info_heading: info_heading.as_deref(),
                 info_subtext: info_subtext.as_deref(),
                 info_subtext_2: dlg.info_subtext_2,
-                buttons: std::slice::from_ref(&button),
+                buttons: &buttons,
                 mascot_hbitmap: dlg.mascot_hbitmap,
-                link_url: dlg.update_check_url,
-                link_label: dlg.update_check_label,
+                link_url: None,
+                link_label: None,
             },
         )
     }
@@ -196,10 +219,26 @@ pub unsafe fn show_launcher_error(
         &[("error", localized_error)],
     );
 
+    // The update-check URL rides the info box like every other dialog's
+    // copy: `info_subtext` is the prompt, `info_subtext_2` holds
+    // `{update_link}` and is filled here. It was previously a separate
+    // clickable row below the box, driven by its own catalog key.
+    //
+    // An absent URL — the production path when the embedded payload was
+    // unreadable, so the field is not knowable — leaves the token
+    // unresolved, and `fill` would print `{update_link}` literally. An
+    // empty string renders as an absent third line instead, because
+    // `info_subtext_2` is only painted when non-empty.
+    let info_subtext_2 = crate::dialogs::fill(
+        dialogs.launcher.error.info_subtext_2.as_str(),
+        &[("update_link", update_check_url.unwrap_or(""))],
+    );
+
     // SAFETY: every borrowed string is live for the duration of the
-    // call (dialogs is `&'static`, `content` is a local `String`).
-    // The dialog runs modally and returns before any borrow ends.
-    unsafe {
+    // call (dialogs is `&'static`, `content` and `info_subtext_2` are
+    // local `String`s). The dialog runs modally and returns before any
+    // borrow ends.
+    let result = unsafe {
         show(
             parent,
             ErrorDialog {
@@ -210,12 +249,26 @@ pub unsafe fn show_launcher_error(
                 info_icon: InfoIcon::Error,
                 info_heading: Some(&dialogs.launcher.error.info_heading),
                 info_subtext: Some(&dialogs.launcher.error.info_subtext),
-                info_subtext_2: Some(&dialogs.launcher.error.info_subtext_2),
-                button_label: Some(&dialogs.launcher.error.button_label),
+                info_subtext_2: Some(&info_subtext_2),
+                button_label: Some(&dialogs.launcher.error.button_exit),
                 mascot_hbitmap: 0,
-                update_check_url,
-                update_check_label: None,
+                // Same normalisation `show` applies, so the button
+                // and the `IDYES` guard below agree on whether there
+                // is a URL to open.
+                update_url: update_check_url.map(str::trim).filter(|s| !s.is_empty()),
             },
-        );
+        )
+    };
+
+    // `IDYES` is the update button. Without a URL there is no update
+    // button and the lone button reports `IDCANCEL`, so this is
+    // unreachable — but it is guarded anyway, because "open a
+    // browser" is not a thing to trigger on a guess.
+    if result == modal_window::IDYES_I32 {
+        if let Some(url) = update_check_url.map(str::trim).filter(|s| !s.is_empty()) {
+            if let Err(e) = crate::jdk_install::open_in_browser(url) {
+                crate::log::log(&format!("error_window: opening update URL failed: {e}"));
+            }
+        }
     }
 }

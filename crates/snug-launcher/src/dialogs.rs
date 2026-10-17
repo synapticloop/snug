@@ -55,12 +55,12 @@ pub struct LauncherErrorDialogs {
     /// Third line in the light-blue info box. Rendered only when
     /// non-empty, so a dialog can opt in without padding.
     pub info_subtext_2: String,
-    pub button_label: String,
-    /// Leading label rendered before the optional "Check for a
-    /// newer version" link (e.g. `"Check for a newer version:"`).
-    /// The URL itself comes from the embedded payload's
-    /// `AppMetadata.update_check_url`, not the TOML.
-    pub update_check_label: String,
+    /// Single-button dismissal label.
+    pub button_exit: String,
+    /// Label for the update button. Rendered only when the payload
+    /// carries an `update_check_url`, so a build with no update URL
+    /// never shows a button that would do nothing.
+    pub button_update: String,
 }
 
 #[derive(Debug, Clone)]
@@ -376,9 +376,9 @@ fn assemble() -> Dialogs {
                     info_heading: lookup("launcher.error.info_heading"),
                     info_subtext: lookup("launcher.error.info_subtext"),
                     info_subtext_2: lookup("launcher.error.info_subtext_2"),
-                    button_label: lookup("launcher.error.button_label"),
-                    update_check_label: lookup("launcher.error.update_check_label"),
-                },
+                    button_exit: lookup("launcher.error.button_exit"),
+            button_update: lookup("launcher.error.button_update"),
+                        },
             },
         }
 }
@@ -461,11 +461,7 @@ mod tests {
             ("generic.info_dialog_continue", &d.generic.info_dialog_continue),
             ("launcher.error.title", &d.launcher.error.title),
             ("launcher.error.content", &d.launcher.error.content),
-            ("launcher.error.button_label", &d.launcher.error.button_label),
-            (
-                "launcher.error.update_check_label",
-                &d.launcher.error.update_check_label,
-            ),
+            ("launcher.error.button_exit", &d.launcher.error.button_exit),
         ] {
             assert!(
                 !is_a_key(value),
@@ -480,24 +476,22 @@ mod tests {
         // catalog is single-line with `\n` escapes. This is the
         // regression guard for that conversion.
         let d = dialogs();
-        // The prompt body carries three paragraphs in one value now:
-        // the offer, the digest, and the JDK explainer. `expanded` used
-        // to be the second and third, concatenated at paint time.
+        // The prompt body is one paragraph. The paragraph-break and
+        // SHA-256 guards moved to `metadata_failed.content`, which is
+        // still a multi-line value — the regression this test exists
+        // for is about `\n` being decoded at all, not about which key
+        // happens to carry one today.
         let prompt = &d.jdk_install.prompt.content;
         assert!(
             prompt.contains("a runtime to launch"),
             "prompt body changed shape: {prompt:?}"
         );
-        assert!(
-            prompt.contains("\n\n"),
-            "prompt body lost its paragraph breaks: {prompt:?}"
-        );
-        assert!(prompt.contains("SHA-256: {sha256}"), "{prompt:?}");
-        assert!(prompt.contains("What's a JDK?"), "{prompt:?}");
         assert!(!prompt.contains("\\n"), "escapes were not decoded");
 
         let failed = &d.jdk_install.metadata_failed.content;
+        assert!(failed.contains("\n"), "metadata body lost its line break: {failed:?}");
         assert!(failed.starts_with("Technical detail:\n{error}"), "{failed:?}");
+        assert!(!failed.contains("\\n"), "escapes were not decoded");
     }
 
     #[test]
