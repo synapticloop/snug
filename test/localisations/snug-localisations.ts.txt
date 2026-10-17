@@ -181,15 +181,15 @@ runtime.prompt.info_subtext_2 = runtime.prompt.info_subtext_2
 runtime.prompt.button_download = runtime.prompt.button_download
 runtime.prompt.button_cancel = runtime.prompt.button_cancel
 
-runtime.metadata_failed.title = Could not reach Server - Snug
-runtime.metadata_failed.heading = We could not reach the Server
-runtime.metadata_failed.subheading = This application requires a download, but our request didn't reach the server.
-runtime.metadata_failed.content = Technical detail:\n{error}
-runtime.metadata_failed.info_heading = Why did this happen?
-runtime.metadata_failed.info_subtext = Your network connection may be down, or the Runtime server is temporarily unreachable.
-runtime.metadata_failed.info_subtext_2 = Check your network connection and try again in a moment.
-runtime.metadata_failed.button_open_browser = Open the download page
-runtime.metadata_failed.button_cancel = Cancel
+runtime.metadata_failed.title = runtime.metadata_failed.title
+runtime.metadata_failed.heading = runtime.metadata_failed.heading
+runtime.metadata_failed.subheading = runtime.metadata_failed.subheading
+runtime.metadata_failed.content = runtime.metadata_failed.content\n{error}
+runtime.metadata_failed.info_heading = runtime.metadata_failed.info_heading
+runtime.metadata_failed.info_subtext = runtime.metadata_failed.info_subtext
+runtime.metadata_failed.info_subtext_2 = runtime.metadata_failed.info_subtext_2
+runtime.metadata_failed.button_open_browser = runtime.metadata_failed.button_open_browser
+runtime.metadata_failed.button_cancel = runtime.metadata_failed.button_cancel
 
 runtime.progress.title = Install Runtime
 runtime.progress.content = Runtime {version} (~{size_mb} MB)
