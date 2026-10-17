@@ -263,7 +263,22 @@ pub fn init(payload_bundles: &[Localization]) {
 /// Any consumer caching resolved strings should rebuild when the
 /// generation moves; `dialogs::dialogs()` does.
 pub fn set_bundles(payload_bundles: &[Localization]) {
-    let next = Bundles::load(payload_bundles);
+    set_bundles_for(&detect_locales(), payload_bundles)
+}
+
+/// Replace the active bundle chain with an **explicit** preference
+/// list, and bump [`generation`].
+///
+/// [`set_bundles`] is the production entry point and correctly filters
+/// against `detect_locales()`. This variant is for a caller that has
+/// already decided which language it wants regardless of the host —
+/// which is exactly what `snug_preview`'s language dropdown is. Picking
+/// `de` on an English machine has to show German; routed through
+/// `set_bundles` the chosen bundle is filtered straight back out (the
+/// machine wants `en`), leaving the chain as the built-in baseline and
+/// every dialog silently English no matter what you selected.
+pub fn set_bundles_for(preferences: &[String], payload_bundles: &[Localization]) {
+    let next = Bundles::load_for(preferences, payload_bundles);
     // A poisoned lock means some other thread panicked while holding
     // it. `into_inner` hands back the guard either way, and the data
     // we are about to install is freshly built, so recovering beats
@@ -568,6 +583,41 @@ mod tests {
             "Could not locate a Java {min_java}+ JVM in any of the configured discovery locations"
         );
         assert_eq!(b.raw_lookup("splash.title"), "Snug Splash");
+    }
+
+    /// Serialises tests that swap the process-global bundle chain.
+///
+/// `set_bundles_for` installs into `BUNDLES`, which every other
+/// `lookup`-based test reads, and cargo runs tests in threads — so
+/// without this a chain swap lands mid-run and a sibling test asserts
+/// against the wrong language. Same pattern as `appkit`'s test seam.
+static CHAIN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[test]
+    fn set_bundles_for_overrides_the_machine_locale() {
+        let _guard = CHAIN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The regression behind `snug_preview`'s language dropdown
+        // looking dead: `set_bundles` filters against
+        // `detect_locales()`, so on an English host a bundle tagged
+        // `de` is dropped and every dialog stays English. The preview
+        // needs the selection to win regardless of host.
+        //
+        // This asserts the *mechanism* rather than the symptom, so it
+        // holds on a German machine too — which a test that just
+        // checked "German text appears" would not.
+        let de = bundle("de", &[("err.jvm_not_found", "Keine JVM gefunden.")]);
+        set_bundles_for(&["de".to_string()], std::slice::from_ref(&de));
+        assert_eq!(lookup("err.jvm_not_found"), "Keine JVM gefunden.");
+
+        // And the baseline still backs untranslated keys.
+        assert_eq!(
+            lookup("err.java_exception"),
+            "Java `main` threw an exception: {0}"
+        );
+
+        // Restore the default chain so a later test cannot inherit
+        // German, even though the lock is released at the end.
+        set_bundles(&[]);
     }
 
     #[test]

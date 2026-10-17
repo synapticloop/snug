@@ -841,7 +841,15 @@ fn select_language(index: usize) {
             .collect::<Vec<_>>()
             .join(", ")
     ));
-    localize::set_bundles(std::slice::from_ref(&chosen));
+    // Force the chosen tag to the head of the chain. `set_bundles` filters
+    // against the *machine's* detected locales, so on an English box
+    // selecting `de` there would hand it one bundle the machine does
+    // not want, `load` would drop it, and every dialog would stay
+    // English no matter what was picked in the dropdown.
+    localize::set_bundles_for(
+        std::slice::from_ref(&chosen.tag),
+        std::slice::from_ref(&chosen),
+    );
 }
 
 // ============================================================================
