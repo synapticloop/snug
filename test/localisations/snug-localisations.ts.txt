@@ -171,15 +171,15 @@ launcher.error.content = {error}
 # Escaping reminder: these are single-line values. Real newlines are literal
 # `\n`; a literal `#` in a value must be written `\#`.
 
-runtime.prompt.title = prompt.title
-runtime.prompt.heading = prompt.heading
-runtime.prompt.subheading = prompt.subheading
-runtime.prompt.content = prompt.content {size_mb}
-runtime.prompt.info_heading = prompt.info_heading
-runtime.prompt.info_subtext = prompt.info_subtext
-runtime.prompt.info_subtext_2 = prompt.info_subtext_2
-runtime.prompt.button_download = prompt.button_download
-runtime.prompt.button_cancel = prompt.button_cancel
+runtime.prompt.title = runtime.prompt.title
+runtime.prompt.heading = runtime.prompt.heading
+runtime.prompt.subheading = runtime.prompt.subheading
+runtime.prompt.content = runtime.prompt.content {size_mb}
+runtime.prompt.info_heading = runtime.prompt.info_heading
+runtime.prompt.info_subtext = runtime.prompt.info_subtext
+runtime.prompt.info_subtext_2 = runtime.prompt.info_subtext_2
+runtime.prompt.button_download = runtime.prompt.button_download
+runtime.prompt.button_cancel = runtime.prompt.button_cancel
 
 runtime.metadata_failed.title = Could not reach Server - Snug
 runtime.metadata_failed.heading = We could not reach the Server
