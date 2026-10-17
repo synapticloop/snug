@@ -477,7 +477,6 @@ fn run_install_prompt_v5() -> Option<i32> {
             "",
             "",
             "",
-            snug_launcher::prompt_window::Fill::Nothing,
         )
     };
     eprintln!(

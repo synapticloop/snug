@@ -100,13 +100,15 @@ use windows_sys::Win32::UI::HiDpi::{
     AdjustWindowRectExForDpi, GetDpiForSystem, GetDpiForWindow, SetProcessDpiAwarenessContext,
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
+use windows_sys::Win32::UI::Controls::BST_CHECKED;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CB_ADDSTRING, CB_GETCOUNT, CB_GETCURSEL, CB_RESETCONTENT, CB_SETCURSEL, CBN_SELCHANGE,
     CBS_DROPDOWNLIST, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     DrawIconEx, GetClientRect, GetDlgItem, GetMessageW, GetSystemMetrics, LoadCursorW, LoadImageW,
     MoveWindow, MSG, PostThreadMessageW,
     RegisterClassExW, SendMessageW, SetWindowPos, SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE,
-    SWP_NOZORDER, TranslateMessage, BS_PUSHBUTTON,
+    SWP_NOZORDER, TranslateMessage, BM_GETCHECK, BM_SETCHECK, BN_CLICKED,
+    BS_AUTOCHECKBOX, BS_PUSHBUTTON,
     DI_NORMAL, HICON, ICON_BIG, ICON_SMALL, IDC_ARROW, IMAGE_ICON, LR_DEFAULTSIZE,
     LR_LOADFROMFILE, LR_SHARED, WM_CLOSE, WM_COMMAND,
     WM_CREATE, WM_DESTROY, WM_NCDESTROY, WM_PAINT, WM_QUIT, WM_SETICON, WNDCLASSEXW, WS_CAPTION,
@@ -256,8 +258,24 @@ const COMBO_Y: i32 = SUBTITLE_Y + SUBTITLE_H + COMBO_GAP;
 /// Gap from the dropdown row to the first dialog button. Wider than
 /// `COMBO_GAP` so the eight dialogs read as their own group rather
 /// than as a continuation of the controls above them.
-const BTN_GAP_HEADER: i32 = 40;
-const BTN_FIRST_Y: i32 = COMBO_Y + BTN_GAP_HEADER;
+const BTN_GAP_HEADER: i32 = 24;
+
+/// Height of the combo's **closed** field, which is all that occupies the
+/// layout. Deliberately not `COMBO_H`: that is the height of the dropped
+/// list, which is what `MoveWindow` wants and what the closed control
+/// never draws. `BTN_FIRST_Y` used to ignore the combo's height
+/// entirely, so chaining the checkbox off `COMBO_H` would have parked it
+/// ~100 px below the control it belongs to.
+const COMBO_FIELD_H: i32 = 28;
+/// Gap from the dropdown row down to the checkbox.
+const CHK_GAP: i32 = 16;
+const CHK_Y: i32 = COMBO_Y + COMBO_FIELD_H + CHK_GAP;
+const CHK_H: i32 = 20;
+/// Same column as every other control, so the checkbox reads as part
+/// of the window rather than as an afterthought.
+const CHK_X: i32 = BTN_X;
+const CHK_W: i32 = BTN_W;
+const BTN_FIRST_Y: i32 = CHK_Y + CHK_H + BTN_GAP_HEADER;
 
 /// Close button position, derived so it tracks the last dialog row.
 /// Both `WM_CREATE` and the `WM_DPICHANGED` relayout read these two,
@@ -644,6 +662,9 @@ const ID_BTN_CLOSE: usize = 1099;
 /// Language dropdown. Distinct id range from the dialog buttons so a
 /// `WM_COMMAND` id match can't confuse the two.
 const ID_COMBO_LANGUAGE: usize = 1100;
+/// "Replace tokens". Own ID range from the dialog buttons and the combo,
+/// so a `WM_COMMAND` id match can never confuse the three.
+const ID_CHK_REPLACE_TOKENS: usize = 1101;
 
 /// The dialog buttons, **in the order a user meets them**, so the list
 /// doubles as the install flow: offer the runtime, watch it download,
@@ -1575,6 +1596,28 @@ unsafe extern "system" fn wndproc(
                 ));
             }
 
+            // "Replace tokens". Unchecked by default, which shows every
+            // dialog as authored; ticking it fills `{name}` slots with
+            // example values instead. The dialogs are modal, so one already
+            // on screen keeps whatever it painted -- only dialogs opened
+            // from here on observe the change.
+            let chk = CreateWindowExW(
+                0,
+                wide("BUTTON").as_ptr(),
+                wide("Replace tokens").as_ptr(),
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | (BS_AUTOCHECKBOX as u32),
+                scale_px(CHK_X, dpi),
+                scale_px(CHK_Y, dpi),
+                scale_px(CHK_W, dpi),
+                scale_px(CHK_H, dpi),
+                hwnd,
+                ID_CHK_REPLACE_TOKENS as *mut _,
+                hinst,
+                std::ptr::null_mut(),
+            );
+            SendMessageW(chk, BM_SETCHECK, 0, 0);
+            apply_token_switch(hwnd);
+
             // Body buttons. Labels + control IDs come from the
             // module-level `DIALOG_BUTTONS` list so the window height
             // (see `launcher_client_height`) can't drift out of sync
@@ -1849,6 +1892,11 @@ unsafe extern "system" fn wndproc(
                 return DefWindowProcW(hwnd, msg, wparam, lparam);
             }
 
+            if id == ID_CHK_REPLACE_TOKENS && notification == BN_CLICKED as usize {
+                apply_token_switch(hwnd);
+                return DefWindowProcW(hwnd, msg, wparam, lparam);
+            }
+
             match id {
                 ID_BTN_PROGRESS_ANIM => spawn_dialog(|| run_progress(false)),
                 ID_BTN_PROGRESS_STATIC => spawn_dialog(|| run_progress(true)),
@@ -2051,17 +2099,40 @@ fn run_progress(static_mode: bool) {
 /// to the EXE's main icon, so the preview shows the brand-correct
 /// Snug character without us having to load anything here.
 ///
-/// `Fill::Nothing`: the preview shows the dialog as *authored*. Every
-/// slot stays visible -- `{size_mb}` and `\{size_mb}` alike -- because
-/// its job is inspecting a bundle, and a fabricated `21.0.2` / `192`
-/// tells a translator nothing the baseline does not already say while
-/// looking like a real result.
+/// The "Replace tokens" checkbox on the main window decides whether the
+/// slots are filled: unchecked (the default) shows every dialog as
+/// *authored*, so `{size_mb}` and `\{size_mb}` both read `{size_mb}`,
+/// because inspecting a bundle is the preview's job and a fabricated
+/// `21.0.2` / `192` tells a translator nothing the baseline does not
+/// already say while looking like a real result. Checked fills them with
+/// the constants below.
 ///
-/// This used to pass each token as its own value (`size_mb` ->
-/// `"{size_mb}"`), which renders the same but for the wrong reason: it
-/// makes substitution a no-op, so a bare `{size_mb}` gets replaced by
-/// the value `{size_mb}` and every slot looks unfilled. That is what
-/// made `\{size_mb} {size_mb}` look broken rather than intentional.
+/// These used to be empty strings, which only looked right while this one
+/// dialog was the sole unfilled case -- checking the box would have
+/// replaced every slot with nothing at all.
+/// Read the "Replace tokens" checkbox and push it into the process-wide
+/// substitution switch. Called once at build time and on every click.
+///
+/// Reads the control rather than caching the value from the click, so
+/// the checkbox and the switch cannot end up disagreeing if the control
+/// is ever driven from anywhere else.
+fn apply_token_switch(hwnd: HWND) {
+    let checked = unsafe {
+        let chk = GetDlgItem(hwnd, ID_CHK_REPLACE_TOKENS as i32);
+        !chk.is_null() && SendMessageW(chk, BM_GETCHECK, 0, 0) == BST_CHECKED as isize
+    };
+    snug_launcher::localize::set_replace_tokens(checked);
+    log(&format!("preview tokens: replace = {checked}"));
+}
+
+/// Example values for the install prompt's three slots, used when
+/// "Replace tokens" is ticked. Named constants rather than values
+/// invented per call site so a slot reads the same wherever it appears.
+const EXAMPLE_VERSION: &str = "25.0.1";
+const EXAMPLE_SIZE_MB: &str = "192";
+const EXAMPLE_SHA256: &str =
+    "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
+
 fn run_install_prompt_v5() {
     let d = dialogs::dialogs();
     let prompt = &d.runtime.prompt;
@@ -2070,10 +2141,9 @@ fn run_install_prompt_v5() {
             std::ptr::null_mut(),
             0,
             prompt,
-            "",
-            "",
-            "",
-            snug_launcher::prompt_window::Fill::Nothing,
+            EXAMPLE_VERSION,
+            EXAMPLE_SIZE_MB,
+            EXAMPLE_SHA256,
         )
     };
     eprintln!("snug-preview: install-prompt choice = {choice:?}");
@@ -2229,7 +2299,11 @@ fn fonts_for(dpi: u32) -> UiFonts {
 /// list of children rather than one per caller.
 fn apply_fonts(hwnd: HWND, dpi: u32) {
     let fonts = fonts_for(dpi);
-    let mut ids: Vec<i32> = vec![ID_COMBO_LANGUAGE as i32, ID_BTN_CLOSE as i32];
+    let mut ids: Vec<i32> = vec![
+        ID_COMBO_LANGUAGE as i32,
+        ID_CHK_REPLACE_TOKENS as i32,
+        ID_BTN_CLOSE as i32,
+    ];
     ids.extend(DIALOG_BUTTONS.iter().map(|(_, id)| *id as i32));
     for id in ids {
         let child = unsafe { GetDlgItem(hwnd, id) };
@@ -2277,6 +2351,13 @@ unsafe fn layout_controls(hwnd: HWND, dpi: u32) {
             BTN_H,
         );
     }
+    place(
+        ID_CHK_REPLACE_TOKENS as i32,
+        CHK_X,
+        CHK_Y,
+        CHK_W,
+        CHK_H,
+    );
     place(
         ID_BTN_CLOSE as i32,
         close_x(),
@@ -2771,9 +2852,32 @@ mod tests {
         assert_eq!(HEADING_Y, HEADER_ICON_BOTTOM + 16);
         assert_eq!(SUBTITLE_Y, HEADING_Y + HEADING_H);
         assert_eq!(COMBO_Y, SUBTITLE_Y + SUBTITLE_H + COMBO_GAP);
-        assert_eq!(BTN_FIRST_Y, COMBO_Y + BTN_GAP_HEADER);
+        // The "Replace tokens" checkbox was inserted between the
+        // dropdown and the buttons, so the chain grew a link. It is
+        // still a chain, which is the property this test exists for --
+        // so the assertion follows the chain rather than pinning a
+        // pixel, exactly as it did when the chain was shorter.
+        assert_eq!(CHK_Y, COMBO_Y + COMBO_FIELD_H + CHK_GAP);
+        assert_eq!(BTN_FIRST_Y, CHK_Y + CHK_H + BTN_GAP_HEADER);
         assert!(HEADER_ICON_BOTTOM <= HEADING_Y);
         assert!(SUBTITLE_Y + SUBTITLE_H <= COMBO_Y);
+    }
+
+    #[test]
+    fn the_token_checkbox_sits_between_the_dropdown_and_the_buttons() {
+        // The chain that puts it there is new (`COMBO_FIELD_H`), so pin
+        // the ordering rather than trusting the arithmetic: a checkbox
+        // painted over the combo, or over the first dialog button, is
+        // silent -- both are just a control that renders somewhere odd.
+        assert!(
+            COMBO_Y + COMBO_FIELD_H <= CHK_Y,
+            "checkbox overlaps the dropdown"
+        );
+        assert!(
+            CHK_Y + CHK_H <= BTN_FIRST_Y,
+            "checkbox overlaps the first dialog button"
+        );
+        assert_eq!(CHK_X, BTN_X, "it should share the column, not float");
     }
 
     #[test]

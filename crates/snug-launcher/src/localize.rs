@@ -48,7 +48,7 @@
 //! workspace, so the copy the CLI bakes into the payload and the copy
 //! compiled into this fallback are the same bytes by construction.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{OnceLock, RwLock};
 
 use snug_format::Localization;
@@ -88,6 +88,41 @@ static GENERATION: AtomicU64 = AtomicU64::new(0);
 /// chain contents.
 pub fn generation() -> u64 {
     GENERATION.load(Ordering::Acquire)
+}
+
+/// Whether `{name}` slots get filled with the caller's values.
+///
+/// `true` everywhere a real launcher runs, and this is the default so the
+/// product cannot be affected by leaving it alone. `snug_preview` clears it
+/// so its "Replace tokens" checkbox can show every dialog *as authored*.
+///
+/// This is a global rather than a parameter because substitution happens
+/// deep inside the window modules — `jdk_install::show_retry_dialog` and
+/// friends fill their own copy before handing it to the painter — and the
+/// preview calls those same functions, so there is no call site it could
+/// pass a flag to. A parameter would have to be threaded through
+/// `prompt_window`, `retry_window`, `metadata_failed_window`,
+/// `progress_window`, `error_window` and both platform impls, putting a
+/// preview-shaped argument in five shipped signatures to serve a binary
+/// that never ships.
+///
+/// Relaxed is enough: this is a UI preference, not synchronisation. The
+/// dialogs are modal, so a dialog already on screen keeps the text it
+/// painted and only the next one opened observes the change.
+static REPLACE_TOKENS: AtomicBool = AtomicBool::new(true);
+
+/// Turn `{name}` filling on or off process-wide.
+///
+/// See [`REPLACE_TOKENS`]. Only `snug_preview` calls this; a shipped
+/// launcher leaves it at the default.
+pub fn set_replace_tokens(replace: bool) {
+    REPLACE_TOKENS.store(replace, Ordering::Relaxed);
+}
+
+/// Whether `{name}` slots are currently filled.
+#[inline]
+pub(crate) fn replace_tokens() -> bool {
+    REPLACE_TOKENS.load(Ordering::Relaxed)
 }
 
 /// A complete priority chain of localization bundles, ready for
@@ -394,6 +429,12 @@ pub fn t1(key: &str, name: &str, value: &str) -> String {
 /// Unknown names are copied through verbatim rather than dropped, so a
 /// typo leaves the text visible instead of silently swallowing it.
 ///
+/// When [`replace_tokens`] is off the slot branch is skipped entirely, which
+/// leaves `{name}` exactly as written — and still unescapes `\{name}` to
+/// `{name}`, because that branch is not gated. That is deliberate: the
+/// escape is about what the *user* sees, so it must be honoured in both
+/// modes. Only the filling stops.
+///
 /// One implementation on purpose. `dialogs::fill` (named) and
 /// `t_positional` (indexed) both route through here, and so does
 /// `prompt_window::substitute`. When each did its own `replace`, the
@@ -416,7 +457,7 @@ pub(crate) fn substitute_slots(
             i += 2;
             continue;
         }
-        if bytes[i] == b'{' {
+        if bytes[i] == b'{' && replace_tokens() {
             if let Some(close) = template[i + 1..].find('}') {
                 let name = &template[i + 1..i + 1 + close];
                 if let Some(value) = resolve(name) {
@@ -649,6 +690,36 @@ mod tests {
 /// without this a chain swap lands mid-run and a sibling test asserts
 /// against the wrong language. Same pattern as `appkit`'s test seam.
 static CHAIN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[test]
+fn the_preview_switch_shows_slots_as_authored() {
+    // The switch is process-global, so this needs the same guard the
+    // bundle tests use: without it a parallel test that expects
+    // substitution would see whatever this one last set.
+    let _guard = CHAIN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let previous = replace_tokens();
+
+    set_replace_tokens(false);
+    let raw = substitute_slots(r"\{size_mb} {size_mb}", |n| Some(n.to_uppercase()));
+    // The escaped half loses only its backslash. That is the whole
+    // reason the `\{` branch is not gated: the escape is about what the
+    // user sees, so it must be honoured whether or not tokens fill.
+    assert_eq!(raw, "{size_mb} {size_mb}", "escaped slot must still unescape");
+
+    set_replace_tokens(true);
+    let filled = substitute_slots("{size_mb}", |n| Some(n.to_uppercase()));
+    assert_eq!(filled, "SIZE_MB");
+
+    set_replace_tokens(previous);
+}
+
+#[test]
+fn replacing_is_on_by_default() {
+    // A shipped launcher never calls `set_replace_tokens`, so if the
+    // default ever flips, a user's dialogs silently stop interpolating
+    // and `{size_mb}` appears in front of them.
+    assert!(replace_tokens(), "the product default must stay 'replace'");
+}
 
 #[test]
     fn set_bundles_for_overrides_the_machine_locale() {
