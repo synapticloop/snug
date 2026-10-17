@@ -219,7 +219,7 @@ impl Bundles {
         //    `[de-AT, en-US]` resolves its own German before any English.
         for tag in preferences {
             for parent in parent_tags(tag) {
-                if let Some(b) = payload_bundles.iter().find(|b| &b.tag == &parent) {
+                if let Some(b) = payload_bundles.iter().find(|b| b.tag == parent) {
                     push_unique(&mut chain, b);
                 }
             }

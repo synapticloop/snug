@@ -212,7 +212,7 @@ runtime.progress.cancel_button_during_download = Install
 
 runtime.failure.title = Runtime Installation Failure
 runtime.failure.heading = Install runtime failure
-runtime.failure.subheading = All download attempts were exhausted, we will attempt to launch the application.
+runtime.failure.subheading = All download attempts were exhausted, I will attempt to launch the application.
 runtime.failure.content = Eclipse Temurin {version} could not be installed. Technical detail:\n{error}
 runtime.failure.info_heading = What can I do?
 runtime.failure.info_subtext = Check your network, and retry later.

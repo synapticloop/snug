@@ -85,7 +85,8 @@ use windows_sys::Win32::Foundation::{HMODULE, HWND, LPARAM, LRESULT, RECT, WPARA
 use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, CreateFontW, CreateRoundRectRgn, CreateSolidBrush, DeleteObject, DT_LEFT,
     DT_SINGLELINE, DT_VCENTER, DT_WORDBREAK, DrawTextW, EndPaint, FillRect, FillRgn,
-    HBRUSH, HBITMAP, HFONT, InvalidateRect, PAINTSTRUCT, SelectObject, SetBkMode, SetTextColor,
+    DFC_BUTTON, DFCS_BUTTONCHECK, DFCS_CHECKED, DFCS_FLAT, DrawFrameControl, HBRUSH, HBITMAP,
+    HDC, HFONT, InvalidateRect, PAINTSTRUCT, SelectObject, SetBkMode, SetTextColor,
     TRANSPARENT,
 };
 use windows_sys::Win32::Graphics::GdiPlus::{
@@ -101,6 +102,7 @@ use windows_sys::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows_sys::Win32::UI::Controls::BST_CHECKED;
+use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CB_ADDSTRING, CB_GETCOUNT, CB_GETCURSEL, CB_RESETCONTENT, CB_SETCURSEL, CBN_SELCHANGE,
     CBS_DROPDOWNLIST, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
@@ -108,7 +110,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     MoveWindow, MSG, PostThreadMessageW,
     RegisterClassExW, SendMessageW, SetWindowPos, SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE,
     SWP_NOZORDER, TranslateMessage, BM_GETCHECK, BM_SETCHECK, BN_CLICKED,
-    BS_AUTOCHECKBOX, BS_PUSHBUTTON,
+    BS_AUTOCHECKBOX, BS_PUSHBUTTON, WM_ERASEBKGND,
     DI_NORMAL, HICON, ICON_BIG, ICON_SMALL, IDC_ARROW, IMAGE_ICON, LR_DEFAULTSIZE,
     LR_LOADFROMFILE, LR_SHARED, WM_CLOSE, WM_COMMAND,
     WM_CREATE, WM_DESTROY, WM_NCDESTROY, WM_PAINT, WM_QUIT, WM_SETICON, WNDCLASSEXW, WS_CAPTION,
@@ -180,12 +182,14 @@ const fn scale_px(logical: i32, dpi: u32) -> i32 {
 /// coordinate system the buttons actually live in, so the Close button
 /// can never end up below the visible area.
 ///
-/// 520 rather than the old 480: "Java error (with update link)" needs
-/// ~190 px of a 432 px column at 10pt, and the leftover was an
-/// arbitrary-looking 24 px gutter on both sides rather than a margin.
-/// The extra 40 px also lets the Language dropdown sit on a round
-/// measure instead of being pinned to the label.
-const LAUNCHER_W: i32 = 520;
+/// 348 rather than the old 520: a third narrower. The eight button
+/// labels are the binding constraint -- the longest, "Java error (with
+/// update link)", needs ~190 px of a 300 px column at 10pt -- and 348
+/// still clears that with margin to spare. `COMBO_W` and `SUBTITLE_H`
+/// were pulled in with it, because leaving them would have pushed the
+/// dropdown to within 8 px of the right edge while the subtitle
+/// overflowed its two-line budget.
+const LAUNCHER_W: i32 = 348;
 
 /// Height of the client area, **derived from the content** so the
 /// Close button always sits just below the last dialog row. The
@@ -248,10 +252,13 @@ const BTN_CLOSE_GAP: i32 = 16;
 const HEADING_Y: i32 = HEADER_ICON_BOTTOM + 16;
 const HEADING_H: i32 = 22;
 const SUBTITLE_Y: i32 = HEADING_Y + HEADING_H;
-/// Two lines at 10pt. The subtitle is the only place the detachment
-/// behaviour can be explained, and one line at 520 px fits ~65
-/// characters — not enough for a sentence that is actually useful.
-const SUBTITLE_H: i32 = 40;
+/// Three lines at 10pt. The subtitle is the only place the detachment
+/// behaviour can be explained, and the narrow window fits ~43
+/// characters a line — so the old two-line 40 px budget would have
+/// clipped the last word. Everything below chains off this, so growing
+/// it moves the controls down and `launcher_client_height` grows with
+/// them.
+const SUBTITLE_H: i32 = 54;
 /// Gap from the subtitle to the dropdown row.
 const COMBO_GAP: i32 = 24;
 const COMBO_Y: i32 = SUBTITLE_Y + SUBTITLE_H + COMBO_GAP;
@@ -321,7 +328,10 @@ const COMBO_LABEL_X: i32 = BTN_X;
 /// gutter without crowding the dropdown.
 const COMBO_LABEL_W: i32 = 76;
 const COMBO_X: i32 = COMBO_LABEL_X + COMBO_LABEL_W;
-const COMBO_W: i32 = 240;
+/// Narrowed with `LAUNCHER_W` so its right edge still lands on the
+/// column edge (`COMBO_X + COMBO_W == BTN_X + BTN_W`) instead of
+/// stopping 8 px short of it and looking misaligned.
+const COMBO_W: i32 = 224;
 /// Height passed to `CreateWindowExW`. For a `CBS_DROPDOWNLIST` combo
 /// this is the height of the **dropped list** — the closed field sizes
 /// itself to the font (measured at ~25 px for 10pt Segoe UI) and is
@@ -354,6 +364,8 @@ const WM_DPICHANGED: u32 = 0x02E0;
 //  to the heading that the two lines read as the same weight at a
 //  glance, which is the thing a two-level hierarchy cannot afford.
 const COLOR_BG: u32 = 0x00FF_FFFF; // #FFFFFF
+
+
 const COLOR_HEADING: u32 = 0x0020_1A15; // #151A20, cool near-black
 const COLOR_BODY: u32 = 0x005A_5550; // #50555A
 /// Outline of the `--icon` plate.
@@ -1604,7 +1616,7 @@ unsafe extern "system" fn wndproc(
             let chk = CreateWindowExW(
                 0,
                 wide("BUTTON").as_ptr(),
-                wide("Replace tokens").as_ptr(),
+                wide(REPLACE_TOKENS_LABEL).as_ptr(),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | (BS_AUTOCHECKBOX as u32),
                 scale_px(CHK_X, dpi),
                 scale_px(CHK_Y, dpi),
@@ -1615,6 +1627,7 @@ unsafe extern "system" fn wndproc(
                 hinst,
                 std::ptr::null_mut(),
             );
+            SetWindowSubclass(chk, Some(replace_tokens_proc), 1, 0);
             SendMessageW(chk, BM_SETCHECK, 0, 0);
             apply_token_switch(hwnd);
 
@@ -2110,6 +2123,102 @@ fn run_progress(static_mode: bool) {
 /// These used to be empty strings, which only looked right while this one
 /// dialog was the sole unfilled case -- checking the box would have
 /// replaced every slot with nothing at all.
+/// Label for the "Replace tokens" checkbox. A constant because the
+/// control's window text and the subclass that paints it must not be
+/// able to drift apart.
+const REPLACE_TOKENS_LABEL: &str = "Replace tokens";
+
+/// Subclass procedure for the "Replace tokens" checkbox.
+///
+/// This exists because two documented answers both failed. Returning a
+/// matching brush from the parent's `WM_CTLCOLORBTN` is the textbook way
+/// to make a button control match its parent, and it did nothing: a
+/// themed control paints from the theme palette and never asks. Taking
+/// the control out of the theme with `SetWindowTheme(chk, NULL, NULL)`
+/// is the fix for that, and the grey survived it too. Rather than keep
+/// probing which message wins, this owns the pixels.
+///
+/// The control itself is untouched, so tab order, keyboard toggling and
+/// the `BN_CLICKED` notification all keep working; only the painting is
+/// ours. That is why this is a subclass and not "draw it in the parent"
+/// -- a hand-painted checkbox would have been simpler and would have
+/// quietly taken the keyboard with it.
+unsafe extern "system" fn replace_tokens_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _uid: usize,
+    _refdata: usize,
+) -> LRESULT {
+    unsafe {
+        match msg {
+            // Nothing else will ever clear this rect: the parent
+            // registers a NULL_BRUSH and paints its own background, so
+            // the area under a child control is never repainted.
+            WM_ERASEBKGND => {
+                let hdc = wparam as HDC;
+                let mut rc: RECT = std::mem::zeroed();
+                GetClientRect(hwnd, &mut rc);
+                let bg = CreateSolidBrush(COLOR_BG);
+                FillRect(hdc, &rc, bg);
+                DeleteObject(bg as _);
+                1
+            }
+            WM_PAINT => {
+                let dpi = GetDpiForWindow(hwnd);
+                let fonts = fonts_for(dpi);
+                let mut ps: PAINTSTRUCT = std::mem::zeroed();
+                let hdc = BeginPaint(hwnd, &mut ps);
+                let mut rc: RECT = std::mem::zeroed();
+                GetClientRect(hwnd, &mut rc);
+                let height = rc.bottom - rc.top;
+
+                let bg = CreateSolidBrush(COLOR_BG);
+                FillRect(hdc, &rc, bg);
+                DeleteObject(bg as _);
+
+                // Tick box, vertically centred, `DFCS_FLAT` so it reads
+                // as a control on this window rather than a 3-D button.
+                let side = scale_px(13, dpi);
+                let top = (height - side) / 2;
+                let mut box_rc = RECT {
+                    left: 0,
+                    top,
+                    right: side,
+                    bottom: top + side,
+                };
+                let mut state = DFCS_BUTTONCHECK | DFCS_FLAT;
+                if SendMessageW(hwnd, BM_GETCHECK, 0, 0) == BST_CHECKED as isize {
+                    state |= DFCS_CHECKED;
+                }
+                DrawFrameControl(hdc, &mut box_rc, DFC_BUTTON, state);
+
+                let prev_font = SelectObject(hdc, fonts.body() as _);
+                SetBkMode(hdc, TRANSPARENT as i32);
+                SetTextColor(hdc, COLOR_BODY);
+                let mut label = RECT {
+                    left: side + scale_px(6, dpi),
+                    top: 0,
+                    right: rc.right,
+                    bottom: height,
+                };
+                DrawTextW(
+                    hdc,
+                    wide(REPLACE_TOKENS_LABEL).as_ptr(),
+                    -1,
+                    &mut label,
+                    DT_LEFT | DT_VCENTER | DT_SINGLELINE,
+                );
+                SelectObject(hdc, prev_font);
+                EndPaint(hwnd, &ps);
+                0
+            }
+            _ => DefSubclassProc(hwnd, msg, wparam, lparam),
+        }
+    }
+}
+
 /// Read the "Replace tokens" checkbox and push it into the process-wide
 /// substitution switch. Called once at build time and on every click.
 ///
@@ -2859,8 +2968,27 @@ mod tests {
         // pixel, exactly as it did when the chain was shorter.
         assert_eq!(CHK_Y, COMBO_Y + COMBO_FIELD_H + CHK_GAP);
         assert_eq!(BTN_FIRST_Y, CHK_Y + CHK_H + BTN_GAP_HEADER);
-        assert!(HEADER_ICON_BOTTOM <= HEADING_Y);
-        assert!(SUBTITLE_Y + SUBTITLE_H <= COMBO_Y);
+        const { assert!(HEADER_ICON_BOTTOM <= HEADING_Y) };
+        const { assert!(SUBTITLE_Y + SUBTITLE_H <= COMBO_Y) };
+    }
+
+    #[test]
+    fn the_controls_share_one_right_edge() {
+        // Narrowing the window moved `COMBO_W` with it. Had only
+        // `LAUNCHER_W` changed, the dropdown would have stopped short of
+        // the buttons' right edge -- a misalignment nobody reports, just
+        // a window that looks slightly wrong.
+        assert_eq!(
+            COMBO_X + COMBO_W,
+            BTN_X + BTN_W,
+            "the dropdown and the buttons end in different places"
+        );
+        const {
+            assert!(
+                COMBO_X + COMBO_W <= LAUNCHER_W - BTN_X,
+                "the dropdown runs past the window's own margin"
+            )
+        };
     }
 
     #[test]
@@ -2869,14 +2997,18 @@ mod tests {
         // the ordering rather than trusting the arithmetic: a checkbox
         // painted over the combo, or over the first dialog button, is
         // silent -- both are just a control that renders somewhere odd.
-        assert!(
-            COMBO_Y + COMBO_FIELD_H <= CHK_Y,
-            "checkbox overlaps the dropdown"
-        );
-        assert!(
-            CHK_Y + CHK_H <= BTN_FIRST_Y,
-            "checkbox overlaps the first dialog button"
-        );
+        const {
+            assert!(
+                COMBO_Y + COMBO_FIELD_H <= CHK_Y,
+                "checkbox overlaps the dropdown"
+            )
+        };
+        const {
+            assert!(
+                CHK_Y + CHK_H <= BTN_FIRST_Y,
+                "checkbox overlaps the first dialog button"
+            )
+        };
         assert_eq!(CHK_X, BTN_X, "it should share the column, not float");
     }
 
@@ -2946,7 +3078,7 @@ mod tests {
         // again, which is the look this replaced.
         let (x, _, side) = inspected_icon_rect(MASCOT_X, HEADER_ICON_Y, HEADER_ICON_SIZE, 96);
         let mascot_right = MASCOT_X + HEADER_ICON_SIZE;
-        assert!(INSPECTED_RIGHT < 0, "the offset must stay negative");
+        const { assert!(INSPECTED_RIGHT < 0, "the offset must stay negative") };
         assert_eq!(x + side, mascot_right - INSPECTED_RIGHT);
         // `x + side` is *past* `mascot_right`, so the overhang is the
         // other subtraction. Getting this backwards is what made the

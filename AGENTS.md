@@ -1800,9 +1800,52 @@ by accident.
 
 ## Testing
 
+```powershell
+.\scripts\check.ps1
+```
+
+That runs the same gates CI does, in the same order, and is the command
+to use before claiming anything is green. It is deliberately **not** on
+the release path — `build-windows.cmd`, `build-macos.sh` and
+`refresh-stub.ps1` don't call it, because those produce a reproducible
+artefact and a lint step doesn't belong in "the command that produces the
+committed stub".
+
+The raw commands it wraps, if you want them individually:
+
 ```bash
 cargo test --workspace
 ```
+
+**Clippy is a separate gate, and CI runs it with warnings denied:**
+
+```bash
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+Run it before claiming anything is green. `cargo check` and `cargo test`
+neither run clippy's lint set nor fail on it, so a change can pass both,
+be locally clean, and still be red on the Actions workflow — which is
+exactly how six `assertions_on_constants` errors sat on `main` unnoticed:
+they were in `snug_preview`'s test module, and the one `op_ref` error in
+`snug-launcher`'s **lib** failed first, so cargo stopped before clippy
+reached the bin that held the rest. One error at a time, and the rest
+stay invisible until the first is fixed.
+
+`assertions_on_constants` deserves a note of its own, because the fix is
+better than the lint asks for. `assert!(SOME_CONST <= OTHER_CONST)` is
+evaluated at compile time whether or not it sits in a `#[test]`, so
+wrap it as `const { assert!(...) }` and it becomes a build-time check on
+every compile rather than one that only runs under `cargo test`. The
+layout guards in `snug_preview`'s `windows_impl.rs` are full of these.
+
+**Formatting is reported but not enforced.** `check.ps1` runs
+`cargo fmt --all --check` as an advisory step only: the tree carries
+pre-existing drift in 58 files and there is no `rustfmt.toml`, so making
+it a gate would fail on code nobody has touched. `check.ps1 -Format`
+rewrites the tree — a deliberate call about a large diff, not something a
+check script should do behind your back. Note that CI has no fmt step
+either; that gap is still open.
 
 `snug-format` has integration roundtrip tests in
 `crates/snug-format/tests/roundtrip.rs`. `snug-cli` has unit tests for
