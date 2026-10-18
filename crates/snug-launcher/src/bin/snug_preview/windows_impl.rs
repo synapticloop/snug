@@ -2327,9 +2327,9 @@ fn run_early_bail() {
     // so read the baseline rather than hardcoding the string — keeps the
     // preview in step if the key is ever retitled.
     let title = snug_launcher::localize::lookup("launcher.fallback_messagebox.title");
-    let body = "FATAL: failed to read snug payload from RCDATA resource.\n\
-                This binary may be corrupted or stamped with the wrong manifest.\n\
-                Re-download the launcher from the original source.";
+    let body = "FATAL: failed to read payload from RCDATA resource.\n\n\
+         This binary may be corrupted or stamped with the wrong manifest.\n\n\
+         Re-download the launcher from the original source.";
 
     let result = unsafe {
         MessageBoxW(

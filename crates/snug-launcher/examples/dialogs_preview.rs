@@ -498,8 +498,8 @@ fn run_early_bail() -> Option<i32> {
         .chain(Some(0))
         .collect();
     let body: Vec<u16> = OsStr::new(
-        "FATAL: failed to read snug payload from RCDATA resource.\n\
-         This binary may be corrupted or stamped with the wrong manifest.\n\
+        "FATAL: failed to read payload from RCDATA resource.\n\n\
+         This binary may be corrupted or stamped with the wrong manifest.\n\n\
          Re-download the launcher from the original source.",
     )
     .encode_wide()
