@@ -1033,7 +1033,6 @@ fn replacing_is_on_by_default() {
             "runtime.progress.info_heading",
             "runtime.progress.info_subtext",
             "runtime.progress.info_subtext_2",
-            "runtime.progress.cancel_button_during_download",
             "runtime.progress.arch_macos_arm64",
             "runtime.progress.arch_macos_x86_64",
             "runtime.progress.arch_windows_x86_64",

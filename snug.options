@@ -92,15 +92,12 @@
 # `auto` = "use a compatible JVM if one is already installed, and only
 # offer the Temurin download if discovery comes up empty".
 #
-# It was `force`, which skips discovery entirely. On a machine that already
-# has JDK 25 installed that meant downloading a second 115 MB copy of
-# JDK 25 before the demo could start - and, worse, it meant starting the
-# download flow at all, which on macOS currently hangs forever: the worker
-# thread spins on `shared.started` (jdk_install.rs) until a human clicks
-# Install in the progress window, and when the bundle is exec'd from a
-# terminal rather than launched by Launch Services that NSAlert never
-# appears. See AGENTS.md, "The JDK download flow used to deadlock on
-# macOS".
+# It was `force`, which skips discovery entirely -- so on a machine that
+# already has JDK 25 installed the demo still popped the install prompt on
+# every launch, and cancelling it dropped through to the post-cancel
+# fallback that re-runs discovery and found the JDK anyway. The prompt was
+# asking about a problem the machine did not have.
+#
 --download-jdk=force
 #
 # `ALL-UNNAMED`, not `javafx.graphics`. snug puts the fat JAR on the

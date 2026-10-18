@@ -15,7 +15,7 @@ members = [
 # pre-1.0 ceiling): micro for fixes, copy and refactors; minor for a new
 # CLI flag, a new dialog, or a launcher-runtime feature; and the major
 # stays 0 until the maintainer declares snug finished.
-version = "0.13.7"
+version = "0.14.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
@@ -74,6 +74,16 @@ serde_json = "1"
 # https://github.com/Systemcluster/editpe/releases; the only intended
 # delta is the two new methods plus this comment.
 editpe = { path = "vendor/editpe" }
+
+[profile.dev]
+# Windows debug builds default to full debug info, and every rebuilt test
+# binary lands under a *new* hash in target\debug\deps while the old one is
+# never reclaimed -- on this workspace that had reached 26 GB of .pdb across
+# 1,014 files, which is what filled the disk. Cargo has no collector for
+# superseded hashed artifacts, so this only ever grows. Line tables keep
+# backtraces and `cargo test` failure output readable without paying for full
+# debug info; `cargo clean --profile dev` reclaims whatever already accrued.
+debug = "line-tables-only"
 
 [profile.release]
 opt-level = "z"     # the launcher should be tiny

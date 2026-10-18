@@ -46,24 +46,35 @@ Snug's responsibility starts at "working fat JAR" and ends at "Windows
 EXE". Building the fat JAR (including bundling JavaFX classes,
 resources, and native libraries) is the caller's job.
 
-## Architecture (planned)
+## Architecture
 
 ```text
 snug/
 ├── crates/
-│   ├── snug-cli/         # CLI binary (clap)
-│   ├── snug-builder/     # produces the EXE (template-per-build v1, stub v2)
+│   ├── snug-cli/         # CLI binary (clap) + PE resource stamping
+│   ├── snug-payload/     # writing and locating the payload, both platforms
 │   ├── snug-launcher/    # runtime: JVM discovery, JNI load, splash, main invoke
-│   ├── snug-format/      # shared embedded-payload types + codec
+│   ├── snug-format/      # embedded-payload types + codec + localisation catalogue
 │   └── snug-dropper/     # "Snug Quick Build" — beginner drag-and-drop shim
-├── examples/
-└── tests/
+├── test/
+│   └── localisations/    # hand-maintained en/de/fr/ts bundles, drift-guarded
+└── scripts/              # native-only build pipelines, one per platform
 ```
 
-A single-crate implementation is fine initially; split only when useful.
-**Slice 1 (this commit)** uses a 2-crate workspace (`snug-format` +
-`snug-cli`); the launcher and builder will be added as `snug-launcher` +
-`snug-builder`.
+There is **no `snug-builder` crate**, despite the name appearing in
+earlier drafts of this file: the builder is `crates/snug-cli/src/build.rs`
+alongside `stub.rs` and `resources.rs`. What did get split out is
+`snug-payload`, created when the payload's *location* became
+platform-specific — an `RT_RCDATA` resource in the PE on Windows, a
+sibling file inside the `.app` on macOS — and both the producer
+(`snug-cli`) and the consumer (`snug-launcher`) needed to agree on it.
+`PAYLOAD_SUFFIX` is re-exported across that boundary for exactly this
+reason.
+
+There are no top-level `examples/` or `tests/` directories. Examples
+live per crate (`crates/<crate>/examples/`), and the top-level
+directory is `test/` — **singular** — holding the localisation bundles.
+Several notes in this file used to assume otherwise.
 
 `snug-dropper` is deliberately **not** folded into `snug-cli`. It is a
 GUI-subsystem Windows binary that shells out to `snug.exe`, so linking it
@@ -327,31 +338,48 @@ The launcher locates its data by scanning for the 8-byte magic
 +--------+----------------+--------------+--------------+----------------------+
 ```
 
-- `format_version` is currently `1`. Bump on incompatible wire changes.
+- `format_version` is currently `6`. Bump on incompatible wire changes.
+  v4 added `auto_download_jdk: bool`, v5 replaced it with
+  `download_jdk: DownloadJdkMode`, v6 added
+  `SnugPayload.localizations`. The decoder rejects a version *higher*
+  than the build understands, and the committed stub must be rebuilt
+  whenever it moves.
 - `payload_crc32` is CRC32/IEEE of the postcard bytes; the launcher
   validates before decoding.
-- Payload is postcard-encoded `SnugPayload { config, jar, icon }` where
-  `config` carries `LauncherConfig` with `AppMetadata`, `SplashConfig`,
-  and `LauncherBehavior` (which embeds `JvmDiscovery`).
+- Payload is postcard-encoded
+  `SnugPayload { config, jars, localizations }` where `config` carries
+  `LauncherConfig` with `AppMetadata`, `SplashConfig`, and
+  `LauncherBehavior` (which embeds `JvmDiscovery`). There is **no `icon`
+  field**: it was removed because nothing ever read it — the builder
+  re-reads the file from disk to stamp the PE, so carrying the bytes in
+  the payload as well only doubled the size.
 
 This layout is intentionally stub-friendly: the same encoded blob can be
-`include_bytes!()`-embedded (template-per-build, v1) or appended to a
-precompiled `launcher-stub-windows-x86_64.exe` (v2).
+`include_bytes!()`-embedded (template-per-build) or stamped into a
+precompiled stub as an `RT_RCDATA` resource. **The second one is what
+ships.** `snug-cli` writes the payload into the PE's resource directory
+with `editpe` and the launcher reads it back out through the same API; a
+bare `bin/launcher-stub-windows-x86_64.exe` has no such entry, which is
+exactly how it recognises itself and reports the missing payload.
+Appending the blob to the tail was the original design and is gone —
+`tests/stub_payload_roundtrip.rs` is what pins the resource-based
+lookup. Both docs used to describe the appended layout; neither matched
+`snug-cli/src/build.rs`.
 
 ## Development slices
 
 | # | Slice                                          | State      |
 |---|------------------------------------------------|------------|
 | 1 | CLI surface + embedded-payload format          | **done**   |
-| 2 | Windows launcher runtime (JVM discovery + JNI) | **done, and verified on a Windows machine.** Payload self-scan (`RT_RCDATA`), cache path, manifest lookup, JVM discovery (env / PATH / registry / common), `jvm.dll` discovery, JNI (`JavaVM::with_libjvm` + `get_static_method_id` / `call_static_method`, with the JavaFX `Application.launch` fallback), and the bare-stub message are all wired. There is **no `JniStub` error** — that variant no longer exists; the earlier note claiming the launch path was stubbed was stale. A ~1.1 MB precompiled `bin/launcher-stub-windows-x86_64.exe` (PE32+ GUI x86-64) is committed and regenerated by `scripts\build-windows.cmd`. |
-| 3 | snug-cli builder: load stub via `include_bytes!()`, append payload, stamp icon/version/manifest via `editpe` | **done** — `snug app.jar -o App.exe` produces a real Windows `.exe` end-to-end. `include_bytes!` of the committed stub + encoded payload concatenation is unit + integration tested. Resource stamping is in-process via the [`editpe`](https://github.com/Systemcluster/editpe) crate (pure Rust, BSD-2-Clause, cross-platform — same code path runs on macOS, Linux, and Windows). `--icon` accepts PNG or ICO; `--manifest <XML>` embeds an arbitrary application manifest. |
-| 4 | Stub-append v2 hardening (alignment, overlay vs append, sparse stubs), per-app resource stamping UX, CI on `windows-latest` to actually run the produced EXE against a real JDK | planned |
+| 2 | Windows launcher runtime (JVM discovery + JNI) | **done, and verified on a Windows machine.** Payload lookup (`RT_RCDATA` resource), cache path, manifest lookup, JVM discovery (env / PATH / registry / common), `jvm.dll` discovery, JNI (`JavaVM::with_libjvm` + `get_static_method_id` / `call_static_method`, with the JavaFX `Application.launch` fallback), and the bare-stub message are all wired. There is **no `JniStub` error** — that variant no longer exists; the earlier note claiming the launch path was stubbed was stale. A ~1.1 MB precompiled `bin/launcher-stub-windows-x86_64.exe` (PE32+ GUI x86-64) is committed and regenerated by `scripts\build-windows.cmd`. |
+| 3 | snug-cli builder: load stub via `include_bytes!()`, stamp payload + icon/version/manifest via `editpe` | **done** — `snug app.jar -o App.exe` produces a real Windows `.exe` end-to-end. `include_bytes!` of the committed stub + `RT_RCDATA` payload stamping is unit + integration tested. Resource stamping is in-process via the [`editpe`](https://github.com/Systemcluster/editpe) crate (pure Rust, BSD-2-Clause, cross-platform — same code path runs on macOS, Linux, and Windows). `--icon` accepts PNG or ICO; `--manifest <XML>` embeds an arbitrary application manifest. |
+| 4 | Payload storage hardening | **partly done** — the `RT_RCDATA` half landed: `snug-cli` stamps the payload into the PE's resource directory via `editpe` and the launcher reads it back through the same API, pinned by `crates/snug-launcher/tests/stub_payload_roundtrip.rs`. Still open: alignment / overlay / sparse-stub hardening, per-app resource stamping UX, and CI on `windows-latest` that actually runs the produced EXE against a real JDK. |
 | 5 | Windows version-resource stamping              | **done** — `editpe` stamps `VS_VERSIONINFO` (ProductName / CompanyName / FileDescription / LegalCopyright) plus `FixedFileInfo` (signature, file/product version, VFT_APP) into every produced EXE. `--manifest <XML>` covers the application manifest gap. Icon dimension / MUI / translation coverage is follow-up. |
-| 6 | Native splash renderer (PNG via GDI+/WIC)      | planned    |
+| 6 | Native splash renderer (PNG via GDI+/WIC)      | **done on Windows** — `splash.rs` is `#![cfg(windows)]`; the CLI converts the PNG to `BGRA` at build time so the launcher needs no image-codec dependency, and a dedicated thread owns the topmost `UpdateLayeredWindow` surface until `SplashHandle::dismiss`. **Not on macOS**: `macos_bundle.rs` sets `splash: None`, so a `--splash` PNG on a `.app` build is discarded rather than embedded. |
 | 7 | Per-user cache + old-version cleanup           | **done** — cache entries expire. `cache::touch` stamps a cached JAR's mtime on **every** launch that uses it, and `cache::sweep` runs off a detached thread (rate-limited to once per 6h by a `.sweep` stamp file) to delete the ones no longer wanted. Policy: keep the most recently used `KEEP_RECENT` (3) entries — the running build's own entries count toward that depth — up to a per-app byte budget of `clamp(build_bytes * 3, 512 MB, 8 GB)`, and evict anything untouched for `MAX_UNUSED_AGE` (30 days) regardless of rank. The current build is never evicted; everything else is recoverable because a missing entry is re-extracted from the payload on the next launch. Sweeping is *not* triggered by the builder — `snug-cli` never writes to the cache, so the launcher is the sole owner of the policy. |
 | 8 | GitHub Actions CI (windows-latest release)     | planned    |
 | 9 | `Snug Quick Build` beginner drag-and-drop shim   | **done** — separate `crates/snug-dropper` crate. Drop a `.jar` or a folder of JARs on `Snug Quick Build.exe` and it runs `snug.exe --name "Example Application Name" --company "Example Company Pty Ltd" -o "<parent>/Example Application Name.exe" <input>` behind an indeterminate marquee on a worker thread, then reports with a `MessageBoxW`. Double-click opens a command window in the EXE's own folder. Two or more items, or one item that is neither a `.jar` nor a directory, get a dialog and *then* the terminal as a hand-off. A build failure or a missing `snug.exe` gets an error dialog and **no** terminal. Built as `snug-dropper.exe`; renamed to `Snug Quick Build.exe` at packaging time. Must ship in the same folder as `snug.exe`. |
-| 10 | Native macOS / Linux `snug` CLI builds    | **done** — `cargo build --workspace` and `cargo test --workspace --lib --bins --tests` pass on macOS (283 tests), and the CLI produces a real `PE32+ executable (GUI) x86-64` end-to-end from a Mac. `scripts/build-macos.sh` stages two thin per-arch binaries into `release/macos-arm64/snug` and `release/macos-x86_64/snug` at a macOS 12.0 deployment floor — same binary name on every platform, platform in the directory, so docs never name two binaries. No universal2: macOS 27 is the last release with Rosetta 2, so arm64 is the future-proof slice and x86_64 only serves the four Intel models that top out at macOS 26. Windows-only surfaces are gated: the six Win32 GUI modules in `snug-launcher` use file-level `#![cfg(windows)]` (joining `jdk_install.rs` / `splash.rs`), while the three Windows-only *binaries* use per-item `#[cfg(windows)]` plus a real non-Windows `main`. `editpe` was made unconditional (pure-Rust PE parsing — `snug-cli` needs it to build EXEs anywhere) and `ureq` Windows-only. Homebrew tap / Developer ID notarization is follow-up; see "Build host". |
+| 10 | Native macOS / Linux `snug` CLI builds    | **done** — `cargo build --workspace` and `cargo test --workspace --lib --bins --tests` pass on macOS (495 tests, and the count is platform-independent — the suite is pure Rust, so a Windows run reports the same 495), and the CLI produces a real `PE32+ executable (GUI) x86-64` end-to-end from a Mac. `scripts/build-macos.sh` stages two thin per-arch binaries into `release/macos-arm64/snug` and `release/macos-x86_64/snug` at a macOS 12.0 deployment floor — same binary name on every platform, platform in the directory, so docs never name two binaries. No universal2: macOS 27 is the last release with Rosetta 2, so arm64 is the future-proof slice and x86_64 only serves the four Intel models that top out at macOS 26. Windows-only surfaces are gated: the six Win32 GUI modules in `snug-launcher` use file-level `#![cfg(windows)]` (joining `jdk_install.rs` / `splash.rs`), while the three Windows-only *binaries* use per-item `#[cfg(windows)]` plus a real non-Windows `main`. `editpe` was made unconditional (pure-Rust PE parsing — `snug-cli` needs it to build EXEs anywhere) and `ureq` Windows-only. Homebrew tap / Developer ID notarization is follow-up; see "Build host". |
 | 11 | macOS launcher runtime (`libjvm.dylib` + JNI) | **done, verified against a real JDK on macOS.** `platform/macos.rs` mirrors `platform/windows.rs` step for step: cache extraction + sweep, log, `Main-Class` resolution, JVM discovery, `libjvm.dylib` load via the same `jni` 0.22 invocation API, and the `main(String[])` / JavaFX `Application.launch` dispatch. `tests/macos_launch_e2e.rs` compiles a real class with `javac`, packages it with `jar`, hands it to the launcher, and asserts the JVM actually runs it — it is skipped rather than failed when no JDK is present. **Not implemented:** splash, the Adoptium download flow, and error dialogs (all Win32); `DownloadJdkMode::Auto`/`Force` degrade to discovery-only and *log* that. |
 | 12 | macOS `.app` bundle emitter | **done, verified by launching a real bundle.** The output extension selects the artefact: `-o MyApp.app` builds a macOS bundle, `-o MyApp.exe` a Windows one, and the *default* is the host's own — `snug app.jar` with no `-o` gives `app.app` on macOS and `app.exe` elsewhere. `macos_bundle.rs` writes `Contents/{Info.plist,MacOS/<App>,Resources/<App>.snugpayload,Resources/App.icns}` and ad-hoc signs it. The launcher is a **byte-copy** — unlike the Windows stub there is nothing to stamp, because a Mach-O has no resource directory and `editpe` is PE-only. `bin/launcher-stub-macos-<arch>` is embedded per `#[cfg(target_arch)]`, so each `snug` binary carries one launcher and can only build a `.app` for its own arch. |
 | 13 | macOS Adoptium JDK download | **the flow works; the dialogs do not exist yet.** `jdk_install.rs` now compiles on macOS. `adoptium_target()` sends this host's `os`/`architecture` in Adoptium's own spelling, macOS assets unpack as `.tar.gz` (via `tar` + `flate2`), `find_java_home` understands the `*.jdk/Contents/Home` bundle and `bin/java`, and `open_in_browser` uses `/usr/bin/open`. Verified live: the query returns the correct `x64_mac_hotspot` asset, and the tarball/extraction path is covered by tests that build a real `.tar.gz` in Adoptium's shape. **Still Win32:** the splash, the download dialogs, and the error dialog — so `Auto` logs that it has nothing to ask with and falls back to discovery, while `Force` downloads and logs its progress. See the Backlog for the AppKit route. |
@@ -364,22 +392,38 @@ commit — useful history, not a live list.
 
 **Not platform-specific, but it bites both**
 - **`test/localisations/*.txt` are hand-maintained copies of the
-  canonical baseline, and they drift.** They are not read by any code —
-  they exist so a fr/de bundle can be dropped in and eyeballed through
+  canonical baseline.** They are not read by any code — they exist so a
+  `de` / `fr` bundle can be dropped in and eyeballed through
   `--localization <path>` — and `crates/snug-format/assets/` carries only
-  the `en` baseline, so the French and German text lives *only* in those
-  copies. They had fallen a release behind: all three still held the
-  pre-`{arch}` `phase_label` with `Windows x64` hardcoded, and none had the
-  `arch_macos_*` keys. Resynced, but nothing enforces it.
-  - The `every_localize_key_is_in_the_baseline` test only covers the
-    **built-in** baseline, which is why this drifted silently. The
-    interesting fix is to stop hand-copying — generate the copies from the
-    baseline, or add them to the test's reach — rather than remember to
-    resync. Until then, touching a string in the baseline means checking
-    these three.
-- Note the shape of the failure, because it has now bitten twice in this
-  file: a value that is correct in the baseline and wrong in a copy reads
-  as correct from the baseline, and nothing in the build compares the two.
+  the `en` baseline, so the translated text lives *only* in those copies.
+  There are four of them: `en`, `de`, `fr`, and `ts`. The `ts` one carries
+  English text under a `ts` tag and exists to exercise the tag-parsing
+  path, so it is a fixture rather than a translation — which is why a
+  count of "three translated bundles" in an older draft of this file was
+  already out of date before the guard existed.
+  - **They are drift-guarded now, and this entry used to say otherwise.**
+    `localize::tests::the_checked_in_bundles_track_the_baseline`
+    (`crates/snug-launcher/src/localize.rs`) walks the directory rather
+    than a hardcoded list, so a bundle added later is covered the day it
+    lands rather than the day someone remembers. It asserts in **three**
+    directions: no baseline key missing from a copy, no copy key the
+    baseline does not define, and the same `{placeholder}` set per value.
+    The quieter third failure is the reason it checks both ways — a copy
+    carrying `{version}` for a key that dropped it renders perfectly right
+    up until the call site stops supplying it, and *then* the end user
+    sees `{version}` in a dialog.
+  - It judges keys and placeholders, **not** whether a translation is
+    *accurate*. That needs someone who reads the language, and nothing
+    here attempts it.
+  - The historical drift is still worth recording, because the failure
+    shape has now bitten this file twice: every copy then existing held
+    the pre-`{arch}` `phase_label` with `Windows x64` hardcoded and none
+    had the `arch_macos_*` keys, and it went unnoticed because
+    `every_localize_key_is_in_the_baseline` only ever covered the
+    **built-in** baseline. The generalisable lesson: a value that is
+    correct in the baseline and wrong in a copy reads as correct when you
+    check the baseline, so the comparison has to be the thing that fails,
+    not the memory.
 
 **Windows**
 - **Install `mingw-w64` and do a real Windows *link* build from macOS**
@@ -441,11 +485,17 @@ commit — useful history, not a live list.
   - The progress run loop is still pumped by hand with
     `NSRunLoop::runUntilDate`: it is not a modal session, so progress can be
     sampled between event turns, and `objc2-app-kit` 0.3.2 binds no
-    `NSTimer`. Its Cancel button is labelled `prompt.button_cancel`, **not**
-    `progress.cancel_button_during_download` (which reads "Install",
-    because on Windows that label belongs to the *prompt* window where
-    pressing it means "go ahead" — here the download is already running,
-    so "Install" would be a lie).
+    `NSTimer`. Its Cancel button is labelled `prompt.button_cancel`.
+    There was a separate `progress.cancel_button_during_download` key
+    reading "Install" — on Windows that label belonged to the *prompt*
+    window, where pressing it means "go ahead", so it was borrowed into
+    the progress window to say what the button was about to start. That
+    stopped being true when consent moved ahead of the worker thread: the
+    download is already running when the progress window opens, so the
+    button can only abort and "Install" was a lie. It is deleted from the
+    baseline; both platforms read `prompt.button_cancel`, and the Windows
+    button is now also measured from its real label rather than from
+    "Install".
   - `runtime.progress.phase_label` used to hardcode
     "Downloading runtime (Windows x64)" in the *shared* baseline, so a
     macOS download announced itself as a Windows one. It now takes
@@ -608,7 +658,7 @@ finished.** Bump the version on every change; never land on `1.0.0`
 by accident.
 
 - **Single source of truth:** `[workspace.package] version` in the
-  root `Cargo.toml`. All four crates inherit it via
+  root `Cargo.toml`. All five crates inherit it via
   `version.workspace = true`, so that one line is the only thing to
   edit. `snug --snug-version` and `cargo metadata` read the compiled
   value via `env!("CARGO_PKG_VERSION")` in `snug-cli` (both the clap
@@ -1040,9 +1090,13 @@ by accident.
   Java 17 discovered and loaded, and was then asked for a JNI 21 entry
   point that does not exist in it. `jni_version_for` maps the discovered
   major version to the matching spec (everything used here is JNI
-  1.0-era, so nothing is lost). **`platform/windows.rs` still has this
-  bug** — same hardcoded `V21`, same failure; it just needs a JVM older
-  than 21 to show up, and snug's default is `min_java` 25.
+  1.0-era, so nothing is lost). **Both platforms are fixed** —
+  `platform/windows.rs` and `platform/macos.rs` each carry their own
+  `jni_version_for`, and each has a table-driven regression test pinning
+  `None → V1_8`, `8 → V1_8`, `17 → V10`, `25 → V21`. An older draft of
+  this note said only `windows.rs` still had the bug. It did not, and the
+  defect was invisible off Windows anyway, because snug's default
+  `min_java` is 25 and the failure needs a JVM *older* than 21 to show up.
 - **`wants_app_bundle` is platform-neutral on purpose.** snug embeds
   exactly one launcher, chosen for the machine it was built on, so the
   default output is the artefact this build can actually produce: a
@@ -1352,6 +1406,41 @@ by accident.
   error. The scaffold directory must contain nothing but
   `snug-localisations.<tag>.txt` files: `expand_user_paths` fails the
   build on any other entry, so no README, no `.bak`.
+- **A `{slot}` is scoped to the dialog that owns the data, and that
+  contract is declared rather than derived.** Substitution does not
+  resolve tokens globally: each rendering site hands the filler a fixed
+  list of `(name, value)` pairs, so `runtime.retry.subheading` cannot
+  say `{size_mb}` however it is spelled — the retry dialog has no
+  download size to give. Unknown slot names are copied through verbatim
+  *by design*, so a bundle typo leaves a visible marker instead of
+  silently blank text. That is the right behaviour for a translation and
+  the wrong one for the shipped baseline, because nothing would then stop
+  English copy asking for a slot no site supplies, and every dialog would
+  print `{size_mb}` at the user.
+  - `snug_format::tokens::INJECTED_BY_KEY` is that declaration, and it is
+    hand-written on purpose. The values could in principle be scraped from
+    the call sites, but those are Rust expressions spread across
+    `jdk_install.rs`, `error_window.rs` and `progress_window.rs` in a
+    crate `snug-cli` cannot depend on. A declared table that a test holds
+    to account is worth more than a derived one nobody can run at build
+    time. Each entry is a deliberate *superset* of what the English copy
+    uses, so a translator may reach for any slot the dialog really does
+    supply.
+  - `REPLACEMENT_TOKENS.md` at the repo root is **generated** from that
+    table by `replacement_tokens_markdown()`, and a test asserts the file
+    on disk equals the function's output — modulo line endings, because
+    the working tree is CRLF under `core.autocrlf` while the generator
+    emits LF, and a raw comparison would fail on a fresh clone for a
+    reason unrelated to content. Regenerate it with
+    `cargo test -p snug-format regenerate_the_checked_in_table -- --ignored`;
+    that test writes into the repository, so it is `#[ignore]`d.
+  - `snug --list-tokens` prints the same contract offline — no JAR, no
+    options file, no build. Three tests hold the arrangement together:
+    the baseline never names a slot no site fills, no declaration names a
+    key the baseline does not have, and every declared token is one
+    `TOKEN_DESCRIPTIONS` actually describes. That last one is what stops
+    the table from lying to a translator by inventing a slot that will
+    never be filled.
 - **All launcher user-facing text lives in ONE file, and it is the
   localization catalog.** `crates/snug-format/assets/
   snug-localisations.en.txt` holds the error messages (`err.*`), the
@@ -1814,8 +1903,15 @@ committed stub".
 The raw commands it wraps, if you want them individually:
 
 ```bash
-cargo test --workspace
+cargo test --workspace --lib --bins --tests
 ```
+
+That `--lib --bins --tests` is load-bearing off Windows, for the reason
+given in Conventions. Plain `cargo test --workspace` compiles the
+examples as well, and three of the four in
+`crates/snug-launcher/examples/` (`check_icon`, `dialogs_preview`,
+`progress_preview`) are `#![cfg(windows)]` — which in an example root
+takes `main` out along with the body.
 
 **Clippy is a separate gate, and CI runs it with warnings denied:**
 
@@ -1841,7 +1937,8 @@ layout guards in `snug_preview`'s `windows_impl.rs` are full of these.
 
 **Formatting is reported but not enforced.** `check.ps1` runs
 `cargo fmt --all --check` as an advisory step only: the tree carries
-pre-existing drift in 58 files and there is no `rustfmt.toml`, so making
+pre-existing drift in 63 files (measured 2026-10-18; it is a moving
+number) and there is no `rustfmt.toml`, so making
 it a gate would fail on code nobody has touched. `check.ps1 -Format`
 rewrites the tree — a deliberate call about a large diff, not something a
 check script should do behind your back. Note that CI has no fmt step
@@ -1870,5 +1967,16 @@ real binary (see the `WM_QUIT` note above).
 
 - Code signing / Authenticode — defer until release slice.
 - Windows SmartScreen reputation — out of scope.
-- Cross-platform launcher (mac `.app`, Linux ELF) — explicitly NOT in
-  scope. Snug is Windows-only by design.
+- **A Linux ELF launcher does not exist and is not planned.** An older
+  draft of this section claimed "Cross-platform launcher (mac `.app`,
+  Linux ELF) — explicitly NOT in scope. Snug is Windows-only by design."
+  That was wrong, and stayed wrong across several slices. snug
+  *produces* Windows EXEs, but the `snug` CLI is an ordinary
+  cross-platform Rust program (slices 10-12), the launcher runtime has a
+  macOS half alongside the Windows one (slices 11 and 13), and `-o
+  App.app` on a Mac emits a real, signed bundle. What actually remains
+  Windows-only is narrower than that sentence implied: the *splash*
+  (Win32 GDI+ / WIC — the macOS bundle path drops it), the `Snug Quick
+  Build` dropper, and — for any given `snug` binary — the *other*
+  platform's launcher, since each one embeds exactly a single launcher
+  and so can only produce its own architecture's artefact.

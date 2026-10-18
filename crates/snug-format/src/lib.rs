@@ -28,6 +28,7 @@ pub mod embedded;
 pub mod error;
 pub mod localization;
 pub mod payload;
+pub mod tokens;
 
 pub use codec::{decode, decode_payload, embedded_file, encode, encode_payload, sha256};
 pub use config::{
@@ -42,3 +43,4 @@ pub use localization::{
     TOKEN_DESCRIPTIONS,
 };
 pub use payload::{EmbeddedFile, SnugPayload};
+pub use tokens::{injected_for, replacement_tokens_markdown, Injection, INJECTED_BY_KEY};

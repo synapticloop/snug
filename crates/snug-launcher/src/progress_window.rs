@@ -251,10 +251,6 @@ struct ProgressState {
     hfont_info_subtext: HFONT,
     hfont_info_subtext2: HFONT,
     started_at: Instant,
-    /// Last phase value we wrote the cancel button label for. Lets
-    /// `WM_TIMER` rewrite the label only on the 0→1 transition
-    /// (Install → Cancel) instead of every 200 ms tick.
-    last_label_phase: i32,
     /// Last pct value we invalidated the bar rect for. Lets
     /// `WM_TIMER` skip the `InvalidateRect` call on ticks where
     /// the worker hasn't moved the percentage (e.g. during the
@@ -596,7 +592,7 @@ unsafe fn register_class() -> u16 {
             let hwnd_cancel = CreateWindowExW(
                 0,
                 wide(BUTTON_CLASS_NAME).as_ptr(),
-                wide(&d.runtime.progress.cancel_button_during_download).as_ptr(),
+                wide(&d.runtime.prompt.button_cancel).as_ptr(),
                 WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON as u32,
                 // Provisional: created at the left edge, then measured
                 // and moved flush right below.
@@ -613,11 +609,22 @@ unsafe fn register_class() -> u16 {
             // (localized "Cancel" from the install-prompt section).
             // Size it to that text and park it against the right
             // margin, matching how modal_window packs its button group.
+            //
+            // "Cancel" is the only label this button needs, and it is set once,
+            // here, and never rewritten. It used to read "Install" until
+            // the first click, rewritten by `WM_TIMER` on the 0→1
+            // transition — but that state is unreachable now: consent is
+            // taken by `ui::consent` before the worker thread exists
+            // (`jdk_install.rs`), which stores `started = true` before
+            // this window is ever shown. So the download is already in
+            // flight by the time the user sees the dialog, the button
+            // only ever aborts, and "Install" would be a lie — the same
+            // objection that made `appkit.rs` skip this key entirely on
+            // macOS. Measuring it from the real label also means the
+            // width matches what is painted; the old code measured
+            // "Install" and never re-measured after relabelling.
             apply_font(hwnd_cancel, hfont_cancel);
-            let cancel_w = measure_button_width(
-                hfont_cancel,
-                &d.runtime.progress.cancel_button_during_download,
-            );
+            let cancel_w = measure_button_width(hfont_cancel, &d.runtime.prompt.button_cancel);
             SetWindowPos(
                 hwnd_cancel,
                 std::ptr::null_mut(),
@@ -837,19 +844,10 @@ unsafe fn register_class() -> u16 {
             let bytes = (&(*raw).shared).bytes.load(Ordering::SeqCst);
             let total = (&(*raw).shared).total_bytes.load(Ordering::SeqCst);
             let done = (&(*raw).shared).done.load(Ordering::SeqCst);
-            let started = (&(*raw).shared).started.load(Ordering::SeqCst);
             let started_at = (*raw).started_at;
             let hwnd_pct = (*raw).hwnd_pct;
             let hwnd_detail_left = (*raw).hwnd_detail_left;
             let hwnd_detail_right = (*raw).hwnd_detail_right;
-            let hwnd_cancel = (*raw).hwnd_cancel;
-            // Track the label we last wrote to the cancel button so
-            // we don't spam `SetWindowTextW` every 200 ms tick. We
-            // key off `started` (idempotent flip Install → Cancel)
-            // rather than `phase`, since the label change is a
-            // one-shot transition triggered by the user's first
-            // click.
-            let last_label_phase = (*raw).last_label_phase;
 
             let d = crate::dialogs::dialogs();
             let elapsed = started_at.elapsed().as_secs_f64();
@@ -873,25 +871,6 @@ unsafe fn register_class() -> u16 {
             set_static_text(hwnd_pct, &view.pct_label);
             set_static_text(hwnd_detail_left, &view.detail_left);
             set_static_text(hwnd_detail_right, &view.detail_right);
-
-            // The button is "Install" before the user clicks and
-            // "Cancel" once the install is in flight. The WM_COMMAND
-            // handler also rewrites the label on the click for
-            // snappiness; this tick is the safety net in case
-            // WM_COMMAND fired before the dialog was fully wired up.
-            let desired_started: i32 = if started { 1 } else { 0 };
-            if desired_started != last_label_phase {
-                let label = if started {
-                    d.runtime.prompt.button_cancel.as_str()
-                } else {
-                    d.runtime.progress.cancel_button_during_download.as_str()
-                };
-                if !hwnd_cancel.is_null() {
-                    let s = wide(label);
-                    SetWindowTextW(hwnd_cancel, s.as_ptr());
-                }
-                (*raw).last_label_phase = desired_started;
-            }
 
             if done != 0 {
                 PostQuitMessage(0);
@@ -1315,10 +1294,6 @@ pub unsafe fn show(
         hfont_info_subtext: std::ptr::null_mut(),
         hfont_info_subtext2: std::ptr::null_mut(),
         started_at: Instant::now(),
-        // Start in phase 0 — `WM_TIMER`'s first tick will rewrite
-        // the cancel button to "Install" when the worker hasn't
-        // moved on yet, and to "Cancel" once phase 1 begins.
-        last_label_phase: -1,
         last_pct: 0,
         // Loaded **once** in `WM_CREATE` (when the caller didn't push
         // an `HBITMAP`) so the

@@ -138,13 +138,6 @@ pub struct ProgressDialog {
     /// Third line in the light-blue info box. Rendered only when
     /// non-empty, so a dialog can opt in without padding.
     pub info_subtext_2: String,
-    /// Label of the Cancel button while the download phase is
-    /// running. Default `"Install"` — the download is part of the
-    /// install flow, and labelling the abort button "Install"
-    /// signals the user what's about to happen. Swapped to
-    /// `prompt.button_cancel` once the verify / extract phases
-    /// start.
-    pub cancel_button_during_download: String,
     /// Platform names for the `{arch}` slot of `phase_label`.
     ///
     /// `phase_label` is a *template*, not a finished string. Every
@@ -423,9 +416,6 @@ fn assemble() -> Dialogs {
                     info_heading: lookup("runtime.progress.info_heading"),
                     info_subtext: lookup("runtime.progress.info_subtext"),
                     info_subtext_2: lookup("runtime.progress.info_subtext_2"),
-                    cancel_button_during_download: {
-                        lookup("runtime.progress.cancel_button_during_download")
-                    },
                     arch_macos_arm64: lookup("runtime.progress.arch_macos_arm64"),
                     arch_macos_x86_64: lookup("runtime.progress.arch_macos_x86_64"),
                     arch_windows_x86_64: lookup("runtime.progress.arch_windows_x86_64"),
@@ -617,7 +607,6 @@ mod tests {
             ("progress.content", &d.runtime.progress.content),
             ("progress.pct_label", &d.runtime.progress.pct_label),
             ("progress.detail_with_size", &d.runtime.progress.detail_with_size),
-            ("progress.cancel_during_download", &d.runtime.progress.cancel_button_during_download),
             ("failure.title", &d.runtime.failure.title),
             ("failure.button_label", &d.runtime.failure.button_label),
             ("retry.title", &d.runtime.retry.title),

@@ -102,14 +102,14 @@ splash.title = Snug Splash
 # ----------------------------------------------------------------------------
 # JDK install errors (`snug_launcher::jdk_install::JdkError`)
 # ----------------------------------------------------------------------------
-jdk.err.metadata_fetch = Adoptium API: {0}
-jdk.err.no_metadata_for_version = No JDK {0} GA found on Adoptium
-jdk.err.bad_metadata_shape = Unexpected Adoptium response: {0}
+jdk.err.metadata_fetch = Runtime API: {0}
+jdk.err.no_metadata_for_version = No Runtime {0} GA found.
+jdk.err.bad_metadata_shape = Unexpected runtime server response: {0}
 jdk.err.bad_field = Bad metadata field {name}: {value}
 jdk.err.download = Download: {0}
 jdk.err.sha256_mismatch = SHA-256 mismatch - declared {declared}, computed {computed}
 jdk.err.extract = Extract zip: {0}
-jdk.err.no_java_exe = Extracted JDK at {0} has no bin\java.exe - unusual zip layout?
+jdk.err.no_java_exe = Extracted Runtime at {0} has no executable - unusual zip layout?
 jdk.err.io = I/O: {0}
 jdk.err.dialog = Dialog: {0}
 
@@ -177,7 +177,7 @@ runtime.prompt.subheading = The required runtime was not found on this machine.
 runtime.prompt.content = This application needs a runtime to launch. Snug can download the runtime for you (~{size_mb} MB) and install it.
 runtime.prompt.info_heading = Before you install
 runtime.prompt.info_subtext = The runtime is installed for your user account, so it does not need administrator rights.
-runtime.prompt.info_subtext_2 = Other applications reuse it too, so it is only downloaded once.
+runtime.prompt.info_subtext_2 = Other applications may reuse it too, so it is only downloaded once.
 runtime.prompt.button_download = Install the runtime now
 runtime.prompt.button_cancel = Cancel
 
@@ -208,15 +208,14 @@ runtime.progress.detail_eta_done = Almost done
 runtime.progress.info_heading = This only needs to be downloaded once.
 runtime.progress.info_subtext = This runtime will be used for future application launches
 runtime.progress.info_subtext_2 = The runtime is installed for your user account and is reused by other Java applications.
-runtime.progress.cancel_button_during_download = Install
 
 runtime.failure.title = Runtime Installation Failure
 runtime.failure.heading = Install runtime failure
-runtime.failure.subheading = All download attempts were exhausted, I will attempt to launch the application.
-runtime.failure.content = Eclipse Temurin {version} could not be installed. Technical detail:\n{error}
+runtime.failure.subheading = All download attempts were exhausted, we will attempt to launch the application.
+runtime.failure.content = The runtime version {version} could not be installed.  Technical detail:\n{error}
 runtime.failure.info_heading = What can I do?
 runtime.failure.info_subtext = Check your network, and retry later.
-runtime.failure.info_subtext_2 = The application will try to start with whatever Java is already on this machine.
+runtime.failure.info_subtext_2 = The application will try to start with whatever runtime is already on this machine.
 runtime.failure.button_label = OK
 
 runtime.retry.title = Download failed - Try again?

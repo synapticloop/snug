@@ -931,11 +931,17 @@ pub(crate) fn progress(
     stack.addArrangedSubview(&status);
     content.addSubview(&stack);
 
-    // One button, and it cancels. The baseline's
-    // `cancel_button_during_download` reads "Install" because that label
-    // belongs to the Windows *prompt* window, where pressing it means "go
-    // ahead". Here the download is already running, so the only useful
-    // action is abort, and "Install" would be a lie.
+    // One button, and it cancels — `prompt.button_cancel`, the same
+    // string the Windows progress window uses.
+    //
+    // There used to be a separate `cancel_button_during_download` key
+    // reading "Install", on the theory that the abort button should say
+    // what is about to happen. That was never right here: the download
+    // is already running, so the only useful action is abort and
+    // "Install" is a lie. It was not right on Windows either, where it
+    // briefly painted "Install" on a button that could only cancel and
+    // was measured at the wrong width. The key is gone from the baseline
+    // and both platforms read `prompt.button_cancel`.
     let responder = ProgressResponder::new(mtm);
     // SAFETY: the responder outlives the window, and the selector is the
     // one `ProgressResponder` actually implements.

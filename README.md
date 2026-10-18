@@ -21,21 +21,21 @@
 2. Run the following command
 
 ```
-snug.exe --company "My Company" --name "My App" snug-javafx-demo.exe
+snug.exe snug-javafx-demo-windows.jar -o snug-javafx-demo.exe --company "My Company" --name "My App"
 ```
 
 Then either run
 
 ```
-snug-javafx-demo.exe 
+snug-javafx-demo.exe
 ```
 
 Or double-click on the icon
 
 ## Quick Demo
 
-For a quick demo of a JavaFx java demo (with a splashscreen) have a look at
-and run the `./assets/snug-javafx-demo.exe`.
+For a quick demo of a JavaFX application (with a splash screen), run
+`assets/snug-javafx-demo-windows.exe`.
 
 <div align="center"><img src="assets/snug-javafx-demo-screenshot.png" alt="snug" width="302"></div>
 
@@ -113,7 +113,7 @@ path on a Mac, including the JavaFX system menu bar.
 | CLI surface + embedded-payload format | done |
 | Windows launcher runtime (JVM discovery + JNI) | **done, verified on a Windows machine** |
 | macOS launcher runtime (`libjvm.dylib` + JNI, cache, JDK discovery) | **done, verified on a Mac** |
-| snug-cli builder: stub + payload concatenation, in-process `editpe` resource stamping | **done** |
+| snug-cli builder: load stub via `include_bytes!()`, stamp payload as an `RT_RCDATA` resource, in-process `editpe` icon/version/manifest stamping | **done** |
 | macOS `.app` emitter (`Contents/{Info.plist,MacOS,Resources}`, ad-hoc signed) | **done** |
 | Windows resource stamping — `VS_VERSIONINFO` (`ProductName`, `CompanyName`, `FileDescription`, `LegalCopyright`, `FixedFileInfo` file/product version, `VFT_APP`) + optional `--icon` + optional `--manifest` | done |
 | macOS app menu / `CFBundleName` from `--name` | done |
@@ -121,6 +121,7 @@ path on a Mac, including the JavaFX system menu bar.
 | Per-launch log file (`<cache>\snug.log`, truncated on each launch) | done |
 | Old-version cache cleanup | done — entries expire on use, swept at most once per 6h |
 | Editable dialog text (`snug-format/assets/snug-localisations.en.txt`) | done, and shared by the Windows and macOS dialogs |
+| Replacement-token contract (`snug --list-tokens`, `REPLACEMENT_TOKENS.md`) | done |
 | macOS JDK download dialogs (consent, progress, retry, failure) | done |
 | Native splash renderer (PNG via GDI+/WIC) | Windows only; not on macOS |
 | GitHub Actions CI (windows-latest release) | planned |
@@ -210,11 +211,12 @@ the host's own platform is used. A macOS `.app` gets its icon from
 is why the payload is a sibling rather than something stamped in.
 
 The produced `.exe` is a 64-bit Windows GUI binary that:
-- contains the full fat JAR + icon + splash (when supplied) embedded at
-  the tail behind an 8-byte `SNUGEMBD` magic trailer,
+- carries the full fat JAR + optional splash as a single encoded
+  payload stamped into the PE as an `RT_RCDATA` resource (the icon is
+  stamped separately, as `MAINICON`),
 - displays as a Windows GUI executable (no console window),
-- on launch scans itself for the `SNUGEMBD` trailer, decodes the
-  postcard payload, extracts the JAR to
+- on launch reads that resource back out, decodes the postcard payload,
+  extracts the JAR to
   `%LOCALAPPDATA%\snug\<company>\<name>\<jar-sha256>\app.jar`, locates
   a Java 25+ install + `jvm.dll`, and invokes the Java `main` class.
 
@@ -268,11 +270,14 @@ snug/
 │   └── build-macos-demo.sh     # macOS: build-macos.sh, then package the JavaFX demo as a .app
 └── crates/
     ├── snug-format/            # embedded-payload types + postcard codec (the wire contract)
-    │   └── assets/             # snug-localisations.en.txt — canonical English baseline
+    │   ├── assets/             # snug-localisations.en.txt — canonical English baseline
+    │   └── src/tokens.rs       # the `{slot}` contract; generates REPLACEMENT_TOKENS.md
+    ├── snug-payload/           # writing and locating the payload (PE `RT_RCDATA` / `.app` sibling file)
     ├── snug-launcher/
     │   ├── assets/             # snug-icon.png (build.rs → MAINICON resource)
-    │   └── src/dialogs.rs      # the localisation key tree, fills `{name}` placeholders
-    └── snug-cli/               # CLI + stub-append builder + snug.options + editpe stamping
+    │   └── src/dialogs.rs      # typed key tree, assembled from `localize::lookup`
+    ├── snug-dropper/           # "Snug Quick Build" — the Win32 drag-and-drop shim
+    └── snug-cli/               # CLI + payload stamping + snug.options + editpe resources
         └── assets/             # snug.options.example, written by `snug --init-options`
 ```
 
@@ -286,18 +291,28 @@ launcher (runtime side). The wire layout is:
 +--------+----------------+--------------+--------------+----------------------+
 ```
 
-The 8-byte magic is `SNUGEMBD`. `format_version` is currently `5`
-(bumped from 1 → 4 in 2026-09 to capture the JDK download flow
-schema; the decoder rejects payloads with a higher version than it
-understands, so old stubs need rebuilding when the version moves).
+The 8-byte magic is `SNUGEMBD`. `format_version` is currently `6`:
+
+| Version | Change |
+|---|---|
+| 4 (2026-09) | `auto_download_jdk: bool` — offer an Adoptium download when JVM discovery fails |
+| 5 (2026-09) | `download_jdk: DownloadJdkMode` (`off` / `auto` / `force`) replaced the bool |
+| 6 (2026-09) | `SnugPayload.localizations: Vec<Localization>` — embedded runtime-string bundles |
+
+The decoder rejects a payload whose version is *higher* than the build
+understands, so old stubs need rebuilding when the version moves.
 `payload_crc32` is CRC32/IEEE of the postcard bytes; the launcher
 validates before decoding. Payload is a postcard-encoded
-`SnugPayload { config, jar, icon }`.
+`SnugPayload { config, jars, localizations }` — there is no `icon`
+field, because the icon bytes are re-read from disk at build time to
+stamp the PE rather than carried in the payload.
 
-The stub is currently appended (v1, `bin/launcher-stub-windows-x86_64.exe`); the
-launcher locates the trailer by scanning itself for the magic. A v2
-that stores the payload as an `RCDATA` resource is a planned
-hardening slice.
+The payload is not appended to the executable. It is stamped into the
+PE's resource directory as an `RT_RCDATA` entry by
+[`editpe`](https://github.com/Systemcluster/editpe), and the launcher
+reads it back out through the same API. `bin/launcher-stub-windows-x86_64.exe`
+is a *bare* stub with no such entry, which is how the launcher
+recognises it and reports that no payload is embedded.
 
 ## Building
 
@@ -319,8 +334,10 @@ the source of truth; every release pipeline regenerates them.
 rustup target add x86_64-pc-windows-gnu
 cargo check --all-targets --target x86_64-pc-windows-gnu
 
-# full workspace tests
-cargo test --workspace
+# full workspace tests. The portable form matters: plain `cargo test`
+# also builds examples, and the Windows-only ones have no `main` off
+# Windows — so they fail to *compile*, not fail to pass.
+cargo test --workspace --lib --bins --tests
 
 # build the snug CLI for the host platform
 cargo build --release -p snug-cli
@@ -344,30 +361,60 @@ Notable test binaries:
 
 - `crates/snug-format/tests/roundtrip.rs` — payload encode/decode
 - `crates/snug-launcher/tests/stub_payload_roundtrip.rs` — proves the
-  stub's locator still finds the real trailer among the false-positive
-  `SNUGEMBD` substrings inside the stub binary
+  launcher reads the payload back out of the stamped `RT_RCDATA`
+  resource, and still recognises a bare stub as payload-less
 - `crates/snug-launcher/tests/...` — `find_java_home` roundtrips
   (Adoptium's nested `jdk-X.Y.Z/` layout), `dialogs` placeholder filling,
   live progress text formatting
+- `crates/snug-launcher/tests/macos_launch_e2e.rs` — compiles a real class
+  with `javac` and asserts the JVM actually runs it (skipped, not failed,
+  when no JDK is present)
 - `crates/snug-cli/tests/end_to_end.rs` — full CLI invocation,
-  stub-append, PE resource stamp
+  payload stamping, PE resource stamp
 - `crates/snug-cli/tests/editpe_roundtrip.rs` — `editpe`-based icon /
   version / manifest stamping roundtrip
-- `crates/snug-cli/tests/options_file.rs`, `tests/no_args.rs` —
-  `snug.options` config-file and no-args help behaviour
+- `crates/snug-cli/tests/options_file.rs`, `tests/no_args.rs`,
+  `tests/find_main.rs`, `tests/init_modes.rs` — `snug.options` config-file
+  and no-args help behaviour, `--find-main`, and the `--init-*`
+  scaffolding modes
+- `crates/snug-dropper/tests/end_to_end.rs` — drives a real `snug.exe`
+  and asserts the EXE lands on disk (skipped when `snug.exe` is unbuilt)
 
 ## CLI surface (canonical)
 
 ```text
 snug [<jar>] [-o EXE] [--input JAR|DIR] [--name ...] [--company ...]
            [--version ...] [--description ...] [--copyright ...]
-           [--min-java N] [--main-class CLASS]
+           [--update-url URL] [--min-java N] [--main-class CLASS]
            [--icon PNG/ICO] [--manifest XML] [--splash PNG] [--splash-ms MS]
-           [--jvm-arg ARG]...
+           [--splash-max WxH|off]
+           [--jvm-arg ARG]... [--cache-dir DIR]
            [--download-jdk[=<MODE>]]      # off | auto | force
-           [--emit-payload] [--dry-run] [--snug-version]
+           [--localization TXT|DIR]...
+           [--emit-payload] [--dry-run] [--find-main] [--snug-version]
            [--options PATH]
+           [--list-tokens]
+           [--init-options] [--init-localizations[=DIR]] [--init-localizations-tag TAG]...
 ```
+
+Four of these are easy to misread:
+
+- `--cache-dir` and `--update-url` are **stamped into the payload**, so
+  they take effect on the *end user's* machine, not yours. `--cache-dir`
+  is validated as an absolute path for exactly that reason (a relative one
+  would resolve against the end user's CWD); `--update-url` gets no
+  validation at all, so it is your own URL in your own binary — bake in
+  what you actually mean.
+- `--splash-max` is an **advisory warning threshold**, not a cap
+  (default `640x360`, `off` silences it). The PNG is converted to raw
+  `BGRA` and embedded uncompressed, so an oversized splash inflates
+  every produced binary — snug warns and carries on regardless.
+- `--list-tokens`, `--init-options` and `--init-localizations` are
+  read-only or scaffolding modes: they short-circuit before the JAR is
+  required, and they cannot be combined with a build.
+- `--splash` / `--splash-ms` / `--splash-max` are **Windows-only**. The
+  macOS bundle path drops the splash outright, so a `--splash` PNG on a
+  `-o App.app` build is silently discarded rather than embedded.
 
 `--download-jdk` accepts an optional value:
 
@@ -405,10 +452,10 @@ The flow:
    (`os=windows&architecture=x64` / `os=mac&architecture=aarch64`).
    Returns the latest GA release with `binaries[].package.{link,
    checksum, size}` and `version_data.semver`.
-3. Dialog — first-run users see **Download Temurin X.Y.Z+1 now / Open the
-   download page in my browser / Cancel** (button text is editable — see
-   below). Windows uses a `TaskDialog`; macOS uses a hand-built `NSWindow`
-   rather than an `NSAlert`, because the consent question has to be
+3. Dialog — first-run users see **Install the runtime now / Cancel**
+   (button text is editable — see below). Windows uses a `TaskDialog`;
+   macOS uses a hand-built `NSWindow` rather than an `NSAlert`, because
+   the consent question has to be
    answerable before a modal session exists — an `NSAlert` runs its own
    nested event loop, and gating a worker on a window that can never
    appear is how "minutes of silence and not one byte" happened.
@@ -440,9 +487,9 @@ rewritten every tick with `Downloaded X MB of Y MB (Z%)` /
 `Verifying SHA-256… (Z%)` / `Extracting… (Z%)`.
 
 If `api.adoptium.net` itself is unreachable, the user sees a separate
-"Could not reach Server - Snug" dialog with **Open the download page
-in my browser / Cancel** so they can still install Temurin manually
-from the fallback URL.
+"Could not reach Server - Snug" dialog with **Open the download page /
+Cancel** so they can still install a runtime manually from the fallback
+URL.
 
 ### The cache path is not `%LOCALAPPDATA%` on macOS
 
@@ -523,14 +570,24 @@ the copy compiled into the launcher's in-binary fallback are the same
 bytes by construction.
 
 ```text
-runtime.prompt.title = Java Runtime Required - Snug
-runtime.prompt.heading = Eclipse Temurin JDK was not found on this machine
-runtime.prompt.content = This application needs a Java {version} or higher. Snug can download the official Eclipse Temurin {version} (~{size_mb} MB) and install it to a per-user location, or open the download page in your browser.\n\nDownload will be verified against the official SHA-256.
-runtime.prompt.button_download = Download Temurin {version} now
+runtime.prompt.title = Runtime Required - Snug
+runtime.prompt.heading = Runtime missing
+runtime.prompt.subheading = The required runtime was not found on this machine.
+runtime.prompt.content = This application needs a runtime to launch. Snug can download the runtime for you (~{size_mb} MB) and install it.
+runtime.prompt.info_subtext = The runtime is installed for your user account, so it does not need administrator rights.
+runtime.prompt.button_download = Install the runtime now
 runtime.prompt.button_cancel = Cancel
 
 runtime.metadata_failed.title = Could not reach Server - Snug
+runtime.metadata_failed.content = Technical detail:\n{error}
 ```
+
+The dialog chrome is deliberately **vendor-neutral** — it says "the
+runtime", not "Eclipse Temurin". That is what lets an application
+reword the whole window for itself, which is the reason the chrome
+lives in the same bundle as the errors. The `err.*` and `jdk.err.*`
+strings stay technical and do still name Java, because they are
+diagnostics rather than chrome.
 
 Values are single-line. A real newline is a literal `\n`, a literal
 `#` must be written `\#`, and `#` otherwise starts a comment. Templates
@@ -559,6 +616,15 @@ snug: localisation inventory for the built-in `en` baseline
 options file, no build. `snug --init-localizations --init-localizations-tag
 de` then scaffolds a bundle whose values already carry the right slots,
 so you translate rather than reconstruct.
+
+`REPLACEMENT_TOKENS.md` at the repo root is the generated per-key
+contract: which slots each key may use, which of them today's English
+copy actually uses, and which keys may use none at all. It is emitted by
+`snug_format::tokens::replacement_tokens_markdown()` and held to that
+function by a test, so it cannot drift from the table behind it. The
+"may use" column is deliberately *wider* than "English copy uses" — a
+translator may reach for any slot the dialog really does supply, and the
+one thing that is never allowed is a slot outside that list.
 
 Why the care: the launcher substitutes by literal replace and leaves
 unknown slots alone. A bundle that keeps `{version}` for a key that

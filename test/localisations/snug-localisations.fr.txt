@@ -208,7 +208,6 @@ runtime.progress.detail_eta_done = Presque terminé
 runtime.progress.info_heading = Ce téléchargement n'est nécessaire qu'une seule fois.
 runtime.progress.info_subtext = Cet environnement d'exécution sera utilisé pour les prochains démarrages de l'application
 runtime.progress.info_subtext_2 = L'environnement d'exécution est installé pour votre compte utilisateur et réutilisé par les autres applications Java.
-runtime.progress.cancel_button_during_download = Installer
 
 runtime.failure.title = Échec de l'installation de l'environnement d'exécution
 runtime.failure.heading = L'installation a échoué

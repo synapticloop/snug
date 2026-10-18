@@ -208,7 +208,6 @@ runtime.progress.detail_eta_done = Fast fertig
 runtime.progress.info_heading = Dies muss nur einmal heruntergeladen werden.
 runtime.progress.info_subtext = Diese Laufzeit wird für künftige Starts der Anwendung verwendet
 runtime.progress.info_subtext_2 = Die Laufzeit wird für Ihr Benutzerkonto installiert und von anderen Java-Anwendungen mitgenutzt.
-runtime.progress.cancel_button_during_download = Installieren
 
 runtime.failure.title = Fehler bei der Installation der Laufzeit
 runtime.failure.heading = Die Installation ist fehlgeschlagen

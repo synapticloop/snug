@@ -10,7 +10,7 @@
 #  ------
 #    key = value                # one entry per line
 #    # comment                  # anything after `#` is ignored
-#                                # blank lines are ignored too
+#                               # blank lines are ignored too
 #
 #    value-side escapes:
 #      \n  newline
@@ -99,20 +99,18 @@ splash.err.update_layered_window = UpdateLayeredWindow returned 0
 splash.title = Snug Splash
 
 
-# ----------------------------------------------------------------------------
 # JDK install errors (`snug_launcher::jdk_install::JdkError`)
 # ----------------------------------------------------------------------------
-jdk.err.metadata_fetch = Adoptium API: {0}
-jdk.err.no_metadata_for_version = No JDK {0} GA found on Adoptium
-jdk.err.bad_metadata_shape = Unexpected Adoptium response: {0}
+jdk.err.metadata_fetch = Runtime API: {0}
+jdk.err.no_metadata_for_version = No Runtime {0} GA found.
+jdk.err.bad_metadata_shape = Unexpected runtime server response: {0}
 jdk.err.bad_field = Bad metadata field {name}: {value}
 jdk.err.download = Download: {0}
 jdk.err.sha256_mismatch = SHA-256 mismatch - declared {declared}, computed {computed}
 jdk.err.extract = Extract zip: {0}
-jdk.err.no_java_exe = Extracted JDK at {0} has no bin\java.exe - unusual zip layout?
+jdk.err.no_java_exe = Extracted Runtime at {0} has no executable - unusual zip layout?
 jdk.err.io = I/O: {0}
 jdk.err.dialog = Dialog: {0}
-
 
 # ----------------------------------------------------------------------------
 # Launcher entry-point fallback (`snug_launcher::main`)
@@ -191,12 +189,12 @@ runtime.metadata_failed.info_subtext_2 = runtime.metadata_failed.info_subtext_2
 runtime.metadata_failed.button_open_browser = runtime.metadata_failed.button_open_browser
 runtime.metadata_failed.button_cancel = runtime.metadata_failed.button_cancel
 
-runtime.progress.title = Install Runtime
-runtime.progress.content = Runtime {version} (~{size_mb} MB)
-runtime.progress.heading = Install Runtime
-runtime.progress.subheading = We need to install a runtime so that the application can launch
+runtime.progress.title = runtime.progress.title
+runtime.progress.content = runtime.progress.content {version} (~{size_mb} MB)
+runtime.progress.heading = runtime.progress.heading
+runtime.progress.subheading = runtime.progress.subheading
 runtime.progress.pct_label = {pct}%
-runtime.progress.phase_label = Downloading runtime ({arch})
+runtime.progress.phase_label = runtime.progress.phase_label ({arch})
 runtime.progress.arch_macos_arm64 = macOS arm64
 runtime.progress.arch_macos_x86_64 = macOS x86_64
 runtime.progress.arch_windows_x86_64 = Windows x86_64
@@ -205,29 +203,28 @@ runtime.progress.detail_no_size = Downloading… ({pct}%)
 runtime.progress.detail_eta_seconds = {n} seconds remaining
 runtime.progress.detail_eta_second = 1 second remaining
 runtime.progress.detail_eta_done = Almost done
-runtime.progress.info_heading = This only needs to be downloaded once.
-runtime.progress.info_subtext = This runtime will be used for future application launches
-runtime.progress.info_subtext_2 = The runtime is installed for your user account and is reused by other Java applications.
-runtime.progress.cancel_button_during_download = Install
+runtime.progress.info_heading = runtime.progress.info_heading
+runtime.progress.info_subtext = runtime.progress.info_subtext
+runtime.progress.info_subtext_2 = runtime.progress.info_subtext_2
 
-runtime.failure.title = Runtime Installation Failure
-runtime.failure.heading = Install runtime failure
-runtime.failure.subheading = All download attempts were exhausted, we will attempt to launch the application.
-runtime.failure.content = Eclipse Temurin {version} could not be installed. Technical detail:\n{error}
-runtime.failure.info_heading = What can I do?
-runtime.failure.info_subtext = Check your network, and retry later.
-runtime.failure.info_subtext_2 = The application will try to start with whatever Java is already on this machine.
-runtime.failure.button_label = OK
+runtime.failure.title = runtime.failure.title
+runtime.failure.heading = runtime.failure.heading
+runtime.failure.subheading = runtime.failure.subheading
+runtime.failure.content = The runtime version {version} could not be installed.  Technical detail:\n{error}
+runtime.failure.info_heading = runtime.failure.info_heading
+runtime.failure.info_subtext = runtime.failure.info_subtext
+runtime.failure.info_subtext_2 = runtime.failure.info_subtext_2
+runtime.failure.button_label = runtime.failure.button_label
 
-runtime.retry.title = Download failed - Try again?
-runtime.retry.heading = Runtime download failed
-runtime.retry.subheading = Attempt {attempt} of {max_attempts} failed while downloading the runtime.
-runtime.retry.content = {error}
-runtime.retry.info_heading = Why did this happen?
-runtime.retry.info_subtext = A common cause is a transient network blip. Ensure that you are connected to the network.
-runtime.retry.info_subtext_2 = You can retry, or cancel and try again later.
-runtime.retry.button_retry = Try again
-runtime.retry.button_cancel = Cancel
+runtime.retry.title = runtime.retry.title
+runtime.retry.heading = runtime.retry.heading
+runtime.retry.subheading = runtime.retry.subheading {attempt} {max_attempts}.
+runtime.retry.content = runtime.retry.content {error}
+runtime.retry.info_heading = runtime.retry.info_heading
+runtime.retry.info_subtext = runtime.retry.info_subtext
+runtime.retry.info_subtext_2 = runtime.retry.info_subtext_2
+runtime.retry.button_retry = runtime.retry.button_retry
+runtime.retry.button_cancel = runtime.retry.button_cancel
 
 # Generic shells for the stock TaskDialog fallbacks (`show_error_dialog`,
 # `show_info_dialog`). The title/main come from the caller, so these are

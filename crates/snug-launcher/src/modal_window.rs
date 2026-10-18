@@ -501,6 +501,32 @@ pub unsafe fn show<'a>(parent: HWND, dlg: &'a ModalDialog<'a>) -> i32 {
             DispatchMessageW(&msg);
         }
     }
+
+    // Tear the window down here, on the thread that created it (the
+    // same rule `splash` and `progress_window` already follow).
+    //
+    // Every dismissal path -- primary, secondary, Esc, the X button,
+    // Alt+F4 -- reaches us by posting `WM_QUIT`, which only ends the
+    // loop above; nothing destroys the HWND. Without this call the
+    // dialog stayed alive and on screen for the rest of the process.
+    //
+    // It was visible with the *install prompt* because that is the one
+    // dialog whose answer does not end the process: `consent` returns
+    // false, the launcher falls through to ordinary discovery, the
+    // splash comes up and the app starts -- all with a topmost
+    // "Java Runtime Required" window parked on top of them, still
+    // showing the buttons the user had already answered. The terminal
+    // dialogs (failure / retry / metadata) hid the same bug, because
+    // the process exits right after and takes the window with it.
+    //
+    // This also releases what the window owned. `WM_NCDESTROY` deletes
+    // the nine `HFONT`s and drops the `State` box; without it a
+    // launcher that showed several dialogs in one run leaked all of
+    // them, which is GDI-object exhaustion on a GUI process.
+    unsafe {
+        DestroyWindow(hwnd);
+    }
+
     msg.wParam as i32
 }
 

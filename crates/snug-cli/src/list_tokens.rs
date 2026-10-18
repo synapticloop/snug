@@ -99,11 +99,30 @@ pub fn render(inv: &Inventory, out: &mut impl std::io::Write) -> std::io::Result
         out,
         "invent one the English does not have, and the launcher prints it literally."
     )?;
+    writeln!(
+        out,
+        "'may also use' lines list extra slots that dialog really does supply."
+    )?;
+    writeln!(
+        out,
+        "The full contract per key is REPLACEMENT_TOKENS.md at the repo root."
+    )?;
     writeln!(out)?;
 
     for (key, english, slots) in &inv.keyed {
         writeln!(out, "  {key}  {{{}}}", slots.join(", "))?;
         writeln!(out, "      {english}")?;
+        // What the rendering site supplies beyond what the English copy
+        // currently names. A translator may reach for these; they are
+        // real values at that dialog, not invented names.
+        let extra: Vec<String> = snug_format::injected_for(key)
+            .iter()
+            .filter(|t| !slots.iter().any(|s| s.as_str() == **t))
+            .map(|t| format!("{{{t}}}"))
+            .collect();
+        if !extra.is_empty() {
+            writeln!(out, "      may also use: {}", extra.join(" "))?;
+        }
     }
 
     writeln!(out)?;

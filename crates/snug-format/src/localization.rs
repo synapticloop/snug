@@ -430,7 +430,18 @@ pub const TOKEN_DESCRIPTIONS: &[(&str, &str)] = &[
         "version",
         "the JDK release being downloaded or installed, e.g. \"25.0.1+9\"",
     ),
-    ("size_mb", "approximate download size in megabytes"),
+    (
+        "size_mb",
+        "approximate download size in megabytes",
+    ),
+    (
+        "sha256",
+        "the SHA-256 digest the download is verified against",
+    ),
+    (
+        "major",
+        "the Java major version the runtime metadata lookup was for",
+    ),
     (
         "update_link",
         "the URL to check for a newer release, from the payload's update_check_url",
@@ -587,11 +598,28 @@ mod tests {
              {undocumented:?}\n  add a line describing what the launcher passes"
         );
 
-        let stale: Vec<&String> = documented.difference(&used).collect();
+        // Backward direction, with one deliberate exception. A
+        // description for a token the baseline stopped using *and* that
+        // no rendering site offers any more is a confident, wrong
+        // answer sitting in a table nobody re-reads. But a site may
+        // offer a slot today's copy has no use for -- `sha256` is
+        // passed to the install prompt and no key currently names it --
+        // and a translator reaching for it deserves an explanation. So
+        // "unused" is stale only when nothing declares it available
+        // either.
+        let available: BTreeSet<String> = crate::tokens::INJECTED_BY_KEY
+            .iter()
+            .flat_map(|inj| inj.tokens.iter().map(|t| (*t).to_string()))
+            .collect();
+        let stale: Vec<&String> = documented
+            .difference(&used)
+            .filter(|t| !available.contains(*t))
+            .collect();
         assert!(
             stale.is_empty(),
-            "TOKEN_DESCRIPTIONS describes token(s) the baseline no longer uses, so a \
-             translator would be given a confident answer about a slot that is never filled: \
+            "TOKEN_DESCRIPTIONS describes token(s) the baseline no longer uses and no \
+             call site still offers, so a translator would be given a confident answer \
+             about a slot that is never filled: \
              {stale:?}\n  delete the line"
         );
     }
