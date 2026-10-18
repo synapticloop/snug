@@ -142,14 +142,6 @@ launcher.bare_stub.no_payload = No SNUGEMBD payload found in {path}
 launcher.bare_stub.hint = This is the bare stub binary. Build it with `snug` to embed a payload:
 launcher.bare_stub.command = snug your-app.jar -o app.exe
 
-# ----------------------------------------------------------------------------
-# Launcher-error dialog (`snug_launcher::dialogs::Dialogs`)
-# ----------------------------------------------------------------------------
-# The `[launcher.error]` frame the Java-launch failure dialog paints. The
-# body is `{error}` - the launcher fills it from the matching `err.*` key
-# above, so a localized error text flows into a localized frame.
-launcher.error.content = {error}
-
 
 # ----------------------------------------------------------------------------
 # Dialog chrome - the download / install / retry windows
@@ -210,7 +202,7 @@ runtime.progress.info_subtext_2 = runtime.progress.info_subtext_2
 runtime.failure.title = runtime.failure.title
 runtime.failure.heading = runtime.failure.heading
 runtime.failure.subheading = runtime.failure.subheading
-runtime.failure.content = The runtime version {version} could not be installed.  Technical detail:\n{error}
+runtime.failure.content = runtime.failure.content {version} \n{error}
 runtime.failure.info_heading = runtime.failure.info_heading
 runtime.failure.info_subtext = runtime.failure.info_subtext
 runtime.failure.info_subtext_2 = runtime.failure.info_subtext_2
@@ -232,11 +224,21 @@ runtime.retry.button_cancel = runtime.retry.button_cancel
 generic.error_dialog_ok = OK
 generic.info_dialog_continue = Continue
 
-launcher.error.title = Application failed to launch - Snug
-launcher.error.heading = Application failed to launch
-launcher.error.subheading = Something went wrong while starting the application, the error was:
-launcher.error.info_heading = What happened?
-launcher.error.info_subtext = You may wish to check for a newer version:
-launcher.error.info_subtext_2 = {update_link}
-launcher.error.button_exit = Close.
-launcher.error.button_update = Check for updates
+launcher.error.title = launcher.error.title
+launcher.error.heading = launcher.error.heading
+launcher.error.subheading = launcher.error.subheading
+
+# ----------------------------------------------------------------------------
+# Launcher-error dialog (`snug_launcher::dialogs::Dialogs`)
+# ----------------------------------------------------------------------------
+# The `[launcher.error]` frame the Java-launch failure dialog paints. The
+# body is `{error}` - the launcher fills it from the matching `err.*` key
+# above, so a localized error text flows into a localized frame.
+
+launcher.error.content = launcher.error.content {error}
+launcher.error.info_heading = launcher.error.info_heading
+launcher.error.info_subtext = launcher.error.info_subtext
+launcher.error.info_subtext_2 = launcher.error.info_subtext_2 {update_link}
+launcher.error.button_exit = launcher.error.button_exit
+launcher.error.button_update = launcher.error.button_update
+

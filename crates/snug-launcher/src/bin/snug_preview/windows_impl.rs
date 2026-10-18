@@ -182,14 +182,18 @@ const fn scale_px(logical: i32, dpi: u32) -> i32 {
 /// coordinate system the buttons actually live in, so the Close button
 /// can never end up below the visible area.
 ///
-/// 348 rather than the old 520: a third narrower. The eight button
-/// labels are the binding constraint -- the longest, "Java error (with
-/// update link)", needs ~190 px of a 300 px column at 10pt -- and 348
-/// still clears that with margin to spare. `COMBO_W` and `SUBTITLE_H`
-/// were pulled in with it, because leaving them would have pushed the
-/// dropdown to within 8 px of the right edge while the subtitle
-/// overflowed its two-line budget.
-const LAUNCHER_W: i32 = 348;
+/// Widened from 348 when the dialog buttons went two per row. Two
+/// columns is what eight labels actually want -- the old file refused
+/// it because "Java error (with update link)" needs ~190 px, which is
+/// true of one column and was never a reason to keep eight stacked
+/// buttons in a window tall enough that a dialog and its own launcher
+/// could not sit side by side.
+///
+/// `BTN_W` is derived from this, so the two columns plus the gutter
+/// exactly span the content width. That is what keeps the grid flush
+/// with the dropdown and checkbox above it rather than leaving a ragged
+/// right edge.
+const LAUNCHER_W: i32 = 496;
 
 /// Height of the client area, **derived from the content** so the
 /// Close button always sits just below the last dialog row. The
@@ -200,10 +204,18 @@ const LAUNCHER_W: i32 = 348;
 /// [`DIALOG_BUTTONS`] resizes the window automatically — no second
 /// edit to forget.
 const fn launcher_client_height() -> i32 {
-    let rows = DIALOG_BUTTONS.len() as i32;
     // Bottom edge of the last dialog row.
-    let last_row_bottom = BTN_FIRST_Y + (rows - 1) * (BTN_H + BTN_GAP) + BTN_H;
+    let last_row_bottom = BTN_FIRST_Y + (dialog_button_rows() - 1) * (BTN_H + BTN_GAP) + BTN_H;
     last_row_bottom + BTN_CLOSE_GAP + BTN_CLOSE_H + BTN_CLOSE_MARGIN_BOTTOM
+}
+
+/// How many rows the dialog buttons occupy at [`BTN_COLS`] per row.
+///
+/// Rounded up rather than exact, so a ninth dialog lands on a fifth
+/// row by itself instead of overhanging the right-hand column.
+const fn dialog_button_rows() -> i32 {
+    let n = DIALOG_BUTTONS.len() as i32;
+    (n + BTN_COLS - 1) / BTN_COLS
 }
 
 /// Header icon painted at the top of the launcher window's client
@@ -223,17 +235,29 @@ const HEADER_ICON_BOTTOM: i32 = HEADER_ICON_Y + HEADER_ICON_SIZE;
 
 /// Button layout — single column, 24 px outer margin, 8 px gap.
 ///
-/// One column rather than eight buttons in a 2×4 grid: each button is a
-/// distinct dialog kind, scanning the list is the primary action, and
-/// the longest label needs ~190 px — which does not survive two
-/// columns plus a gutter once the font grows.
+/// Two per row rather than one. Each button is a distinct dialog kind
+/// and scanning the list is the primary action, so the order still
+/// reads down the left column first — but eight stacked buttons made the
+/// window tall enough that a dialog and its own launcher could not sit
+/// side by side, which rather defeats a comparison tool.
+const BTN_COLS: i32 = 2;
 const BTN_X: i32 = 24;
-const BTN_W: i32 = LAUNCHER_W - 48;
 /// 40 rather than 38: the row pitch is `BTN_H + BTN_GAP`, so this is
 /// also the *distance* between button centres, and 38 left the rows
-/// visually crowded against each other in a column this long.
+/// visually crowded against each other.
 const BTN_H: i32 = 40;
 const BTN_GAP: i32 = 8;
+/// Derived, not tuned: the columns split the content width between
+/// them, so widening the window widens both buttons rather than leaving
+/// the second one short. It is also what keeps the grid flush with the
+/// dropdown and the checkbox above it.
+const BTN_W: i32 = (LAUNCHER_W - 2 * BTN_X - BTN_GAP * (BTN_COLS - 1)) / BTN_COLS;
+/// Left edge of column `n`. The last column's right edge lands exactly
+/// on `LAUNCHER_W - BTN_X`, which `the_dialog_grid_spans_the_content`
+/// pins rather than leaving to arithmetic.
+const fn btn_x(col: i32) -> i32 {
+    BTN_X + col * (BTN_W + BTN_GAP)
+}
 const BTN_CLOSE_W: i32 = 104;
 const BTN_CLOSE_H: i32 = 40;
 const BTN_CLOSE_MARGIN_BOTTOM: i32 = 16;
@@ -281,7 +305,10 @@ const CHK_H: i32 = 20;
 /// Same column as every other control, so the checkbox reads as part
 /// of the window rather than as an afterthought.
 const CHK_X: i32 = BTN_X;
-const CHK_W: i32 = BTN_W;
+/// The full content width, not one button's: the checkbox is a control
+/// that spans the window, and sizing it to `BTN_W` would have stopped it
+/// halfway across the moment the grid went two-up.
+const CHK_W: i32 = LAUNCHER_W - 2 * BTN_X;
 const BTN_FIRST_Y: i32 = CHK_Y + CHK_H + BTN_GAP_HEADER;
 
 /// Close button position, derived so it tracks the last dialog row.
@@ -289,10 +316,10 @@ const BTN_FIRST_Y: i32 = CHK_Y + CHK_H + BTN_GAP_HEADER;
 /// which is why they are functions rather than inline arithmetic at
 /// each site.
 const fn close_y() -> i32 {
-    BTN_FIRST_Y + (DIALOG_BUTTONS.len() as i32 - 1) * (BTN_H + BTN_GAP) + BTN_H + BTN_CLOSE_GAP
+    BTN_FIRST_Y + (dialog_button_rows() - 1) * (BTN_H + BTN_GAP) + BTN_H + BTN_CLOSE_GAP
 }
 const fn close_x() -> i32 {
-    BTN_X + BTN_W - BTN_CLOSE_W
+    LAUNCHER_W - BTN_X - BTN_CLOSE_W
 }
 
 /// Copy painted in `WM_PAINT`.
@@ -328,10 +355,12 @@ const COMBO_LABEL_X: i32 = BTN_X;
 /// gutter without crowding the dropdown.
 const COMBO_LABEL_W: i32 = 76;
 const COMBO_X: i32 = COMBO_LABEL_X + COMBO_LABEL_W;
-/// Narrowed with `LAUNCHER_W` so its right edge still lands on the
-/// column edge (`COMBO_X + COMBO_W == BTN_X + BTN_W`) instead of
-/// stopping 8 px short of it and looking misaligned.
-const COMBO_W: i32 = 224;
+/// Runs to the content's right edge, which is where the last button
+/// column ends too. It was pinned to `BTN_X + BTN_W`, which stops being
+/// the right edge the moment the grid is two columns wide -- a
+/// misalignment nobody reports, just a window that looks slightly
+/// wrong, which is what `the_controls_share_one_right_edge` is for.
+const COMBO_W: i32 = LAUNCHER_W - BTN_X - COMBO_X;
 /// Height passed to `CreateWindowExW`. For a `CBS_DROPDOWNLIST` combo
 /// this is the height of the **dropped list** — the closed field sizes
 /// itself to the font (measured at ~25 px for 10pt Segoe UI) and is
@@ -1638,13 +1667,15 @@ unsafe extern "system" fn wndproc(
             // dropdown needed it.
             let buttons: &[(&str, usize)] = DIALOG_BUTTONS;
             for (i, (label, id)) in buttons.iter().enumerate() {
-                let y = BTN_FIRST_Y + (i as i32) * (BTN_H + BTN_GAP);
+                let i = i as i32;
+                let x = btn_x(i % BTN_COLS);
+                let y = BTN_FIRST_Y + (i / BTN_COLS) * (BTN_H + BTN_GAP);
                 let btn = CreateWindowExW(
                     0,
                     wide("BUTTON").as_ptr(),
                     wide(label).as_ptr(),
                     WS_CHILD | WS_VISIBLE | (BS_PUSHBUTTON as u32),
-                    scale_px(BTN_X, dpi),
+                    scale_px(x, dpi),
                     scale_px(y, dpi),
                     scale_px(BTN_W, dpi),
                     scale_px(BTN_H, dpi),
@@ -1930,10 +1961,37 @@ unsafe extern "system" fn wndproc(
                     );
                 }),
                 ID_BTN_ERROR => spawn_dialog(|| {
+                    // Mirrors `jdk_install.rs`: fill the bundle's
+                    // `runtime.failure.content` rather than handing the
+                    // dialog a pre-baked string.
+                    //
+                    // `show_error_dialog` renders `content` verbatim and
+                    // does no bundle lookup of its own, so passing a
+                    // literal here quietly skipped the key that the
+                    // whole terminal-failure dialog is built from. The
+                    // result was a button that ignored both the
+                    // language dropdown and the "Replace tokens"
+                    // switch, and reviewing this copy through the
+                    // preview was reviewing a string the launcher
+                    // never shows. Heading and subheading already came
+                    // from the bundle -- `show_error_dialog` passes `""`
+                    // and `error_window::show` fills the gap -- so only
+                    // the body and the title were wrong.
+                    let dlg = snug_launcher::dialogs::dialogs();
+                    let content = snug_launcher::dialogs::fill(
+                        dlg.runtime.failure.content.as_str(),
+                        &[
+                            ("version", "25.0.1"),
+                            (
+                                "error",
+                                "java.lang.UnsatisfiedLinkError: Can't find dependent libraries",
+                            ),
+                        ],
+                    );
                     jdk_install::show_error_dialog(
                         std::ptr::null_mut(),
-                        "Sample post-install error",
-                        "java.lang.UnsatisfiedLinkError: C:\\Users\\demo\\.snug\\jdk\\jdk-25\\bin\\jvm.dll: Can't find dependent libraries",
+                        &dlg.runtime.failure.title,
+                        &content,
                     );
                 }),
                 ID_BTN_JAVA_ERROR => spawn_dialog(|| {
@@ -2452,10 +2510,11 @@ unsafe fn layout_controls(hwnd: HWND, dpi: u32) {
         COMBO_H,
     );
     for (i, (_, id)) in DIALOG_BUTTONS.iter().enumerate() {
+        let i = i as i32;
         place(
             *id as i32,
-            BTN_X,
-            BTN_FIRST_Y + i as i32 * (BTN_H + BTN_GAP),
+            btn_x(i % BTN_COLS),
+            BTN_FIRST_Y + (i / BTN_COLS) * (BTN_H + BTN_GAP),
             BTN_W,
             BTN_H,
         );
@@ -2978,15 +3037,67 @@ mod tests {
         // `LAUNCHER_W` changed, the dropdown would have stopped short of
         // the buttons' right edge -- a misalignment nobody reports, just
         // a window that looks slightly wrong.
+        //
+        // The right edge is now the *content* edge rather than one
+        // button's trailing edge, because the grid is two columns wide.
         assert_eq!(
             COMBO_X + COMBO_W,
-            BTN_X + BTN_W,
-            "the dropdown and the buttons end in different places"
+            LAUNCHER_W - BTN_X,
+            "the dropdown and the content column end in different places"
         );
         const {
             assert!(
                 COMBO_X + COMBO_W <= LAUNCHER_W - BTN_X,
                 "the dropdown runs past the window's own margin"
+            )
+        };
+    }
+
+    #[test]
+    fn the_dialog_grid_spans_the_content_width() {
+        // Two columns that do not reach the right margin read as a
+        // layout mistake even when every button is clickable, and a
+        // third column would silently overhang the window.
+        assert_eq!(
+            btn_x(BTN_COLS - 1) + BTN_W,
+            LAUNCHER_W - BTN_X,
+            "the last button column must end on the content margin"
+        );
+        assert_eq!(btn_x(0), BTN_X, "the first column shares the margin");
+        assert_eq!(
+            CHK_X + CHK_W,
+            LAUNCHER_W - BTN_X,
+            "the checkbox spans the same width as the grid"
+        );
+    }
+
+    #[test]
+    fn the_dialog_buttons_are_two_per_row() {
+        assert_eq!(BTN_COLS, 2);
+        // Eight labels at two per row is four rows, and the height is
+        // derived from exactly that -- so an odd count must round up
+        // rather than run a button off the end of the last row.
+        assert_eq!(dialog_button_rows(), 4);
+        const {
+            assert!(
+                dialog_button_rows() * BTN_COLS >= DIALOG_BUTTONS.len() as i32,
+                "the grid cannot hold every dialog button"
+            )
+        };
+    }
+
+    #[test]
+    fn the_longest_button_label_still_fits_its_column() {
+        // "Java error (with update link)" measured ~190 px at 10pt. The
+        // one-column layout had ~300 px of column to put it in; two-up
+        // halves that, so the window was widened rather than the label
+        // shortened. Nothing here measures text -- this pins the column
+        // width the label was sized against.
+        const BTN_TEXT_BUDGET: i32 = 190;
+        const {
+            assert!(
+                BTN_W - 12 >= BTN_TEXT_BUDGET,
+                "a button column narrower than the longest label needs"
             )
         };
     }
@@ -3018,7 +3129,7 @@ mod tests {
         // `WM_DPICHANGED` relayout, so a dialog added to
         // `DIALOG_BUTTONS` moves Close in both paths or in neither.
         let last_bottom =
-            BTN_FIRST_Y + (DIALOG_BUTTONS.len() as i32 - 1) * (BTN_H + BTN_GAP) + BTN_H;
+            BTN_FIRST_Y + (dialog_button_rows() - 1) * (BTN_H + BTN_GAP) + BTN_H;
         assert_eq!(close_y(), last_bottom + BTN_CLOSE_GAP);
         assert_eq!(
             close_y() + BTN_CLOSE_H + BTN_CLOSE_MARGIN_BOTTOM,
@@ -3028,7 +3139,11 @@ mod tests {
 
     #[test]
     fn the_close_button_is_right_aligned_with_the_button_column() {
-        assert_eq!(close_x() + BTN_CLOSE_W, BTN_X + BTN_W);
+        // With the grid two columns wide, "the button column" is the
+        // content's right margin, not the first button's trailing edge --
+        // aligning to the latter put Close under the *left* column.
+        assert_eq!(close_x() + BTN_CLOSE_W, LAUNCHER_W - BTN_X);
+        assert_eq!(close_x() + BTN_CLOSE_W, btn_x(BTN_COLS - 1) + BTN_W);
     }
 
     #[test]
