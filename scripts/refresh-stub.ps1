@@ -82,9 +82,22 @@ if ($CheckOnly) {
 } else {
     Write-Host "[refresh-stub] building snug-launcher (release)..."
     Enable-ReproducibleBuild
+
+    # PowerShell 5.1 raises a *terminating* NativeCommandError for anything
+    # a native command writes to stderr while `$ErrorActionPreference` is
+    # 'Stop' -- and cargo writes its ordinary "Compiling"/"Finished"
+    # progress there, not only real failures. So a perfectly good build
+    # aborts this script at the cargo call, before the copy below, and the
+    # stub silently stays stale. Relax it for the invocation only and judge
+    # by $LASTEXITCODE, which is what cargo actually reports; the rest of
+    # the script keeps 'Stop'. Same reasoning, and the same assignment,
+    # as scripts/check.ps1.
+    $ErrorActionPreference = 'Continue'
     cargo build --release --manifest-path (Join-Path $repo 'Cargo.toml') -p snug-launcher
-    if ($LASTEXITCODE -ne 0) {
-        throw "cargo build -p snug-launcher failed with exit code $LASTEXITCODE"
+    $buildExit = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+    if ($buildExit -ne 0) {
+        throw "cargo build -p snug-launcher failed with exit code $buildExit"
     }
     if (-not (Test-Path $fresh)) {
         throw "cargo reported success but there is no launcher at $fresh"
