@@ -223,7 +223,7 @@ mod tests {
             "pct",
             "arch",
             "min_java",
-            "update_link",
+            "update_check_url",
         ] {
             assert!(
                 inv.tokens.contains(expected),

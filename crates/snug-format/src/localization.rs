@@ -443,8 +443,8 @@ pub const TOKEN_DESCRIPTIONS: &[(&str, &str)] = &[
         "the Java major version the runtime metadata lookup was for",
     ),
     (
-        "update_link",
-        "the URL to check for a newer release, from the payload's update_check_url",
+        "update_check_url",
+        "the URL to check for a newer release, from the payload",
     ),
     // Retry loop.
     ("attempt", "which attempt this is, counting from 1"),

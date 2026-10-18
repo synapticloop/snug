@@ -239,6 +239,6 @@ launcher.error.heading = L'application n'a pas pu démarrer
 launcher.error.subheading = Une erreur est survenue lors du démarrage de l'application, l'erreur était :
 launcher.error.info_heading = Que s'est-il passé ?
 launcher.error.info_subtext = Vous voudrez peut-être rechercher une version plus récente :
-launcher.error.info_subtext_2 = {update_link}
+launcher.error.info_subtext_2 = {update_check_url}
 launcher.error.button_exit = Fermer.
 launcher.error.button_update = Rechercher des mises à jour

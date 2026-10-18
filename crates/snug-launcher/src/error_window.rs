@@ -166,17 +166,17 @@ pub unsafe fn show_launcher_error(
 
     // The update-check URL rides the info box like every other dialog's
     // copy: `info_subtext` is the prompt, `info_subtext_2` holds
-    // `{update_link}` and is filled here. It was previously a separate
+    // `{update_check_url}` and is filled here. It was previously a separate
     // clickable row below the box, driven by its own catalog key.
     //
     // An absent URL — the production path when the embedded payload was
     // unreadable, so the field is not knowable — leaves the token
-    // unresolved, and `fill` would print `{update_link}` literally. An
+    // unresolved, and `fill` would print `{update_check_url}` literally. An
     // empty string renders as an absent third line instead, because
     // `info_subtext_2` is only painted when non-empty.
     let info_subtext_2 = crate::dialogs::fill(
         dialogs.launcher.error.info_subtext_2.as_str(),
-        &[("update_link", update_check_url.unwrap_or(""))],
+        &[("update_check_url", update_check_url.unwrap_or(""))],
     );
 
     // SAFETY: every borrowed string is live for the duration of the

@@ -103,7 +103,7 @@ pub const INJECTED_BY_KEY: &[Injection] = &[
     // --- launcher.* -----------------------------------------------------
     Injection { key: "launcher.bare_stub.no_payload", tokens: &["path"] },
     Injection { key: "launcher.error.content", tokens: &["error"] },
-    Injection { key: "launcher.error.info_subtext_2", tokens: &["update_link"] },
+    Injection { key: "launcher.error.info_subtext_2", tokens: &["update_check_url"] },
     // --- runtime.prompt.* -- the install offer ---------------------------
     Injection { key: "runtime.prompt.content", tokens: &["version", "size_mb", "sha256"] },
     // Uses none today; the download button is filled by the same site, so

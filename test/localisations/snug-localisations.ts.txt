@@ -238,7 +238,7 @@ launcher.error.subheading = launcher.error.subheading
 launcher.error.content = launcher.error.content {error}
 launcher.error.info_heading = launcher.error.info_heading
 launcher.error.info_subtext = launcher.error.info_subtext
-launcher.error.info_subtext_2 = launcher.error.info_subtext_2 {update_link}
+launcher.error.info_subtext_2 = launcher.error.info_subtext_2 {update_check_url}
 launcher.error.button_exit = launcher.error.button_exit
 launcher.error.button_update = launcher.error.button_update
 

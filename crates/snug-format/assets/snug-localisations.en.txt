@@ -249,6 +249,6 @@ launcher.error.heading = Application failed to launch
 launcher.error.subheading = Something went wrong while starting the application, the error was:
 launcher.error.info_heading = What happened?
 launcher.error.info_subtext = You may wish to check for a newer version:
-launcher.error.info_subtext_2 = {update_link}
+launcher.error.info_subtext_2 = {update_check_url}
 launcher.error.button_exit = Close.
 launcher.error.button_update = Check for updates

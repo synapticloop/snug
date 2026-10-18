@@ -49,7 +49,7 @@ a test holds the baseline to it.
 | `{speed_mb_s}` | current download speed in MB/s |
 | `{symbol}` | the exported symbol that was missing from it |
 | `{total_mb}` | total megabytes to download |
-| `{update_link}` | the URL to check for a newer release, from the payload's update_check_url |
+| `{update_check_url}` | the URL to check for a newer release, from the payload |
 | `{value}` | the value the launcher received for that field |
 | `{version}` | the JDK release being downloaded or installed, e.g. "25.0.1+9" |
 
@@ -87,7 +87,7 @@ a test holds the baseline to it.
 | `splash.err.buffer_length` | `{expected}` `{actual}` | `{actual}` `{expected}` |
 | `launcher.bare_stub.no_payload` | `{path}` | `{path}` |
 | `launcher.error.content` | `{error}` | `{error}` |
-| `launcher.error.info_subtext_2` | `{update_link}` | `{update_link}` |
+| `launcher.error.info_subtext_2` | `{update_check_url}` | `{update_check_url}` |
 | `runtime.prompt.content` | `{version}` `{size_mb}` `{sha256}` | `{size_mb}` |
 | `runtime.prompt.button_download` | `{version}` `{size_mb}` `{sha256}` | — |
 | `runtime.metadata_failed.subheading` | `{major}` | — |
