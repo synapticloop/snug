@@ -1,10 +1,12 @@
 # ============================================================================
-#  snug-localisations.en.txt - built-in English baseline
+#  snug-localisations.de.txt - German bundle
 # ============================================================================
 #
-#  This file is the canonical English baseline for every runtime string the
-#  Windows launcher emits. The snug CLI embeds it into every build, so a
-#  freshly built EXE works in English without any extra configuration.
+#  This file is the German translation of every runtime string the Windows
+#  launcher emits. It is not embedded by default -- pass it on the build
+#  line with `--localization` -- and a machine whose UI language resolves
+#  to `de` picks it up automatically, falling back to the built-in
+#  English baseline for any key this file does not define.
 #
 #  Format
 #  ------
@@ -102,14 +104,14 @@ splash.title = Snug Splash
 # ----------------------------------------------------------------------------
 # JDK install errors (`snug_launcher::jdk_install::JdkError`)
 # ----------------------------------------------------------------------------
-jdk.err.metadata_fetch = Adoptium-API: {0}
-jdk.err.no_metadata_for_version = Kein JDK {0} GA bei Adoptium gefunden
-jdk.err.bad_metadata_shape = Unerwartete Antwort von Adoptium: {0}
+jdk.err.metadata_fetch = Laufzeit-API: {0}
+jdk.err.no_metadata_for_version = Keine Laufzeit {0} GA gefunden.
+jdk.err.bad_metadata_shape = Unerwartete Antwort vom Laufzeit-Server: {0}
 jdk.err.bad_field = Fehlerhaftes Metadatenfeld {name}: {value}
 jdk.err.download = Download: {0}
 jdk.err.sha256_mismatch = SHA-256-Abweichung - angegeben {declared}, berechnet {computed}
 jdk.err.extract = Zip entpacken: {0}
-jdk.err.no_java_exe = Das entpackte JDK unter {0} enthält kein bin\java.exe - ungewöhnliche Zip-Struktur?
+jdk.err.no_java_exe = Die entpackte Laufzeit unter {0} enthält keine ausführbare Datei - ungewöhnliche Zip-Struktur?
 jdk.err.io = E/A: {0}
 jdk.err.dialog = Dialog: {0}
 
@@ -171,8 +173,8 @@ launcher.error.content = {error}
 # Escaping reminder: these are single-line values. Real newlines are literal
 # `\n`; a literal `#` in a value must be written `\#`.
 
-runtime.prompt.title = Java-Laufzeit erforderlich - Snug
-runtime.prompt.heading = Eclipse Temurin JDK wurde auf diesem Rechner nicht gefunden
+runtime.prompt.title = Laufzeit erforderlich - Snug
+runtime.prompt.heading = Laufzeit fehlt
 runtime.prompt.subheading = Die erforderliche Laufzeit wurde auf diesem Rechner nicht gefunden.
 runtime.prompt.content = Diese Anwendung benötigt eine Laufzeit, um zu starten. Snug kann die Laufzeit für Sie herunterladen (~{size_mb} MB) und installieren.
 runtime.prompt.info_heading = Vor der Installation
@@ -186,7 +188,7 @@ runtime.metadata_failed.heading = Der Server konnte nicht erreicht werden
 runtime.metadata_failed.subheading = Diese Anwendung erfordert einen Download, aber unsere Anfrage hat den Server nicht erreicht.
 runtime.metadata_failed.content = Technische Details:\n{error}
 runtime.metadata_failed.info_heading = Warum ist das passiert?
-runtime.metadata_failed.info_subtext = Ihre Netzwerkverbindung ist möglicherweise ausgefallen, oder die Laufzeit-API ist vorübergehend nicht erreichbar.
+runtime.metadata_failed.info_subtext = Ihre Netzwerkverbindung ist möglicherweise ausgefallen, oder der Laufzeit-Server ist vorübergehend nicht erreichbar.
 runtime.metadata_failed.info_subtext_2 = Prüfen Sie Ihre Netzwerkverbindung und versuchen Sie es in einem Moment erneut.
 runtime.metadata_failed.button_open_browser = Download-Seite öffnen
 runtime.metadata_failed.button_cancel = Abbrechen
@@ -212,10 +214,10 @@ runtime.progress.info_subtext_2 = Die Laufzeit wird für Ihr Benutzerkonto insta
 runtime.failure.title = Fehler bei der Installation der Laufzeit
 runtime.failure.heading = Die Installation ist fehlgeschlagen
 runtime.failure.subheading = Alle Download-Versuche sind erschöpft, wir versuchen, die Anwendung zu starten.
-runtime.failure.content = Eclipse Temurin {version} konnte nicht installiert werden. Technische Details:\n{error}
+runtime.failure.content = Die Laufzeitversion {version} konnte nicht installiert werden. Technische Details:\n{error}
 runtime.failure.info_heading = Was kann ich tun?
 runtime.failure.info_subtext = Prüfen Sie Ihre Netzwerkverbindung und versuchen Sie es später erneut.
-runtime.failure.info_subtext_2 = Die Anwendung versucht zu starten, egal welches Java auf diesem Rechner bereits vorhanden ist.
+runtime.failure.info_subtext_2 = Die Anwendung versucht zu starten, egal welche Laufzeit auf diesem Rechner bereits vorhanden ist.
 runtime.failure.button_label = OK
 
 runtime.retry.title = Download fehlgeschlagen - Erneut versuchen?
@@ -240,5 +242,5 @@ launcher.error.subheading = Beim Starten der Anwendung ist etwas schiefgelaufen,
 launcher.error.info_heading = Was ist passiert?
 launcher.error.info_subtext = Möglicherweise möchten Sie auf eine neuere Version prüfen:
 launcher.error.info_subtext_2 = {update_check_url}
-launcher.error.button_exit = Schließen.
-launcher.error.button_update = Nach Updates suchen
+launcher.error.button_exit = Schließen
+launcher.error.button_update = Auf Updates prüfen

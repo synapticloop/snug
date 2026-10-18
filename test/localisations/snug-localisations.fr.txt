@@ -1,10 +1,12 @@
 # ============================================================================
-#  snug-localisations.en.txt - built-in English baseline
+#  snug-localisations.fr.txt - French bundle
 # ============================================================================
 #
-#  This file is the canonical English baseline for every runtime string the
-#  Windows launcher emits. The snug CLI embeds it into every build, so a
-#  freshly built EXE works in English without any extra configuration.
+#  This file is the French translation of every runtime string the Windows
+#  launcher emits. It is not embedded by default -- pass it on the build
+#  line with `--localization` -- and a machine whose UI language resolves
+#  to `fr` picks it up automatically, falling back to the built-in
+#  English baseline for any key this file does not define.
 #
 #  Format
 #  ------
@@ -102,14 +104,14 @@ splash.title = Snug Splash
 # ----------------------------------------------------------------------------
 # JDK install errors (`snug_launcher::jdk_install::JdkError`)
 # ----------------------------------------------------------------------------
-jdk.err.metadata_fetch = API Adoptium : {0}
-jdk.err.no_metadata_for_version = Aucun JDK {0} GA trouvé sur Adoptium
-jdk.err.bad_metadata_shape = Réponse inattendue d'Adoptium : {0}
+jdk.err.metadata_fetch = API d'exécution : {0}
+jdk.err.no_metadata_for_version = Aucun environnement d'exécution {0} GA trouvé.
+jdk.err.bad_metadata_shape = Réponse inattendue du serveur d'exécution : {0}
 jdk.err.bad_field = Champ de métadonnées invalide {name} : {value}
 jdk.err.download = Téléchargement : {0}
 jdk.err.sha256_mismatch = Divergence SHA-256 - déclaré {declared}, calculé {computed}
 jdk.err.extract = Extraction du zip : {0}
-jdk.err.no_java_exe = Le JDK extrait sous {0} ne contient pas bin\java.exe - structure de zip inhabituelle ?
+jdk.err.no_java_exe = L'environnement d'exécution extrait sous {0} ne contient aucun exécutable - structure de zip inhabituelle ?
 jdk.err.io = E/S : {0}
 jdk.err.dialog = Dialogue : {0}
 
@@ -171,9 +173,9 @@ launcher.error.content = {error}
 # Escaping reminder: these are single-line values. Real newlines are literal
 # `\n`; a literal `#` in a value must be written `\#`.
 
-runtime.prompt.title = Environnement d'exécution Java requis - Snug
-runtime.prompt.heading = Le JDK Eclipse Temurin est introuvable sur cette machine
-runtime.prompt.subheading = L'environnement d'exécution requise est introuvable sur cette machine.
+runtime.prompt.title = Environnement d'exécution requis - Snug
+runtime.prompt.heading = Environnement d'exécution introuvable
+runtime.prompt.subheading = L'environnement d'exécution requis est introuvable sur cette machine.
 runtime.prompt.content = Cette application nécessite un environnement d'exécution pour démarrer. Snug peut télécharger l'environnement d'exécution pour vous (~{size_mb} Mo) et l'installer.
 runtime.prompt.info_heading = Avant l'installation
 runtime.prompt.info_subtext = L'environnement d'exécution est installé pour votre compte utilisateur : les droits d'administrateur ne sont pas nécessaires.
@@ -186,7 +188,7 @@ runtime.metadata_failed.heading = Nous n'avons pas pu joindre le serveur
 runtime.metadata_failed.subheading = Cette application nécessite un téléchargement, mais notre requête n'a pas atteint le serveur.
 runtime.metadata_failed.content = Détail technique :\n{error}
 runtime.metadata_failed.info_heading = Pourquoi cela s'est-il produit ?
-runtime.metadata_failed.info_subtext = Votre connexion réseau est peut-être interrompue, ou l'API d'exécution est temporairement injoignable.
+runtime.metadata_failed.info_subtext = Votre connexion réseau est peut-être interrompue, ou le serveur d'exécution est temporairement injoignable.
 runtime.metadata_failed.info_subtext_2 = Vérifiez votre connexion réseau et réessayez dans un instant.
 runtime.metadata_failed.button_open_browser = Ouvrir la page de téléchargement
 runtime.metadata_failed.button_cancel = Annuler
@@ -212,10 +214,10 @@ runtime.progress.info_subtext_2 = L'environnement d'exécution est installé pou
 runtime.failure.title = Échec de l'installation de l'environnement d'exécution
 runtime.failure.heading = L'installation a échoué
 runtime.failure.subheading = Toutes les tentatives de téléchargement sont épuisées, nous allons essayer de lancer l'application.
-runtime.failure.content = Eclipse Temurin {version} n'a pas pu être installé. Détail technique :\n{error}
+runtime.failure.content = L'environnement d'exécution {version} n'a pas pu être installé. Détail technique :\n{error}
 runtime.failure.info_heading = Que puis-je faire ?
 runtime.failure.info_subtext = Vérifiez votre connexion réseau, et réessayez plus tard.
-runtime.failure.info_subtext_2 = L'application va tenter de démarrer avec le Java déjà présent sur cette machine.
+runtime.failure.info_subtext_2 = L'application va tenter de démarrer avec l'environnement d'exécution déjà présent sur cette machine.
 runtime.failure.button_label = OK
 
 runtime.retry.title = Téléchargement échoué - Réessayer ?
@@ -240,5 +242,5 @@ launcher.error.subheading = Une erreur est survenue lors du démarrage de l'appl
 launcher.error.info_heading = Que s'est-il passé ?
 launcher.error.info_subtext = Vous voudrez peut-être rechercher une version plus récente :
 launcher.error.info_subtext_2 = {update_check_url}
-launcher.error.button_exit = Fermer.
+launcher.error.button_exit = Fermer
 launcher.error.button_update = Rechercher des mises à jour
