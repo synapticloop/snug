@@ -691,14 +691,14 @@ impl Drop for SlotGuard {
 
 // Button control IDs. Cast to `usize` for the `wparam & 0xFFFF` mask
 // in `WM_COMMAND`.
-const ID_BTN_PROGRESS_ANIM: usize = 1001;
+const ID_BTN_PROGRESS_ANIMATED: usize = 1001;
 const ID_BTN_PROGRESS_STATIC: usize = 1002;
 const ID_BTN_METADATA_FAILED: usize = 1003;
 const ID_BTN_RETRY: usize = 1004;
 const ID_BTN_ERROR: usize = 1005;
-const ID_BTN_JAVA_ERROR: usize = 1006;
-const ID_BTN_PROMPT_V5: usize = 1007;
-const ID_BTN_EARLY_BAIL: usize = 1008;
+const ID_BTN_LAUNCH_ERROR: usize = 1006;
+const ID_BTN_INSTALL_PROMPT: usize = 1007;
+const ID_BTN_EARLY_EXIT: usize = 1008;
 const ID_BTN_CLOSE: usize = 1099;
 /// Language dropdown. Distinct id range from the dialog buttons so a
 /// `WM_COMMAND` id match can't confuse the two.
@@ -722,17 +722,17 @@ const ID_CHK_REPLACE_TOKENS: usize = 1101;
 /// break something.
 const DIALOG_BUTTONS: &[(&str, usize)] = &[
     // 1. The runtime offer. Everything below is downstream of it.
-    ("Install prompt (custom-painted)", ID_BTN_PROMPT_V5),
+    ("Install prompt", ID_BTN_INSTALL_PROMPT),
     // 2. Then the download the prompt just agreed to.
-    ("Progress (animated)", ID_BTN_PROGRESS_ANIM),
+    ("Progress (animated)", ID_BTN_PROGRESS_ANIMATED),
     ("Progress (static @ 50%)", ID_BTN_PROGRESS_STATIC),
     // 3. ...and the ways it can go wrong, in the order they can happen.
     ("Metadata failed", ID_BTN_METADATA_FAILED),
     ("Retry (try 2 of 3)", ID_BTN_RETRY),
     ("Error (post-install)", ID_BTN_ERROR),
-    ("Java error (with update link)", ID_BTN_JAVA_ERROR),
+    ("Launch Error (with update link)", ID_BTN_LAUNCH_ERROR),
     // 4. Before a payload is even read: the bare-stub bail-out.
-    ("Early bail (MessageBoxW)", ID_BTN_EARLY_BAIL),
+    ("Early exit (MessageBoxW)", ID_BTN_EARLY_EXIT),
 ];
 
 // ============================================================================
@@ -1942,7 +1942,7 @@ unsafe extern "system" fn wndproc(
             }
 
             match id {
-                ID_BTN_PROGRESS_ANIM => spawn_dialog(|| run_progress(false)),
+                ID_BTN_PROGRESS_ANIMATED => spawn_dialog(|| run_progress(false)),
                 ID_BTN_PROGRESS_STATIC => spawn_dialog(|| run_progress(true)),
                 ID_BTN_METADATA_FAILED => spawn_dialog(|| {
                     let _ = jdk_install::show_metadata_failed_dialog(
@@ -1994,15 +1994,15 @@ unsafe extern "system" fn wndproc(
                         &content,
                     );
                 }),
-                ID_BTN_JAVA_ERROR => spawn_dialog(|| {
+                ID_BTN_LAUNCH_ERROR => spawn_dialog(|| {
                     error_window::show_launcher_error(
                         std::ptr::null_mut(),
                         "java.lang.NoClassDefFoundError: com/example/Main",
                         Some("https://github.com/adoptium/temurin25-binaries/releases"),
                     );
                 }),
-                ID_BTN_PROMPT_V5 => spawn_dialog(run_install_prompt_v5),
-                ID_BTN_EARLY_BAIL => spawn_dialog(run_early_bail),
+                ID_BTN_INSTALL_PROMPT => spawn_dialog(run_install_prompt_v5),
+                ID_BTN_EARLY_EXIT => spawn_dialog(run_early_bail),
                 ID_BTN_CLOSE => {
                     // Same as the X button: destroy the launcher
                     // window. Any dialogs spawned before this point
@@ -2157,7 +2157,7 @@ fn run_progress(static_mode: bool) {
     unsafe {
         progress_window::show(
             std::ptr::null_mut(),
-            "Snug — progress dialog preview",
+            &dialogs::dialogs().runtime.progress.title,
             "",
             shared.clone(),
         );
@@ -2649,6 +2649,39 @@ mod tests {
         let h = help_text();
         assert!(h.contains("-h, --help"), "missing the option line: {h}");
         assert!(h.contains("USAGE:"));
+    }
+
+    #[test]
+    fn the_progress_title_bar_reads_the_bundle() {
+        // The title used to be a hard-coded English string naming the
+        // preview itself. That made `runtime.progress.title` the only one in
+        // this dialog that neither the language dropdown nor the
+        // "Replace tokens" switch could act on: the preview showed copy
+        // the launcher never shows, so a translator could not review it.
+        // Same shape as the failure dialog's body, fixed in afd584b.
+        //
+        // `dialogs.rs`'s `no_field_fell_back_to_a_bare_key` already
+        // guards the key resolving to a real string; nothing guarded the
+        // *preview* handing it over. The needle uses `concat!`, because `include_str!` reads this very file and a plain literal would match itself.
+        let src = include_str!("windows_impl.rs");
+        // Non-vacuity: if that path ever resolved elsewhere the needle
+        // check below would pass for the wrong reason.
+        assert!(
+            src.contains("fn run_progress("),
+            "include_str! did not resolve to this file"
+        );
+        assert!(
+            !src.contains(concat!("progress dialog ", "preview")),
+            "the progress title bar must come from `runtime.progress.title`, \
+             not a hard-coded literal"
+        );
+        // And the value it now hands over is a real one, not the bare key.
+        let d = dialogs::dialogs();
+        assert!(
+            !d.runtime.progress.title.is_empty() && d.runtime.progress.title != "runtime.progress.title",
+            "the progress title resolved to {:?}",
+            d.runtime.progress.title
+        );
     }
 
     #[test]

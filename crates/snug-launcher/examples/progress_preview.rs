@@ -180,7 +180,7 @@ fn main() {
     // closes the window, or the simulated worker sets done != 0.
     // ------------------------------------------------------------------
     let started_at = Instant::now();
-    let result = unsafe { progress_window::show(std::ptr::null_mut(), "Snug — progress dialog preview", "", shared.clone()) };
+    let result = unsafe { progress_window::show(std::ptr::null_mut(), &snug_launcher::dialogs::dialogs().runtime.progress.title, "", shared.clone()) };
     eprintln!(
         "progress_preview: dialog returned {} after {:?}",
         result,

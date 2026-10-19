@@ -324,7 +324,7 @@ fn run_progress(opts: Options) -> Option<i32> {
     let result = unsafe {
         progress_window::show(
             std::ptr::null_mut(),
-            "Snug — progress dialog preview",
+            &snug_launcher::dialogs::dialogs().runtime.progress.title,
             "",
             shared.clone(),
         )

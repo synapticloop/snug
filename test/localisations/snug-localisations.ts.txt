@@ -164,11 +164,11 @@ launcher.bare_stub.command = snug your-app.jar -o app.exe
 runtime.prompt.title = runtime.prompt.title
 runtime.prompt.heading = runtime.prompt.heading
 runtime.prompt.subheading = runtime.prompt.subheading
-runtime.prompt.content = runtime.prompt.content {size_mb}
+runtime.prompt.content = runtime.prompt.content {size_mb} {version} {sha256}
 runtime.prompt.info_heading = runtime.prompt.info_heading
 runtime.prompt.info_subtext = runtime.prompt.info_subtext
 runtime.prompt.info_subtext_2 = runtime.prompt.info_subtext_2
-runtime.prompt.button_download = runtime.prompt.button_download
+runtime.prompt.button_download = runtime.prompt.button_download {size_mb} {version} {sha256}
 runtime.prompt.button_cancel = runtime.prompt.button_cancel
 
 runtime.metadata_failed.title = runtime.metadata_failed.title
