@@ -572,8 +572,8 @@ mod tests {
         // separator in front of it has changed once already -- it was
         // an em dash until the baseline was normalised to ASCII. If
         // this assertion breaks, read the convention note on
-        // `launcher.fallback_messagebox.title` in the baseline rather
-        // than assuming the value regressed.
+        // `launcher.error.title` in the baseline rather than
+        // assuming the value regressed.
         assert!(d.launcher.error.title.ends_with("- Snug"));
     }
 

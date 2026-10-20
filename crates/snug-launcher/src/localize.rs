@@ -995,11 +995,10 @@ fn replacing_is_on_by_default() {
             "jdk.err.no_java_exe",
             "jdk.err.io",
             "jdk.err.dialog",
-            // launcher.* — bare stub + fallback message box
+            // launcher.* — bare stub stderr diagnostic
             "launcher.bare_stub.no_payload",
             "launcher.bare_stub.hint",
             "launcher.bare_stub.command",
-            "launcher.fallback_messagebox.title",
             // dialog chrome — assembled in dialogs::dialogs()
             "runtime.prompt.title",
             "runtime.prompt.heading",
@@ -1191,22 +1190,42 @@ fn replacing_is_on_by_default() {
                 extra.len()
             );
 
-            let mismatched: Vec<String> = baseline
+            // For each (key, value) the bundle covers, every `{name}` it
+            // references must be in the set of slots the rendering site
+            // supplies for that key. Anything else renders as literal
+            // `{{name}}` at runtime, because `substitute_slots` leaves
+            // unknown names verbatim on purpose (a typo is meant to be
+            // visible). The baseline copy is held to the same rule by
+            // `snug_format::tokens::tests::the_baseline_never_names_a_token_nobody_fills`,
+            // so this loop only has to check the bundle.
+            let unknown: Vec<String> = copy
                 .iter()
                 .filter_map(|(k, v)| {
-                    let want = slots(v);
-                    let got = slots(copy[*k]);
-                    (want != got).then(|| format!("\n    {k}: baseline {want:?} vs {got:?}"))
+                    let used = slots(v);
+                    let supplied: std::collections::BTreeSet<&str> =
+                        snug_format::tokens::injected_for(k)
+                            .iter()
+                            .copied()
+                            .collect();
+                    let bad: Vec<&str> = used
+                        .into_iter()
+                        .filter(|slot| !supplied.contains(*slot))
+                        .collect();
+                    (!bad.is_empty()).then(|| {
+                        format!(
+                            "\n    {k}: uses {{{}}} which the rendering site does not supply for that key",
+                            bad.join(", ")
+                        )
+                    })
                 })
                 .collect();
             assert!(
-                mismatched.is_empty(),
-                "{name} disagrees with the baseline on {} placeholder set(s):{}\n  \
-                 A slot the baseline dropped renders as literal `{{name}}` once the call \
-                 site stops supplying it. A slot it gained leaves the sentence silently \
-                 wrong, with no braces to give it away.",
-                mismatched.len(),
-                mismatched.concat()
+                unknown.is_empty(),
+                "{name} references {} placeholder(s) no rendering site fills:{}\n  \
+                 The literal `{{name}}` will appear in the dialog at runtime -- \
+                 the bundle names a slot the call site does not hand `substitute_slots`.",
+                unknown.len(),
+                unknown.concat()
             );
             checked += 1;
         }

@@ -16,7 +16,7 @@ the `snug_preview` bin holding the other five. One error at a time, and
 the rest stay hidden until the first is fixed.
 
 This script exists so the local loop and the CI gate are the same shape.
-It is not part of the release path: `build-windows.cmd`, `build-macos.sh`
+It is not part of the release path: `build.cmd`, `build-macos.sh`
 and `refresh-stub.ps1` deliberately do not call it, because those build a
 reproducible artefact and a lint step does not belong in "the command that
 produces the committed stub".
@@ -60,7 +60,10 @@ param([switch]$Format)
 # this script first failed. A check script that dies when its output is
 # captured is worse than no check script, because it looks like a pass.
 $ErrorActionPreference = 'Continue'
-$repo = Split-Path -Parent $PSScriptRoot
+# $PSScriptRoot = scripts/windows/; the parent is scripts/, and one more
+# level up is the repo root. Two Split-Path -Parent calls land where cargo
+# expects to run from.
+$repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Push-Location $repo
 try {
     $results = [System.Collections.Generic.List[object]]::new()

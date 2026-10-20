@@ -227,7 +227,7 @@ A JavaFX demo JAR ships with the repo at
 
 ```powershell
 # Option A: the included build script (builds launcher + CLI + packages demo):
-.\scripts\build-windows.cmd
+.\scripts\windows\build.cmd
 
 # Option B: the equivalent by hand:
 cargo build --release -p snug-launcher
@@ -243,7 +243,7 @@ target\release\snug.exe assets\snug-javafx-demo-windows.jar ^
 The JAR's `Main-Class` (`synapticloop.snugjavafxdemo.HelloApplication`)
 is read from its manifest, so no `--main-class` override is needed.
 
-`scripts\build-windows.cmd` accepts `--SkipLauncherRebuild` (skip steps
+`scripts\windows\build.cmd` accepts `--SkipLauncherRebuild` (skip steps
 1+2, useful when iterating on CLI-only code) and `--SkipPackage`
 (skip the final `snug.exe` packaging step).
 
@@ -264,10 +264,11 @@ snug/
 │   ├── launcher-stub-macos-arm64  # macOS launcher (Mach-O arm64, ~3.1 MB)
 │   └── launcher-stub-macos-x86_64 # macOS launcher (Mach-O x86_64, ~3.1 MB)
 ├── scripts/
-│   ├── build-windows.cmd       # Windows batch pipeline: launcher + CLI + demo EXE
-│                                 #   -> release/windows-x86_64/
-│   ├── build-macos.sh          # macOS pipeline: `snug` CLI for arm64 + x86_64 into release/
-│   └── build-macos-demo.sh     # macOS: build-macos.sh, then package the JavaFX demo as a .app
+│   ├── windows/                # build.cmd + release.cmd + every supporting .ps1
+│   │                           #   (.cmd + .ps1 — launcher stub, CLI, dropper,
+│   │                           #    dialog preview, embedded-stub verify, etc.)
+│   └── macos/                 # build-macos.sh + build-macos-demo.sh
+│                                 #   (slim per-arch CLI builds + demo .app)
 └── crates/
     ├── snug-format/            # embedded-payload types + postcard codec (the wire contract)
     │   ├── assets/             # snug-localisations.en.txt — canonical English baseline
@@ -321,7 +322,7 @@ cross-artefact** — Windows artefacts are built on Windows, macOS
 artefacts on macOS. That is not a limitation, it is what makes the
 precompiled-stub design work: `snug-cli` embeds its launcher with
 `include_bytes!`, so the launcher has to exist *before* the CLI
-compiles, and `scripts\build-windows.cmd` already does them in that
+compiles, and `scripts\windows\build.cmd` already does them in that
 order. Cross-compiling would mean keeping a foreign toolchain alive
 purely to refresh a binary the target machine could have produced itself.
 The committed stubs are a bootstrap convenience for a fresh clone, not
@@ -348,7 +349,7 @@ cargo build --release -p snug-cli
 cargo build --release -p snug-launcher
 Copy-Item target\release\snug-launcher.exe bin\launcher-stub-windows-x86_64.exe -Force
 # macOS (arm64 + x86_64 in one go, each landing in bin/):
-scripts/build-macos.sh
+scripts/macos/build-macos.sh
 ```
 
 > **If you change `snug-launcher`, rebuild the stubs before testing.** The
@@ -559,7 +560,7 @@ messages (`err.*`), the splash strings (`splash.*`), the JDK-install
 errors (`jdk.err.*`) **and** the dialog chrome — titles, headings,
 info-box copy, progress text and button labels (`runtime.*`,
 `generic.*`, `launcher.error.*`). Edit the file, rerun
-`scripts\build-windows.cmd`, and the rebuilt EXE picks up the change
+`scripts\windows\build.cmd`, and the rebuilt EXE picks up the change
 with no Rust edits needed.
 
 The catalog lives in `snug-format` because the CLI and the launcher both

@@ -4,7 +4,7 @@
 //! ## Why this exists
 //!
 //! `snug.exe` is the primary shipping artefact and used to have no icon at
-//! all unless `scripts\build-windows.cmd` got as far as step 6, which stamps
+//! all unless `scripts\windows\build.cmd` got as far as step 6, which stamps
 //! the PNG in *after* the link with the `stamp_preview_icon` helper. That made
 //! the icon a property of one script rather than of the build: a plain
 //!
@@ -42,7 +42,7 @@ use std::path::{Path, PathBuf};
 /// The PNG the icon is derived from.
 ///
 /// Deliberately the repo-root `assets/` copy rather than one inside this
-/// package: `build-windows.cmd` stamps this same file, and a second copy in
+/// package: `build.cmd` stamps this same file, and a second copy in
 /// `crates/snug-cli/assets/` could drift from it without anything noticing.
 /// Reading outside the package directory is safe here because the workspace
 /// sets `publish = false` — there is no packaged crate for the path to escape

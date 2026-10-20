@@ -27,9 +27,9 @@
 # quoting or escaping. Plain RUSTFLAGS is space-separated, so a space anywhere
 # in CARGO_HOME silently splits one flag into two -- producing a binary that
 # builds fine and is simply not the reproducible one. This form has no such
-# caveat, which is also why build-windows.cmd goes through
-# cargo-repro.ps1 instead of setting the variable itself: a .cmd file cannot
-# hold a \x1f legibly.
+# caveat, which is also why scripts/windows/build.cmd goes through
+# scripts/windows/cargo-repro.ps1 instead of setting the variable itself:
+# a .cmd file cannot hold a \x1f legibly.
 
 function Set-ReproducibleRustflags {
     $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE '.cargo' }

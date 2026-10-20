@@ -37,7 +37,7 @@ image = { workspace = true }
 [build-dependencies]
 # Links assets/snug-runner.png in as a Windows MAINICON so snug.exe has an
 # icon straight out of `cargo build --release`, rather than only after
-# build-windows.cmd step 6 stamps one in post-link. Resolutions are
+# build.cmd step 6 stamps one in post-link. Resolutions are
 # deliberately editpe's, so a plain build already satisfies `verify_icons`.
 embed-resource = { version = "3", default-features = false }
 image = { workspace = true }

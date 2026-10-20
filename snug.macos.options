@@ -48,7 +48,7 @@
 # Neither line is in snug.options, which is deliberately platform-neutral.
 # See its "Per-platform overrides" section for the rule and the reasoning.
 #
-# scripts/build-macos-demo.sh reads both of these back out of this file
+# scripts/macos/build-macos-demo.sh reads both of these back out of this file
 # rather than hardcoding either, so the demo script and snug cannot
 # disagree about what gets built. It passes no JAR and no -o at all: a
 # bare `snug` in the repo root builds the demo from exactly what is

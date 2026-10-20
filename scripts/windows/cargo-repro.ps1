@@ -3,7 +3,7 @@
 Run cargo with the reproducible-build flags set, then exit with cargo's code.
 
 .DESCRIPTION
-`build-windows.cmd` needs every cargo invocation in it to carry the same
+`build.cmd` needs every cargo invocation in it to carry the same
 `CARGO_ENCODED_RUSTFLAGS` as `refresh-stub.ps1`, or the launcher it produces
 will not match the committed stub. It cannot set that variable itself: the
 separator between flags is \x1f, and a .cmd file cannot hold that legibly --
@@ -13,7 +13,7 @@ So the pipeline calls this instead of calling cargo directly.
 
 Arguments are passed straight through to cargo, e.g.
 
-    powershell -File scripts\cargo-repro.ps1 build --release -p snug-launcher
+    powershell -File scripts\windows\cargo-repro.ps1 build --release -p snug-launcher
 #>
 [CmdletBinding()]
 param([Parameter(ValueFromRemainingArguments = $true)][string[]]$CargoArgs)

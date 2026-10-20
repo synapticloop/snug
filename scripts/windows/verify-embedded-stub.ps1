@@ -1,8 +1,8 @@
 # ============================================================================
-# scripts/verify-embedded-stub.ps1
+# scripts/windows/verify-embedded-stub.ps1
 #
 # Byte-for-byte sanity check that <ExePath> contains the full contents of
-# <StubPath> as a contiguous substring. Used by build-windows.cmd to prove
+# <StubPath> as a contiguous substring. Used by build.cmd to prove
 # snug.exe still embeds the launcher stub after a rebuild (catches stale
 # include_bytes!() tracking if cargo's mtime/content cache ever drifts).
 #
@@ -18,7 +18,7 @@ $ErrorActionPreference = 'Stop'
 
 # SHA-256 via .NET rather than the Get-FileHash cmdlet.
 #
-# build-windows.cmd launches this script with `powershell -File`, and cmd is in
+# build.cmd launches this script with `powershell -File`, and cmd is in
 # turn launched by pwsh (the GitHub Actions default shell on Windows). Windows
 # PowerShell 5.1 therefore inherits pwsh's $env:PSModulePath, which puts the
 # PowerShell 7 module directories AHEAD of the Windows PowerShell ones. 5.1

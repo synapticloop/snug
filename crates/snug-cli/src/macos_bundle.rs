@@ -77,7 +77,7 @@ pub const LAUNCHER: &[u8] = include_bytes!("../../../bin/launcher-stub-macos-x86
 ///
 /// Tracked deliberately rather than left to the OS: it is the floor the
 /// launcher was compiled against, and the same value
-/// `scripts/build-macos.sh` pins for the `snug` binary. If you raise
+/// `scripts/macos/build-macos.sh` pins for the `snug` binary. If you raise
 /// `MACOSX_DEPLOYMENT_TARGET`, raise this too.
 pub const MIN_SYSTEM_VERSION: &str = "12.0";
 

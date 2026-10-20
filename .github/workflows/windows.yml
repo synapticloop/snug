@@ -10,7 +10,7 @@
 #     on Windows for several slices without anyone noticing, purely
 #     because `snug-cli`'s options_file target failed first. Pass the flag
 #     and read the total.
-#   - **`scripts\build-windows.cmd` end to end**, which is the only place
+#   - **`scripts\windows\build.cmd` end to end**, which is the only place
 #     the launcher stub, the icon stamps and the staged `release\` folder
 #     are exercised together. Icon provenance in particular is checked by
 #     `verify_icons`, which re-derives each icon from its source PNG and
@@ -94,7 +94,7 @@ jobs:
       # It needs the packaged demo JAR, which is committed, and the
       # `snug.options` + `snug.windows.options` pair, likewise.
       - name: Run the Windows release pipeline
-        run: .\scripts\build-windows.cmd
+        run: .\scripts\windows\build.cmd
 
       # The committed stub must correspond to the *current* launcher source.
       #
@@ -120,16 +120,16 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          . .\scripts\launcher-source-fingerprint.ps1
+          . .\scripts\windows\launcher-source-fingerprint.ps1
           $current = Get-LauncherSourceFingerprint -Repo (Get-Location).Path
           $recordedPath = 'bin\launcher-stub.source'
           if (-not (Test-Path $recordedPath)) {
-            Write-Error "no $recordedPath -- run scripts\refresh-stub.ps1 and commit it."
+            Write-Error "no $recordedPath -- run scripts\windows\refresh-stub.ps1 and commit it."
             exit 1
           }
           $recorded = (Get-Content $recordedPath -Raw).Trim()
           if ($current -ne $recorded) {
-            Write-Error "bin\launcher-stub-windows-x86_64.exe is stale.`n`n  launcher source now: $current`n  stub was built from: $recorded`n`nThe launcher source changed without the committed stub being rebuilt, so a`nclone would embed last release's launcher. Run scripts\refresh-stub.ps1 and`ncommit both files."
+            Write-Error "bin\launcher-stub-windows-x86_64.exe is stale.`n`n  launcher source now: $current`n  stub was built from: $recorded`n`nThe launcher source changed without the committed stub being rebuilt, so a`nclone would embed last release's launcher. Run scripts\windows\refresh-stub.ps1 and`ncommit both files."
             exit 1
           }
           Write-Host "committed stub matches the current launcher source: $current"

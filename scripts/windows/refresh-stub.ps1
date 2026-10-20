@@ -18,7 +18,7 @@ So the rule is not "refresh the stub when I edit platform/windows.rs", it is
 answers that question in one command instead of leaving it to memory, which
 is how it went stale once already.
 
-Steps 1 and 2 of scripts/build-windows.cmd do exactly this; the rest of that
+Steps 1 and 2 of scripts/windows/build.cmd do exactly this; the rest of that
 script builds and stages a release, which is not needed between ordinary
 commits.
 
@@ -33,7 +33,7 @@ stub is in sync (after refreshing, when refreshing), 1 otherwise.
 
 .NOTES
 Uses only [System.IO.File] and [System.Security.Cryptography.SHA256], never
-Get-FileHash: build-windows.cmd invokes this with `powershell -File`, and
+Get-FileHash: build.cmd invokes this with `powershell -File`, and
 that 5.1 child inherits pwsh's $env:PSModulePath, where the cmdlet does not
 resolve. See commit 9861393 for the full chain.
 #>
@@ -50,7 +50,9 @@ function Write-Fail([string]$Message) {
     [Console]::Error.WriteLine("refresh-stub: $Message")
 }
 
-$repo = Split-Path -Parent $PSScriptRoot
+# $PSScriptRoot = scripts/windows/; the parent is scripts/, and one more
+# level up is the repo root.
+$repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $stub = Join-Path $repo 'bin\launcher-stub-windows-x86_64.exe'
 $fresh = Join-Path $repo 'target\release\snug-launcher.exe'
 
@@ -60,7 +62,7 @@ $fresh = Join-Path $repo 'target\release\snug-launcher.exe'
 #
 # The committed stub is compared byte-for-byte against a fresh build, so the
 # build has to be reproducible across checkouts -- see the long explanation in
-# reproducible-build.ps1. `scripts/build-windows.cmd` sets the identical flags
+# reproducible-build.ps1. `scripts/windows/build.cmd` sets the identical flags
 # (via cargo-repro.ps1); the two must agree or the CI check fails again.
 function Enable-ReproducibleBuild {
     . (Join-Path $PSScriptRoot 'reproducible-build.ps1')

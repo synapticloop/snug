@@ -19,7 +19,7 @@
 //! copy /Y target\release\snug-launcher.exe bin\launcher-stub-windows-x86_64.exe
 //! ```
 //!
-//! `scripts\build-windows.cmd` does both steps in that order, which is
+//! `scripts\windows\build.cmd` does both steps in that order, which is
 //! load-bearing: the embed has to exist *before* `snug-cli` compiles.
 
 /// The precompiled Windows stub launcher.

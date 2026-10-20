@@ -11,7 +11,6 @@
 //! cargo run -p snug-launcher --example dialogs_preview -- --kind error
 //! cargo run -p snug-launcher --example dialogs_preview -- --kind java-error
 //! cargo run -p snug-launcher --example dialogs_preview -- --kind install-prompt-v5
-//! cargo run -p snug-launcher --example dialogs_preview -- --kind early-bail
 //! ```
 //!
 //! Mirrors `progress_preview` — every kind invokes the **same** code
@@ -33,8 +32,6 @@
 //!   "Try again / Cancel" prompt with a fake transient-failure error.
 //! - `error` — `jdk_install::show_error_dialog`. Renders the terminal
 //!   post-install-failure dialog (single OK) with a fake fatal error.
-//! - `early-bail` — `MessageBoxW` from `src/main.rs`. The fallback shown
-//!   when the launcher can't even load its embedded payload.
 //! - `install-prompt` — `prompt_window::show`. Custom-painted modal on the
 //!   same paint path as the rest of the dialog family (replaced the previous
 //!   `TaskDialogIndirect` + `MessageBoxW` mirror). Variant name kept as
@@ -53,8 +50,6 @@
 #![cfg(windows)]
 
 use std::env;
-use std::ffi::OsStr;
-use std::os::windows::ffi::OsStrExt;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -81,7 +76,6 @@ fn main() {
         Kind::Error => run_error(opts),
         Kind::JavaError => run_java_error(),
         Kind::InstallPromptV5 => run_install_prompt_v5(),
-        Kind::EarlyBail => run_early_bail(),
     };
 
     if let Some(code) = result {
@@ -101,7 +95,6 @@ enum Kind {
     Error,
     JavaError,
     InstallPromptV5,
-    EarlyBail,
 }
 
 impl Kind {
@@ -113,7 +106,6 @@ impl Kind {
             "error" => Some(Self::Error),
             "java-error" => Some(Self::JavaError),
             "install-prompt-v5" => Some(Self::InstallPromptV5),
-            "early-bail" => Some(Self::EarlyBail),
             _ => None,
         }
     }
@@ -126,7 +118,6 @@ impl Kind {
             Self::Error => "error",
             Self::JavaError => "java-error",
             Self::InstallPromptV5 => "install-prompt-v5",
-            Self::EarlyBail => "early-bail",
         }
     }
 }
@@ -166,7 +157,7 @@ impl Options {
                         .ok_or_else(|| "--kind needs a value".to_string())?;
                     kind = Some(
                         Kind::parse(v)
-                            .ok_or_else(|| format!("unknown --kind {v:?}; expected one of: progress, metadata-failed, retry, error, java-error, install-prompt-v5, early-bail"))?,
+                            .ok_or_else(|| format!("unknown --kind {v:?}; expected one of: progress, metadata-failed, retry, error, java-error, install-prompt-v5"))?,
                     );
                     i += 2;
                 }
@@ -225,7 +216,6 @@ fn print_help() {
     eprintln!("  error              Terminal post-install-failure dialog (show_error_dialog)");
     eprintln!("  java-error         Launcher-runtime error dialog (show_launcher_error)");
     eprintln!("  install-prompt-v5  prompt_window (custom-painted modal, same paint path as the rest of the dialog family)");
-    eprintln!("  early-bail         MessageBoxW from src/main.rs (show_error_box)");
     eprintln!();
     eprintln!("options:");
     eprintln!("  --static         (progress only) pin at 50%, no animation");
@@ -484,41 +474,6 @@ fn run_install_prompt_v5() -> Option<i32> {
         Kind::InstallPromptV5.as_str()
     );
     Some(choice as i32)
-}
-
-fn run_early_bail() -> Option<i32> {
-    // Mirror `src/main.rs::show_error_box` exactly — that's what the
-    // launcher shows when it can't even load its embedded payload.
-    // The title comes from the same localization key the launcher
-    // uses, so a retitle in `snug-localisations.en.txt` shows up here
-    // without a second edit.
-    let title_str = snug_launcher::localize::lookup("launcher.fallback_messagebox.title");
-    let title: Vec<u16> = OsStr::new(&title_str)
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
-    let body: Vec<u16> = OsStr::new(
-        "FATAL: failed to read payload from RCDATA resource.\n\n\
-         This binary may be corrupted or stamped with the wrong manifest.\n\n\
-         Re-download the launcher from the original source.",
-    )
-    .encode_wide()
-    .chain(Some(0))
-    .collect();
-    let result = unsafe {
-        windows_sys::Win32::UI::WindowsAndMessaging::MessageBoxW(
-            std::ptr::null_mut(),
-            body.as_ptr(),
-            title.as_ptr(),
-            windows_sys::Win32::UI::WindowsAndMessaging::MB_OK
-                | windows_sys::Win32::UI::WindowsAndMessaging::MB_ICONERROR,
-        )
-    };
-    eprintln!(
-        "dialogs_preview: kind={} MessageBoxW returned {result}",
-        Kind::EarlyBail.as_str()
-    );
-    Some(result)
 }
 
 // =============================================================================

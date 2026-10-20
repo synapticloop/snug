@@ -698,7 +698,6 @@ const ID_BTN_RETRY: usize = 1004;
 const ID_BTN_ERROR: usize = 1005;
 const ID_BTN_LAUNCH_ERROR: usize = 1006;
 const ID_BTN_INSTALL_PROMPT: usize = 1007;
-const ID_BTN_EARLY_EXIT: usize = 1008;
 const ID_BTN_CLOSE: usize = 1099;
 /// Language dropdown. Distinct id range from the dialog buttons so a
 /// `WM_COMMAND` id match can't confuse the two.
@@ -731,8 +730,6 @@ const DIALOG_BUTTONS: &[(&str, usize)] = &[
     ("Retry (try 2 of 3)", ID_BTN_RETRY),
     ("Error (post-install)", ID_BTN_ERROR),
     ("Launch Error (with update link)", ID_BTN_LAUNCH_ERROR),
-    // 4. Before a payload is even read: the bare-stub bail-out.
-    ("Early exit (MessageBoxW)", ID_BTN_EARLY_EXIT),
 ];
 
 // ============================================================================
@@ -2002,7 +1999,6 @@ unsafe extern "system" fn wndproc(
                     );
                 }),
                 ID_BTN_INSTALL_PROMPT => spawn_dialog(run_install_prompt_v5),
-                ID_BTN_EARLY_EXIT => spawn_dialog(run_early_bail),
                 ID_BTN_CLOSE => {
                     // Same as the X button: destroy the launcher
                     // window. Any dialogs spawned before this point
@@ -2314,32 +2310,6 @@ fn run_install_prompt_v5() {
         )
     };
     eprintln!("snug-preview: install-prompt choice = {choice:?}");
-}
-
-/// Mirror of `main.rs::show_error_box` — the `MessageBoxW` shown when
-/// the launcher can't even load its embedded payload.
-fn run_early_bail() {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
-
-    // Mirrors `localize::lookup("launcher.fallback_messagebox.title")`
-    // in `main.rs::show_error_box`. That key resolves from the built-in
-    // English baseline on this path (`localize::init` has not run yet),
-    // so read the baseline rather than hardcoding the string — keeps the
-    // preview in step if the key is ever retitled.
-    let title = snug_launcher::localize::lookup("launcher.fallback_messagebox.title");
-    let body = "FATAL: failed to read payload from RCDATA resource.\n\n\
-         This binary may be corrupted or stamped with the wrong manifest.\n\n\
-         Re-download the launcher from the original source.";
-
-    let result = unsafe {
-        MessageBoxW(
-            std::ptr::null_mut(),
-            wide(body).as_ptr(),
-            wide(&title).as_ptr(),
-            MB_OK | MB_ICONERROR,
-        )
-    };
-    eprintln!("snug-preview: early-bail MessageBoxW returned {result}");
 }
 
 // ============================================================================

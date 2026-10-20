@@ -1,6 +1,6 @@
 @echo off
 REM ===========================================================================
-REM build-windows.cmd - full release build pipeline for the snug Windows
+REM build.cmd - full release build pipeline for the snug Windows
 REM launcher, dropper and dialog preview.
 REM
 REM snug.exe embeds bin\launcher-stub-windows-x86_64.exe at compile time
@@ -29,7 +29,7 @@ REM      for the platform-specific --output, and writes
 REM      assets\snug-javafx-demo-windows.exe. Both files are read from the CWD,
 REM      so this step depends on being run from the repo root.
 REM   5. Verify snug.exe contains the stub bytes we just produced
-REM      (scripts\verify-embedded-stub.ps1; sha256 substring check).
+REM      (scripts\windows\verify-embedded-stub.ps1; sha256 substring check).
 REM   6. Stamp assets\snug-runner.png into snug.exe. UNCONDITIONAL - this is
 REM      the primary shipping artefact, and it has no build.rs and no
 REM      dependency on snug-launcher, so nothing else gives it an icon.
@@ -52,7 +52,7 @@ REM      into. release\ ignores its own contents, so nothing here is
 REM      tracked. Skip with --SkipRelease.
 REM
 REM Run from the repo root:
-REM     .\scripts\build-windows.cmd
+REM     .\scripts\windows\build.cmd
 REM
 REM Flags:
 REM     --SkipLauncherRebuild   Skip steps 1+2 (stub unchanged from prior build).
@@ -102,7 +102,7 @@ REM 0. Environment setup
 REM ---------------------------------------------------------------------------
 
 if not exist "Cargo.toml" (
-    echo [build-windows] Run from the repo root. Cargo.toml not found.
+    echo [build] Run from the repo root. Cargo.toml not found.
     exit /b 1
 )
 
@@ -112,7 +112,7 @@ REM they're missing.
 set "PATH=%USERPROFILE%\.cargo\bin;%USERPROFILE%\.rustup\toolchains\stable-x86_64-pc-windows-gnu\bin;%PATH%"
 where cargo >nul 2>nul
 if errorlevel 1 (
-    echo [build-windows] cargo not on PATH. Install Rust ^https://rustup.rs/^) or set PATH to include its bin dir.
+    echo [build] cargo not on PATH. Install Rust ^https://rustup.rs/^) or set PATH to include its bin dir.
     exit /b 1
 )
 
@@ -145,7 +145,7 @@ goto parse_args
 :args_done
 
 if "!CROSS_COMPILE!"=="1" if "!SKIP_LAUNCHER_REBUILD!"=="1" (
-    echo [build-windows] --CrossCompile is a no-op when --SkipLauncherRebuild is set.
+    echo [build] --CrossCompile is a no-op when --SkipLauncherRebuild is set.
 )
 
 set "DEMO_JAR=assets\snug-javafx-demo-windows.jar"
@@ -157,7 +157,7 @@ set "DROPPER_SHIPPED=Snug Quick Build.exe"
 set "RELEASE_DIR=release"
 
 REM ---------------------------------------------------------------------------
-REM Every cargo call below goes through scripts\cargo-repro.ps1, which sets
+REM Every cargo call below goes through scripts\windows\cargo-repro.ps1, which sets
 REM CARGO_ENCODED_RUSTFLAGS for the reproducible-build remapping. See
 REM reproducible-build.ps1 for why the launcher is not reproducible
 REM across checkouts without it, and why the flag separator (\x1f) means this
@@ -184,7 +184,7 @@ if "!CROSS_COMPILE!"=="1" (
     set "CARGO_DROPPER_ARGS=zigbuild --target !TARGET_TRIPLE! --release -p snug-dropper"
     where cargo-zigbuild >nul 2>nul
     if errorlevel 1 (
-        echo [build-windows] --CrossCompile requires cargo-zigbuild on PATH. Install with:
+        echo [build] --CrossCompile requires cargo-zigbuild on PATH. Install with:
         echo     cargo install cargo-zigbuild --locked
         exit /b 1
     )
@@ -245,7 +245,7 @@ if "!CLEAN!"=="1" (
     echo ==^> cargo clean -p snug-launcher -p snug-cli -p snug-dropper
     cargo clean -p snug-launcher -p snug-cli -p snug-dropper
     if errorlevel 1 (
-        echo [build-windows] cargo clean failed with exit code %errorlevel%
+        echo [build] cargo clean failed with exit code %errorlevel%
         exit /b %errorlevel%
     )
 )
@@ -259,11 +259,11 @@ echo.
 echo ==^> cargo !CARGO_LAUNCHER_ARGS!
 powershell -NoProfile -ExecutionPolicy Bypass -File "!_SCRIPT_DIR!cargo-repro.ps1" !CARGO_LAUNCHER_ARGS!
 if errorlevel 1 (
-    echo [build-windows] launcher build failed with exit code %errorlevel%
+    echo [build] launcher build failed with exit code %errorlevel%
     exit /b %errorlevel%
 )
 if not exist "!BUILT_LAUNCHER_EXE!" (
-    echo [build-windows] Expected launcher binary at !BUILT_LAUNCHER_EXE! but it was not produced.
+    echo [build] Expected launcher binary at !BUILT_LAUNCHER_EXE! but it was not produced.
     exit /b 1
 )
 
@@ -274,7 +274,7 @@ echo.
 echo ==^> copy !BUILT_LAUNCHER_EXE! -^> !STUB!
 copy /Y "!BUILT_LAUNCHER_EXE!" "!STUB!" >nul
 if errorlevel 1 (
-    echo [build-windows] Failed to copy !BUILT_LAUNCHER_EXE! to !STUB!
+    echo [build] Failed to copy !BUILT_LAUNCHER_EXE! to !STUB!
     exit /b %errorlevel%
 )
 
@@ -294,15 +294,15 @@ echo.
 echo ==^> cargo !CARGO_CLI_ARGS!
 powershell -NoProfile -ExecutionPolicy Bypass -File "!_SCRIPT_DIR!cargo-repro.ps1" !CARGO_CLI_ARGS!
 if errorlevel 1 (
-    echo [build-windows] CLI build failed with exit code %errorlevel%
+    echo [build] CLI build failed with exit code %errorlevel%
     exit /b %errorlevel%
 )
 if not exist "!BUILT_CLI_EXE!" (
-    echo [build-windows] Expected CLI binary at !BUILT_CLI_EXE! but it was not produced.
+    echo [build] Expected CLI binary at !BUILT_CLI_EXE! but it was not produced.
     exit /b 1
 )
 if not exist "!BUILT_VERIFY_EXE!" (
-    echo [build-windows] Expected verify_icons at !BUILT_VERIFY_EXE! but it was not produced.
+    echo [build] Expected verify_icons at !BUILT_VERIFY_EXE! but it was not produced.
     exit /b 1
 )
 
@@ -313,7 +313,7 @@ REM ---------------------------------------------------------------------------
 if "!SKIP_PACKAGE!"=="1" goto skip_package
 
 if not exist "!DEMO_JAR!" (
-    echo [build-windows] Demo JAR not found at !DEMO_JAR!. Build it first or pass --SkipPackage.
+    echo [build] Demo JAR not found at !DEMO_JAR!. Build it first or pass --SkipPackage.
     exit /b 1
 )
 
@@ -321,11 +321,11 @@ echo.
 echo ==^> !BUILT_CLI_EXE! !DEMO_JAR!
 "!BUILT_CLI_EXE!" "!DEMO_JAR!"
 if errorlevel 1 (
-    echo [build-windows] snug package failed with exit code %errorlevel%
+    echo [build] snug package failed with exit code %errorlevel%
     exit /b %errorlevel%
 )
 if not exist "!DEMO_EXE!" (
-    echo [build-windows] Expected packaged EXE at !DEMO_EXE! but it was not produced.
+    echo [build] Expected packaged EXE at !DEMO_EXE! but it was not produced.
     exit /b 1
 )
 
@@ -348,7 +348,7 @@ echo ==^> Verifying !BUILT_CLI_EXE! contains !STUB! bytes
 
 powershell -NoProfile -ExecutionPolicy Bypass -File "!_SCRIPT_DIR!verify-embedded-stub.ps1" -StubPath "!STUB!" -ExePath "!BUILT_CLI_EXE!"
 if errorlevel 1 (
-    echo [build-windows] embedded-stub verification failed - the CLI was rebuilt against a stale stub.
+    echo [build] embedded-stub verification failed - the CLI was rebuilt against a stale stub.
     exit /b 1
 )
 
@@ -383,15 +383,15 @@ echo.
 echo ==^> cargo !CARGO_STAMP_ARGS!
 powershell -NoProfile -ExecutionPolicy Bypass -File "!_SCRIPT_DIR!cargo-repro.ps1" !CARGO_STAMP_ARGS!
 if errorlevel 1 (
-    echo [build-windows] stamp_preview_icon build failed with exit code %errorlevel%
+    echo [build] stamp_preview_icon build failed with exit code %errorlevel%
     exit /b %errorlevel%
 )
 if not exist "!BUILT_STAMP_EXE!" (
-    echo [build-windows] Expected stamp helper at !BUILT_STAMP_EXE! but it was not produced.
+    echo [build] Expected stamp helper at !BUILT_STAMP_EXE! but it was not produced.
     exit /b 1
 )
 if not exist "!SNUG_CLI_PNG!" (
-    echo [build-windows] snug CLI icon PNG not found at !SNUG_CLI_PNG!.
+    echo [build] snug CLI icon PNG not found at !SNUG_CLI_PNG!.
     exit /b 1
 )
 
@@ -399,7 +399,7 @@ echo.
 echo ==^> !BUILT_STAMP_EXE! !BUILT_CLI_EXE! !SNUG_CLI_PNG!
 "!BUILT_STAMP_EXE!" "!BUILT_CLI_EXE!" "!SNUG_CLI_PNG!"
 if errorlevel 1 (
-    echo [build-windows] snug.exe icon stamp failed with exit code %errorlevel%
+    echo [build] snug.exe icon stamp failed with exit code %errorlevel%
     exit /b %errorlevel%
 )
 
@@ -424,15 +424,15 @@ echo.
 echo ==^> cargo !CARGO_PREVIEW_ARGS!
 powershell -NoProfile -ExecutionPolicy Bypass -File "!_SCRIPT_DIR!cargo-repro.ps1" !CARGO_PREVIEW_ARGS!
 if errorlevel 1 (
-    echo [build-windows] snug_preview build failed with exit code %errorlevel%
+    echo [build] snug_preview build failed with exit code %errorlevel%
     exit /b %errorlevel%
 )
 if not exist "!BUILT_PREVIEW_EXE!" (
-    echo [build-windows] Expected preview binary at !BUILT_PREVIEW_EXE! but it was not produced.
+    echo [build] Expected preview binary at !BUILT_PREVIEW_EXE! but it was not produced.
     exit /b 1
 )
 if not exist "!PREVIEW_PNG!" (
-    echo [build-windows] Preview icon PNG not found at !PREVIEW_PNG!.
+    echo [build] Preview icon PNG not found at !PREVIEW_PNG!.
     exit /b 1
 )
 
@@ -440,7 +440,7 @@ echo.
 echo ==^> !BUILT_STAMP_EXE! !BUILT_PREVIEW_EXE! !PREVIEW_PNG!
 "!BUILT_STAMP_EXE!" "!BUILT_PREVIEW_EXE!" "!PREVIEW_PNG!"
 if errorlevel 1 (
-    echo [build-windows] snug_preview.exe icon stamp failed with exit code %errorlevel%
+    echo [build] snug_preview.exe icon stamp failed with exit code %errorlevel%
     exit /b %errorlevel%
 )
 
@@ -472,19 +472,19 @@ echo.
 echo ==^> cargo !CARGO_DROPPER_ARGS!
 powershell -NoProfile -ExecutionPolicy Bypass -File "!_SCRIPT_DIR!cargo-repro.ps1" !CARGO_DROPPER_ARGS!
 if errorlevel 1 (
-    echo [build-windows] dropper build failed with exit code %errorlevel%
+    echo [build] dropper build failed with exit code %errorlevel%
     exit /b %errorlevel%
 )
 if not exist "!BUILT_DROPPER_EXE!" (
-    echo [build-windows] Expected dropper binary at !BUILT_DROPPER_EXE! but it was not produced.
+    echo [build] Expected dropper binary at !BUILT_DROPPER_EXE! but it was not produced.
     exit /b 1
 )
 if not exist "!BUILT_DROPPER_STAMP_EXE!" (
-    echo [build-windows] Expected dropper stamp helper at !BUILT_DROPPER_STAMP_EXE! but it was not produced.
+    echo [build] Expected dropper stamp helper at !BUILT_DROPPER_STAMP_EXE! but it was not produced.
     exit /b 1
 )
 if not exist "!DROPPER_PNG!" (
-    echo [build-windows] Dropper icon PNG not found at !DROPPER_PNG!.
+    echo [build] Dropper icon PNG not found at !DROPPER_PNG!.
     exit /b 1
 )
 
@@ -495,7 +495,7 @@ REM which is wrong under --CrossCompile. The --package dir defaults to the
 REM exe's own folder, which is where snug.exe already lives.
 "!BUILT_DROPPER_STAMP_EXE!" "!BUILT_DROPPER_EXE!" "!DROPPER_PNG!" --package
 if errorlevel 1 (
-    echo [build-windows] dropper icon stamp / package failed with exit code %errorlevel%
+    echo [build] dropper icon stamp / package failed with exit code %errorlevel%
     exit /b %errorlevel%
 )
 
@@ -504,7 +504,7 @@ REM path from that exe rather than assuming where snug.exe ended up.
 for %%I in ("!BUILT_DROPPER_EXE!") do set "DROPPER_DIR=%%~dpI"
 set "DROPPER_PACKAGED=!DROPPER_DIR!!DROPPER_SHIPPED!"
 if not exist "!DROPPER_PACKAGED!" (
-    echo [build-windows] Expected !DROPPER_PACKAGED! but it was not produced.
+    echo [build] Expected !DROPPER_PACKAGED! but it was not produced.
     exit /b 1
 )
 
@@ -512,10 +512,10 @@ REM Co-location is a runtime invariant, not tidiness: the dropper resolves
 REM snug.exe relative to its own path, so a dropper shipped without it can
 REM only ever show "snug.exe could not be found".
 if not exist "!DROPPER_DIR!snug.exe" (
-    echo [build-windows] ERROR: snug.exe is not in !DROPPER_DIR!
-    echo [build-windows] !DROPPER_SHIPPED! resolves snug.exe relative to its own
-    echo [build-windows] location and will fail on every machine. Pass the dropper
-    echo [build-windows] stamp helper an explicit --package dir beside snug.exe.
+    echo [build] ERROR: snug.exe is not in !DROPPER_DIR!
+    echo [build] !DROPPER_SHIPPED! resolves snug.exe relative to its own
+    echo [build] location and will fail on every machine. Pass the dropper
+    echo [build] stamp helper an explicit --package dir beside snug.exe.
     exit /b 1
 )
 
@@ -566,10 +566,10 @@ call :verify_icon "!DROPPER_PACKAGED!" "!DROPPER_PNG!"
 if "!ICON_FAILURES!"=="0" goto after_icon_verify
 
 echo.
-echo [build-windows] Icon verification failed for !ICON_FAILURES! artefact(s).
-echo [build-windows] An EXE does not carry the icon it was stamped with, or a
-echo [build-windows] previous stamp left orphan icon bytes behind. The build is
-echo [build-windows] NOT releasable - the folder would ship a wrong or missing icon.
+echo [build] Icon verification failed for !ICON_FAILURES! artefact(s).
+echo [build] An EXE does not carry the icon it was stamped with, or a
+echo [build] previous stamp left orphan icon bytes behind. The build is
+echo [build] NOT releasable - the folder would ship a wrong or missing icon.
 exit /b 1
 
 :skip_icon_verify
@@ -617,7 +617,7 @@ echo.
 echo ==^> staging !STAGE_DIR!\
 if not exist "!STAGE_DIR!" mkdir "!STAGE_DIR!"
 if errorlevel 1 (
-    echo [build-windows] Failed to create !STAGE_DIR!\
+    echo [build] Failed to create !STAGE_DIR!\
     exit /b 1
 )
 

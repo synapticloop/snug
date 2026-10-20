@@ -155,7 +155,7 @@ pub enum OptionsFileError {
 /// a Windows marketing name — `macos`, not `mac`, and `windows`, not
 /// `win`. It is the same vocabulary the rest of the project already uses
 /// (`#[cfg(target_os = "macos")]`, `release/macos-arm64/`,
-/// `scripts/build-macos.sh`), so the filename and the crate's platform
+/// `scripts/macos/build-macos.sh`), so the filename and the crate's platform
 /// gating are always the same string. The token is a *parameter* rather
 /// than read from the environment here so the precedence rules are
 /// testable for every platform from one host.

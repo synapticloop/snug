@@ -120,7 +120,6 @@ of these renders literally.
 - `launcher.error.info_subtext`
 - `launcher.error.subheading`
 - `launcher.error.title`
-- `launcher.fallback_messagebox.title`
 - `runtime.failure.button_label`
 - `runtime.failure.heading`
 - `runtime.failure.info_heading`
