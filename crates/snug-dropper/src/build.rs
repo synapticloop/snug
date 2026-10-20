@@ -378,7 +378,10 @@ mod tests {
         let arg = std::path::Path::new(inv.args.last().unwrap());
         let resolved = inv.cwd.join(arg);
         assert!(
-            resolved.to_string_lossy().replace('\\', "/").ends_with("build/libs"),
+            resolved
+                .to_string_lossy()
+                .replace('\\', "/")
+                .ends_with("build/libs"),
             "cwd + argument must reproduce the original relative path, got {:?}",
             resolved
         );
@@ -394,10 +397,7 @@ mod tests {
     #[test]
     fn parses_the_built_line() {
         let out = "snug: loaded options from C:\\p\\snug.options\nsnug: built C:\\p\\App.exe\n";
-        assert_eq!(
-            parse_built_line(out),
-            Some(PathBuf::from(r"C:\p\App.exe"))
-        );
+        assert_eq!(parse_built_line(out), Some(PathBuf::from(r"C:\p\App.exe")));
     }
 
     #[test]
@@ -442,7 +442,10 @@ mod tests {
 
     #[test]
     fn summarise_falls_back_to_the_last_line_for_foreign_output() {
-        assert_eq!(summarise("something went very wrong\n"), "something went very wrong");
+        assert_eq!(
+            summarise("something went very wrong\n"),
+            "something went very wrong"
+        );
     }
 
     #[test]

@@ -8,7 +8,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use clap::Parser;
-use snug_format::{embedded_file, AppMetadata, LauncherBehavior, LauncherConfig};
+use snug_format::{AppMetadata, LauncherBehavior, LauncherConfig, embedded_file};
 use snug_payload::find_in_file;
 use zip::write::SimpleFileOptions;
 
@@ -36,8 +36,12 @@ fn builds_real_windows_exe_and_locator_finds_payload() {
     // The produced file must be a valid Windows GUI PE.
     let bytes = fs::read(&exe_path).expect("read exe");
     assert_eq!(&bytes[..2], b"MZ", "must start with MZ");
-    let pe_offset = u32::from_le_bytes([bytes[0x3C], bytes[0x3C + 1], bytes[0x3C + 2], bytes[0x3C + 3]])
-        as usize;
+    let pe_offset = u32::from_le_bytes([
+        bytes[0x3C],
+        bytes[0x3C + 1],
+        bytes[0x3C + 2],
+        bytes[0x3C + 3],
+    ]) as usize;
     assert_eq!(&bytes[pe_offset..pe_offset + 4], b"PE\0\0");
 
     // The locator must find the appended payload despite false-positive
@@ -47,8 +51,14 @@ fn builds_real_windows_exe_and_locator_finds_payload() {
         .expect("payload must be located");
     assert_eq!(embedded.payload.config.app.name, "Demo");
     assert_eq!(embedded.payload.config.app.company, "SynapticLoop");
-    assert_eq!(embedded.payload.config.main_class.as_deref(), Some("com.example.Main"));
-    assert_eq!(embedded.payload.config.jvm_args, vec!["-Xmx512m".to_string()]);
+    assert_eq!(
+        embedded.payload.config.main_class.as_deref(),
+        Some("com.example.Main")
+    );
+    assert_eq!(
+        embedded.payload.config.jvm_args,
+        vec!["-Xmx512m".to_string()]
+    );
 }
 
 // --- helpers --------------------------------------------------------------

@@ -172,8 +172,7 @@ fn print_help() {
 /// pipeline over an already-stamped `target\` binary is safe.
 #[cfg(windows)]
 fn emit_package(exe: &Path, dest: &Path, out: &Path) -> Result<(), String> {
-    std::fs::create_dir_all(dest)
-        .map_err(|e| format!("creating {}: {e}", dest.display()))?;
+    std::fs::create_dir_all(dest).map_err(|e| format!("creating {}: {e}", dest.display()))?;
 
     // If the dropper is currently running, Windows refuses the copy with
     // a sharing violation. That gets a hint rather than a bare errno,
@@ -236,17 +235,14 @@ fn stamp_icon(exe: &Path, png: &Path) -> Result<(), String> {
         .to_str()
         .ok_or_else(|| format!("png path {} is not valid UTF-8", png.display()))?;
 
-    let mut image =
-        editpe::Image::parse_file(exe).map_err(|e| format!("parse_file({}): {e}", exe.display()))?;
+    let mut image = editpe::Image::parse_file(exe)
+        .map_err(|e| format!("parse_file({}): {e}", exe.display()))?;
 
     // Pull the existing resource directory out of the EXE so any other
     // resources (RT_VERSION, RT_MANIFEST) survive the re-stamp —
     // `set_resource_directory` replaces the whole directory, so the old
     // contents have to be kept around.
-    let mut resources = image
-        .resource_directory()
-        .cloned()
-        .unwrap_or_default();
+    let mut resources = image.resource_directory().cloned().unwrap_or_default();
 
     // Two-step cleanup before adding the new icon:
     //

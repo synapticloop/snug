@@ -23,7 +23,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 /// Path snug provides when `--init-options` is given with no
 /// explicit value. Matches the file name looked up by
@@ -96,7 +96,10 @@ fn write_to_disk(path: &Path, force: bool) -> Result<()> {
     std::fs::write(path, EXAMPLE.as_bytes())
         .with_context(|| format!("writing example to {}", path.display()))?;
 
-    eprintln!("snug: wrote example `snug.options` template to {}", path.display());
+    eprintln!(
+        "snug: wrote example `snug.options` template to {}",
+        path.display()
+    );
     eprintln!(
         "snug: edit the file to set your app's metadata, JVM args, icon, etc., then re-run snug."
     );

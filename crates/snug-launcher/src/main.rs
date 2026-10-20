@@ -10,18 +10,15 @@
 //! 4. If not found (bare stub, no payload appended), emit a friendly
 //!    message and exit non-zero.
 
-#![cfg_attr(
-    all(windows, not(debug_assertions)),
-    windows_subsystem = "windows"
-)]
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 use std::process::ExitCode;
 
+use snug_launcher::LauncherError;
 #[cfg(windows)]
 use snug_launcher::error;
 use snug_launcher::localize;
 use snug_launcher::platform;
-use snug_launcher::LauncherError;
 
 fn main() -> ExitCode {
     match run() {
@@ -48,7 +45,10 @@ fn run() -> Result<u32, LauncherError> {
             // baseline is always available via `localize::lookup`,
             // even on the bare-stub path where the payload is absent.
             let path_str = self_path.display().to_string();
-            eprintln!("snug-launcher: {}", localize::t("launcher.bare_stub.no_payload", &[("path", &path_str)]));
+            eprintln!(
+                "snug-launcher: {}",
+                localize::t("launcher.bare_stub.no_payload", &[("path", &path_str)])
+            );
             eprintln!("{}", localize::lookup("launcher.bare_stub.hint"));
             eprintln!("    {}", localize::lookup("launcher.bare_stub.command"));
             return Ok(2);

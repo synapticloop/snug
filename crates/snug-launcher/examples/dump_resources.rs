@@ -46,8 +46,7 @@ fn main() {
     // RT_GROUP_ICON = 14
     let group_table_name = editpe::ResourceEntryName::ID(14);
     println!("\n  RT_GROUP_ICON entries (top-level ID(14)):");
-    let Some(editpe::ResourceEntry::Table(group_table)) =
-        resources.root().get(&group_table_name)
+    let Some(editpe::ResourceEntry::Table(group_table)) = resources.root().get(&group_table_name)
     else {
         println!("    (none)");
         return;

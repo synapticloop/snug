@@ -12,23 +12,23 @@
 //! `modal_window.rs`) lives in `snug-launcher`, where it is wired to JVM
 //! state this crate has no access to.
 
-use std::sync::mpsc::{self, TryRecvError};
 use std::sync::OnceLock;
+use std::sync::mpsc::{self, TryRecvError};
 
 use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows_sys::Win32::Graphics::Gdi::{GetSysColorBrush, COLOR_WINDOW};
+use windows_sys::Win32::Graphics::Gdi::{COLOR_WINDOW, GetSysColorBrush};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::{PBM_SETMARQUEE, PBM_SETPOS, PBM_SETRANGE32, PBS_MARQUEE};
 use windows_sys::Win32::UI::HiDpi::{
-    GetDpiForSystem, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForSystem, SetProcessDpiAwarenessContext,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    GetMessageW, GetSystemMetrics, LoadCursorW, LoadImageW, MessageBoxW, RegisterClassExW,
-    SendMessageW, SetTimer, TranslateMessage, ICON_BIG, ICON_SMALL, IDC_ARROW, IDYES, IMAGE_ICON,
-    LR_DEFAULTSIZE, LR_LOADFROMFILE, MB_ICONERROR, MB_ICONINFORMATION, MB_ICONQUESTION, MB_OK,
-    MB_YESNO, MSG, SM_CXSCREEN, SM_CYSCREEN, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_OVERLAPPED,
-    WS_VISIBLE, WM_CLOSE, WM_CREATE, WM_SETICON, WM_TIMER,
+    GetMessageW, GetSystemMetrics, ICON_BIG, ICON_SMALL, IDC_ARROW, IDYES, IMAGE_ICON,
+    LR_DEFAULTSIZE, LR_LOADFROMFILE, LoadCursorW, LoadImageW, MB_ICONERROR, MB_ICONINFORMATION,
+    MB_ICONQUESTION, MB_OK, MB_YESNO, MSG, MessageBoxW, RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN,
+    SendMessageW, SetTimer, TranslateMessage, WM_CLOSE, WM_CREATE, WM_SETICON, WM_TIMER,
+    WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_OVERLAPPED, WS_VISIBLE,
 };
 
 /// Caption shared by every dialog this tool shows.
@@ -294,12 +294,7 @@ fn apply_exe_icon(hwnd: HWND) {
     }
 }
 
-unsafe extern "system" fn wndproc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
+unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_CREATE => unsafe {
             let (heading, sub) = PROGRESS_TEXT

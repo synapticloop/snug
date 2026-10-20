@@ -31,7 +31,10 @@ fn tempdir() -> PathBuf {
 #[test]
 fn no_args_parses_with_none_jar() {
     let cli = Cli::try_parse_from(["snug"]).expect("try_parse_from succeeds");
-    assert!(cli.jar.is_none(), "jar should be None when no positional given");
+    assert!(
+        cli.jar.is_none(),
+        "jar should be None when no positional given"
+    );
 }
 
 #[test]
@@ -42,7 +45,10 @@ fn snug_version_field_uses_action_version() {
     let err = Cli::try_parse_from(["snug", "fake.jar", "--snug-version"])
         .expect_err("--snug-version should signal DisplayVersion");
     assert_eq!(err.kind(), clap::error::ErrorKind::DisplayVersion);
-    assert!(err.to_string().contains("snug "), "error renders the version");
+    assert!(
+        err.to_string().contains("snug "),
+        "error renders the version"
+    );
 }
 
 #[test]
@@ -91,7 +97,11 @@ fn help_flag_prints_the_full_help() {
         .arg("--help")
         .output()
         .expect("spawn snug");
-    assert!(output.status.success(), "exit 0 expected, got {:?}", output.status);
+    assert!(
+        output.status.success(),
+        "exit 0 expected, got {:?}",
+        output.status
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains(".-----.-----"),
@@ -124,7 +134,11 @@ fn help_flag_prints_the_full_help() {
         .arg("-h")
         .output()
         .expect("spawn snug");
-    assert!(short.status.success(), "exit 0 expected, got {:?}", short.status);
+    assert!(
+        short.status.success(),
+        "exit 0 expected, got {:?}",
+        short.status
+    );
     let short_stdout = String::from_utf8_lossy(&short.stdout);
     assert!(
         short_stdout.contains("Wrap a Java fat JAR"),
@@ -138,7 +152,11 @@ fn snug_version_flag_prints_version_and_exits() {
         .arg("--snug-version")
         .output()
         .expect("spawn snug");
-    assert!(output.status.success(), "exit 0 expected, got {:?}", output.status);
+    assert!(
+        output.status.success(),
+        "exit 0 expected, got {:?}",
+        output.status
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("snug "),

@@ -35,9 +35,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 #[cfg(windows)]
-use snug_dropper::build::{self, Invocation, Outcome, LOG_FILE_NAME};
+use snug_dropper::build::{self, Invocation, LOG_FILE_NAME, Outcome};
 #[cfg(windows)]
-use snug_dropper::decide::{decide, Mode, Reject};
+use snug_dropper::decide::{Mode, Reject, decide};
 #[cfg(windows)]
 use snug_dropper::{terminal, ui};
 
@@ -62,8 +62,7 @@ const TOO_MANY_BODY: &str = "Only one jar is allowed.\r\n\
     A command window has been opened so you can build it yourself.";
 
 #[cfg(windows)]
-const BAD_TYPE_BODY: &str =
-    "Only .jar files and folders can be dropped on Snug Quick Build.\r\n\
+const BAD_TYPE_BODY: &str = "Only .jar files and folders can be dropped on Snug Quick Build.\r\n\
      \r\n\
      A command window has been opened so you can build it yourself.";
 
@@ -174,10 +173,10 @@ fn build(home: &Path, input: PathBuf) -> ExitCode {
 /// rebuild. One extra click on the rare second build beats that.
 #[cfg(windows)]
 fn confirm_overwrite(invocation: &Invocation) -> bool {
-    let file = invocation
-        .output
-        .file_name()
-        .map_or_else(|| invocation.output.display().to_string(), |n| n.to_string_lossy().into());
+    let file = invocation.output.file_name().map_or_else(
+        || invocation.output.display().to_string(),
+        |n| n.to_string_lossy().into(),
+    );
     // Title states the fact, body asks the question — the shape Windows
     // itself uses for a replace prompt, so it reads as one.
     ui::confirm(&format!("{file} exists"), "Overwrite?")

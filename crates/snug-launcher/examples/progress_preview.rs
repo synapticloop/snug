@@ -61,7 +61,9 @@ fn main() {
                 // Retained for CLI compat — the mascot slot is now
                 // backed by the EXE's MAINICON resource (see
                 // build.rs), so this flag is a no-op.
-                eprintln!("progress_preview: --no-mascot is a no-op; mascot comes from the EXE's MAINICON resource.");
+                eprintln!(
+                    "progress_preview: --no-mascot is a no-op; mascot comes from the EXE's MAINICON resource."
+                );
             }
             "--help" | "-h" => {
                 eprintln!(
@@ -180,7 +182,14 @@ fn main() {
     // closes the window, or the simulated worker sets done != 0.
     // ------------------------------------------------------------------
     let started_at = Instant::now();
-    let result = unsafe { progress_window::show(std::ptr::null_mut(), &snug_launcher::dialogs::dialogs().runtime.progress.title, "", shared.clone()) };
+    let result = unsafe {
+        progress_window::show(
+            std::ptr::null_mut(),
+            &snug_launcher::dialogs::dialogs().runtime.progress.title,
+            "",
+            shared.clone(),
+        )
+    };
     eprintln!(
         "progress_preview: dialog returned {} after {:?}",
         result,

@@ -160,7 +160,10 @@ mod tests {
     #[test]
     fn a_three_line_continuation_is_joined() {
         let mf = "Main-Class: com.example.\n Very.\n Long.Main\n";
-        assert_eq!(parse_main_class(mf).as_deref(), Some("com.example.Very.Long.Main"));
+        assert_eq!(
+            parse_main_class(mf).as_deref(),
+            Some("com.example.Very.Long.Main")
+        );
     }
 
     #[test]
@@ -206,8 +209,11 @@ mod tests {
         mf.extend_from_slice(b"Main-Class: com.example.Main\n");
 
         let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-        zip.start_file("META-INF/MANIFEST.MF", zip::write::SimpleFileOptions::default())
-            .expect("start manifest");
+        zip.start_file(
+            "META-INF/MANIFEST.MF",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .expect("start manifest");
         std::io::Write::write_all(&mut zip, &mf).expect("write manifest");
         let bytes = zip.finish().expect("finish zip").into_inner();
 

@@ -23,8 +23,7 @@
 //! load-bearing: the embed has to exist *before* `snug-cli` compiles.
 
 /// The precompiled Windows stub launcher.
-pub const STUB_BYTES: &[u8] =
-    include_bytes!("../../../bin/launcher-stub-windows-x86_64.exe");
+pub const STUB_BYTES: &[u8] = include_bytes!("../../../bin/launcher-stub-windows-x86_64.exe");
 
 /// The name of this stub on disk, relative to the workspace root.
 ///
@@ -94,7 +93,9 @@ mod tests {
         // positives inside the stub" path won't be exercised by real
         // builds.
         assert!(
-            STUB_BYTES.windows(snug_format::MAGIC.len()).any(|w| w == snug_format::MAGIC),
+            STUB_BYTES
+                .windows(snug_format::MAGIC.len())
+                .any(|w| w == snug_format::MAGIC),
             "stub should contain SNUGEMBD literal at least once"
         );
     }

@@ -240,22 +240,16 @@ pub fn find_options_flag(raw_args: &[String]) -> Result<Option<PathBuf>, Options
     for (i, arg) in raw_args.iter().enumerate() {
         if arg == "--options" {
             return match raw_args.get(i + 1) {
-                None => Err(OptionsFileError::MissingValue {
-                    flag: "--options",
-                }),
-                Some(next) if next.starts_with('-') && next != "-" => Err(
-                    OptionsFileError::MissingValue {
-                        flag: "--options",
-                    },
-                ),
+                None => Err(OptionsFileError::MissingValue { flag: "--options" }),
+                Some(next) if next.starts_with('-') && next != "-" => {
+                    Err(OptionsFileError::MissingValue { flag: "--options" })
+                }
                 Some(next) => Ok(Some(PathBuf::from(next))),
             };
         }
         if let Some(value) = arg.strip_prefix("--options=") {
             if value.is_empty() {
-                return Err(OptionsFileError::MissingValue {
-                    flag: "--options",
-                });
+                return Err(OptionsFileError::MissingValue { flag: "--options" });
             }
             return Ok(Some(PathBuf::from(value)));
         }
@@ -681,8 +675,7 @@ impl FlagSpec {
             // `snug App.jar --download-jdk --name "X"` ate `--name`, the
             // file's own `--name` was then not stripped as overridden,
             // and clap aborted with "cannot be used multiple times".
-            let consumes_separate_value =
-                action.takes_values() && !arg.is_require_equals_set();
+            let consumes_separate_value = action.takes_values() && !arg.is_require_equals_set();
             if consumes_separate_value {
                 spec.takes_value.insert(canonical.clone());
             }
@@ -906,7 +899,10 @@ mod tests {
             tokenise(r#"\leading --x a\  b\\"#).unwrap(),
             args(&[r"\leading", "--x", r"a\", r"b\\"]),
         );
-        assert_eq!(tokenise(r#"--icon "C:\a b\icon.png""#).unwrap(), args(&[r#"--icon"#, r"C:\a b\icon.png"]));
+        assert_eq!(
+            tokenise(r#"--icon "C:\a b\icon.png""#).unwrap(),
+            args(&[r#"--icon"#, r"C:\a b\icon.png"])
+        );
     }
 
     #[test]
@@ -938,7 +934,10 @@ mod tests {
             tokenise(r#"--name="My App""#).unwrap(),
             args(&[r#"--name=My App"#]),
         );
-        assert_eq!(tokenise(r#"--copyright ©"#).unwrap(), args(&["--copyright", "©"]));
+        assert_eq!(
+            tokenise(r#"--copyright ©"#).unwrap(),
+            args(&["--copyright", "©"])
+        );
     }
 
     #[test]
@@ -956,12 +955,18 @@ mod tests {
     fn empty_quotes_produce_an_empty_token() {
         // `--name ""` is a deliberate empty value, not a missing one, so
         // the token has to be emitted rather than dropped.
-        assert_eq!(tokenise(r#"--name "" tail"#).unwrap(), args(&["--name", "", "tail"]));
+        assert_eq!(
+            tokenise(r#"--name "" tail"#).unwrap(),
+            args(&["--name", "", "tail"])
+        );
     }
 
     #[test]
     fn tabs_separate_tokens_too() {
-        assert_eq!(tokenise("--a\t--b  --c").unwrap(), args(&["--a", "--b", "--c"]));
+        assert_eq!(
+            tokenise("--a\t--b  --c").unwrap(),
+            args(&["--a", "--b", "--c"])
+        );
     }
 
     #[test]
@@ -980,13 +985,19 @@ mod tests {
     #[test]
     fn find_options_flag_space_form() {
         let a = args(&["snug", "app.jar", "--options", "custom.opts"]);
-        assert_eq!(find_options_flag(&a).unwrap(), Some(PathBuf::from("custom.opts")));
+        assert_eq!(
+            find_options_flag(&a).unwrap(),
+            Some(PathBuf::from("custom.opts"))
+        );
     }
 
     #[test]
     fn find_options_flag_equals_form() {
         let a = args(&["snug", "--options=foo.opts", "app.jar"]);
-        assert_eq!(find_options_flag(&a).unwrap(), Some(PathBuf::from("foo.opts")));
+        assert_eq!(
+            find_options_flag(&a).unwrap(),
+            Some(PathBuf::from("foo.opts"))
+        );
     }
 
     #[test]
@@ -1009,7 +1020,9 @@ mod tests {
             let merged = merge(&cli, vec![layer]);
             let flags: Vec<&str> = merged.iter().map(String::as_str).collect();
             assert!(
-                !flags.iter().any(|f| f.starts_with("--init-") || f.starts_with("--options")),
+                !flags
+                    .iter()
+                    .any(|f| f.starts_with("--init-") || f.starts_with("--options")),
                 "`{meta:?}` should not survive into the merged argv: {merged:?}"
             );
             assert!(
@@ -1024,11 +1037,14 @@ mod tests {
         // `--options` consumes exactly one following token; `--init-options`
         // takes none. Getting that backwards would swallow a real option.
         let cli = args(&["snug", "app.jar"]);
-        let merged = merge(&cli, vec![vec![
-            "--init-options".into(),
-            "--name".into(),
-            "Keep".into(),
-        ]]);
+        let merged = merge(
+            &cli,
+            vec![vec![
+                "--init-options".into(),
+                "--name".into(),
+                "Keep".into(),
+            ]],
+        );
         // Order-insensitive: the merge legitimately relocates the positional
         // ahead of the flags it layers. What matters is that the meta-flag
         // is gone and that the value which followed it was *not* consumed as
@@ -1135,7 +1151,12 @@ mod tests {
         let tokens = load(&f).unwrap();
         assert_eq!(
             tokens,
-            vec!["--name".to_string(), "My App".to_string(), "--company".to_string(), "Acme".to_string()],
+            vec![
+                "--name".to_string(),
+                "My App".to_string(),
+                "--company".to_string(),
+                "Acme".to_string()
+            ],
             "a BOM must not survive into the first token"
         );
         // And the first token must still be recognised as a flag.
@@ -1173,7 +1194,10 @@ mod tests {
         let merged = merge(&cli_tokens, vec![file_tokens]);
 
         // `long_flag_name` returns the bare name, without the `--`.
-        let name_count = merged.iter().filter(|t| long_flag_name(t).as_deref() == Some("name")).count();
+        let name_count = merged
+            .iter()
+            .filter(|t| long_flag_name(t).as_deref() == Some("name"))
+            .count();
         assert_eq!(
             name_count, 1,
             "exactly one --name should survive the merge, got {merged:?}"
@@ -1204,7 +1228,12 @@ mod tests {
         let tokens = load(&f).unwrap();
         assert_eq!(
             tokens,
-            vec!["--name".to_string(), "My App".to_string(), "--company".to_string(), "Acme".to_string()]
+            vec![
+                "--name".to_string(),
+                "My App".to_string(),
+                "--company".to_string(),
+                "Acme".to_string()
+            ]
         );
     }
 
@@ -1322,9 +1351,14 @@ mod tests {
             ],
         );
         let name_count = merged.iter().filter(|t| t.starts_with("--name")).count();
-        assert_eq!(name_count, 1, "exactly one --name must reach clap: {merged:?}");
+        assert_eq!(
+            name_count, 1,
+            "exactly one --name must reach clap: {merged:?}"
+        );
         assert!(
-            merged.windows(2).any(|w| w == ["--name".to_string(), "OS".to_string()]),
+            merged
+                .windows(2)
+                .any(|w| w == ["--name".to_string(), "OS".to_string()]),
             "the OS layer's value must win: {merged:?}"
         );
         assert!(!merged.contains(&"Generic".to_string()));
@@ -1343,7 +1377,11 @@ mod tests {
         );
         let name_count = merged.iter().filter(|t| t.starts_with("--name")).count();
         assert_eq!(name_count, 1, "{merged:?}");
-        assert!(merged.windows(2).any(|w| w == ["--name".to_string(), "CLI".to_string()]));
+        assert!(
+            merged
+                .windows(2)
+                .any(|w| w == ["--name".to_string(), "CLI".to_string()])
+        );
         assert!(!merged.iter().any(|t| t == "Generic" || t == "OS"));
     }
 
@@ -1355,20 +1393,31 @@ mod tests {
         let merged = merge(
             &raw,
             vec![
-                vec!["--name".into(), "Generic".into(), "--company".into(), "Co".into()],
+                vec![
+                    "--name".into(),
+                    "Generic".into(),
+                    "--company".into(),
+                    "Co".into(),
+                ],
                 vec!["--output".into(), "MyApp.app".into()],
             ],
         );
         assert!(
-            merged.windows(2).any(|w| w == ["--name".to_string(), "Generic".to_string()]),
+            merged
+                .windows(2)
+                .any(|w| w == ["--name".to_string(), "Generic".to_string()]),
             "inherited from the generic layer: {merged:?}"
         );
         assert!(
-            merged.windows(2).any(|w| w == ["--company".to_string(), "Co".to_string()]),
+            merged
+                .windows(2)
+                .any(|w| w == ["--company".to_string(), "Co".to_string()]),
             "inherited from the generic layer: {merged:?}"
         );
         assert!(
-            merged.windows(2).any(|w| w == ["--output".to_string(), "MyApp.app".to_string()]),
+            merged
+                .windows(2)
+                .any(|w| w == ["--output".to_string(), "MyApp.app".to_string()]),
             "supplied by the OS layer: {merged:?}"
         );
     }
@@ -1521,7 +1570,10 @@ mod tests {
         assert_eq!(os_options_file_name("macos"), "snug.macos.options");
         assert_eq!(os_options_file_name("windows"), "snug.windows.options");
         assert_eq!(os_options_file_name("linux"), "snug.linux.options");
-        assert_eq!(host_os_options_file_name(), os_options_file_name(std::env::consts::OS));
+        assert_eq!(
+            host_os_options_file_name(),
+            os_options_file_name(std::env::consts::OS)
+        );
     }
 
     #[test]
@@ -1561,7 +1613,10 @@ mod tests {
         std::fs::write(&generic, "--name Generic\n").unwrap();
         std::fs::write(&os_file, "--name OS\n").unwrap();
         let raw = args(&["snug", "app.jar"]);
-        assert_eq!(resolve_all(&raw, &dir, "macos").unwrap(), vec![generic, os_file]);
+        assert_eq!(
+            resolve_all(&raw, &dir, "macos").unwrap(),
+            vec![generic, os_file]
+        );
     }
 
     #[test]
@@ -1574,7 +1629,10 @@ mod tests {
         std::fs::write(&generic, "--name Generic\n").unwrap();
         std::fs::write(&os_file, "--name OS\n").unwrap();
         let raw = args(&["snug", "app.jar"]);
-        assert_eq!(resolve_all(&raw, &dir, "macos").unwrap(), vec![generic, os_file]);
+        assert_eq!(
+            resolve_all(&raw, &dir, "macos").unwrap(),
+            vec![generic, os_file]
+        );
     }
 
     #[test]
@@ -1611,7 +1669,10 @@ mod tests {
         let spec = FlagSpec::from_cli();
         // The pair that actually caused the bug.
         assert_eq!(spec.aliases.get("o").map(String::as_str), Some("output"));
-        assert_eq!(spec.aliases.get("output").map(String::as_str), Some("output"));
+        assert_eq!(
+            spec.aliases.get("output").map(String::as_str),
+            Some("output")
+        );
         // Repeatable flags come from ArgAction::Append, not a hand-written
         // list, so a new `Vec<T>` field is classified correctly on arrival.
         assert!(spec.repeatable.contains("jvm-arg"));
@@ -1628,7 +1689,12 @@ mod tests {
         let raw = args(&["snug", "app.jar", "-o", "CLI.exe"]);
         let merged = merge(
             &raw,
-            layer(vec!["--output".into(), "File.exe".into(), "--company".into(), "Co".into()]),
+            layer(vec![
+                "--output".into(),
+                "File.exe".into(),
+                "--company".into(),
+                "Co".into(),
+            ]),
         );
         assert_eq!(
             merged,
@@ -1649,7 +1715,12 @@ mod tests {
         let raw = args(&["snug", "app.jar", "--output", "CLI.exe"]);
         let merged = merge(
             &raw,
-            layer(vec!["-o".into(), "File.exe".into(), "--company".into(), "Co".into()]),
+            layer(vec![
+                "-o".into(),
+                "File.exe".into(),
+                "--company".into(),
+                "Co".into(),
+            ]),
         );
         assert_eq!(
             merged,
@@ -1674,7 +1745,12 @@ mod tests {
         let raw = args(&["snug", "other.jar", "--output", "App.exe"]);
         let merged = merge(
             &raw,
-            layer(vec!["--input".into(), "default.jar".into(), "--company".into(), "Co".into()]),
+            layer(vec![
+                "--input".into(),
+                "default.jar".into(),
+                "--company".into(),
+                "Co".into(),
+            ]),
         );
         assert_eq!(
             merged,
@@ -1697,7 +1773,11 @@ mod tests {
         let raw = args(&["snug", "other.jar"]);
         let merged = merge(
             &raw,
-            layer(vec!["--input=default.jar".into(), "--name".into(), "File".into()]),
+            layer(vec![
+                "--input=default.jar".into(),
+                "--name".into(),
+                "File".into(),
+            ]),
         );
         assert_eq!(
             merged,

@@ -15,8 +15,8 @@
 
 use std::path::{Path, PathBuf};
 
-use snug_dropper::build::{self, Outcome, OUTPUT_STEM};
-use snug_dropper::decide::{decide, Mode};
+use snug_dropper::build::{self, OUTPUT_STEM, Outcome};
+use snug_dropper::decide::{Mode, decide};
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -39,18 +39,21 @@ fn snug_exe() -> Option<PathBuf> {
 
 /// A private scratch directory for one test.
 fn scratch(label: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "snug-dropper-{label}-{}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("snug-dropper-{label}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("creating the scratch directory");
     dir
 }
 
 fn demo_jar() -> PathBuf {
-    let jar = repo_root().join("assets").join("snug-javafx-demo-windows.jar");
-    assert!(jar.is_file(), "the committed demo jar is missing: {}", jar.display());
+    let jar = repo_root()
+        .join("assets")
+        .join("snug-javafx-demo-windows.jar");
+    assert!(
+        jar.is_file(),
+        "the committed demo jar is missing: {}",
+        jar.display()
+    );
     jar
 }
 
@@ -155,12 +158,20 @@ fn a_dropped_folder_of_jars_reaches_the_multi_jar_build() {
     std::fs::copy(demo_jar(), libs.join("app.jar")).expect("copying the demo jar");
 
     let outcome = decide([&libs]);
-    assert_eq!(outcome, Mode::Build { input: libs.clone() });
+    assert_eq!(
+        outcome,
+        Mode::Build {
+            input: libs.clone()
+        }
+    );
 
     let invocation = build::invocation(&snug, &libs);
     // Beside the folder, not inside it: `gradle clean` would erase it.
     assert_eq!(invocation.cwd, dir.join("build"));
-    assert_eq!(invocation.output, dir.join("build").join(format!("{OUTPUT_STEM}.exe")));
+    assert_eq!(
+        invocation.output,
+        dir.join("build").join(format!("{OUTPUT_STEM}.exe"))
+    );
 }
 
 #[test]
@@ -186,7 +197,11 @@ fn the_whole_drop_is_decided_then_invoked() {
         r"C:\Users\someone\Downloads\MyApp.jar"
     );
     assert!(has_flag(&invocation, "--name", "Example Application Name"));
-    assert!(has_flag(&invocation, "--company", "Example Company Pty Ltd"));
+    assert!(has_flag(
+        &invocation,
+        "--company",
+        "Example Company Pty Ltd"
+    ));
     assert!(has_flag(
         &invocation,
         "-o",

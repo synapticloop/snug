@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use editpe::Image;
 use snug_format::{
-    embedded_file, encode, AppMetadata, LauncherBehavior, LauncherConfig, SnugEmbedded, SnugPayload,
+    AppMetadata, LauncherBehavior, LauncherConfig, SnugEmbedded, SnugPayload, embedded_file, encode,
 };
 use snug_launcher::find_in_file;
 use snug_launcher::payload_locator::PAYLOAD_RESOURCE_NAME;
@@ -52,10 +52,7 @@ fn finds_payload_as_rcdata_resource_on_real_stub() {
     // Parse the stub, embed the payload as RT_RCDATA "SNUGEMBD", write.
     let stub_bytes = fs::read(&stub_path).expect("read stub");
     let mut image = Image::parse(&stub_bytes).expect("parse stub as PE");
-    let mut resources = image
-        .resource_directory()
-        .cloned()
-        .unwrap_or_default();
+    let mut resources = image.resource_directory().cloned().unwrap_or_default();
     resources
         .set_rcdata(PAYLOAD_RESOURCE_NAME, encoded.clone())
         .expect("set_rcdata");
@@ -75,20 +72,14 @@ fn finds_payload_as_rcdata_resource_on_real_stub() {
     let found = found.expect("payload must be located");
     assert_eq!(found.payload.config.app.name, "End-to-end");
     assert_eq!(found.payload.jars[0].bytes, b"fake jar body");
-    assert_eq!(
-        found.payload.config.jvm_args,
-        vec!["-Xmx512m".to_string()]
-    );
+    assert_eq!(found.payload.config.jvm_args, vec!["-Xmx512m".to_string()]);
 }
 
 #[test]
 fn bare_stub_returns_none() {
     let stub_path = canonicalise(STUB_PATH);
     if !stub_path.exists() {
-        eprintln!(
-            "skipping: {} not found",
-            stub_path.display()
-        );
+        eprintln!("skipping: {} not found", stub_path.display());
         return;
     }
 

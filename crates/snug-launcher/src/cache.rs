@@ -94,9 +94,7 @@ pub fn cache_root(app: &AppMetadata, override_root: Option<&Path>) -> PathBuf {
 /// hermetic.
 fn pick_cache_base(env: Option<OsString>, platform: Option<PathBuf>) -> PathBuf {
     let from_env = env.map(PathBuf::from).filter(|p| p.is_absolute());
-    from_env
-        .or(platform)
-        .unwrap_or_else(fallback_cache_base)
+    from_env.or(platform).unwrap_or_else(fallback_cache_base)
 }
 
 /// Compute the full path to the cached JAR for a given SHA-256 digest.
@@ -495,9 +493,7 @@ pub fn platform_cache_base() -> Option<PathBuf> {
     std::env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache"))
-        })
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
 }
 
 pub fn fallback_cache_base() -> PathBuf {
@@ -553,9 +549,7 @@ pub fn platform_app_support_base() -> Option<PathBuf> {
     std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("share"))
-        })
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("share")))
 }
 
 /// Last-resort root when the platform gives us nothing.
@@ -603,15 +597,28 @@ mod tests {
         let root = cache_root(&meta, None);
         let base = platform_cache_base().unwrap();
 
-        assert!(root.starts_with(&base), "{} not under {}", root.display(), base.display());
-        assert!(root.ends_with("snug/SynapticLoop/Demo"), "got {}", root.display());
+        assert!(
+            root.starts_with(&base),
+            "{} not under {}",
+            root.display(),
+            base.display()
+        );
+        assert!(
+            root.ends_with("snug/SynapticLoop/Demo"),
+            "got {}",
+            root.display()
+        );
     }
 
     #[cfg(target_os = "macos")]
     #[test]
     fn app_support_base_is_application_support_not_caches() {
         let support = platform_app_support_base().expect("Foundation should answer");
-        assert!(support.is_absolute(), "{} should be absolute", support.display());
+        assert!(
+            support.is_absolute(),
+            "{} should be absolute",
+            support.display()
+        );
         assert!(
             support.ends_with("Library/Application Support"),
             "expected .../Library/Application Support, got {}",
@@ -721,7 +728,10 @@ mod tests {
         // instead, matching how XDG_CACHE_HOME is already treated.
         let platform = PathBuf::from("/Users/someone/Library/Caches");
         assert_eq!(
-            pick_cache_base(Some(OsString::from("relative/cache")), Some(platform.clone())),
+            pick_cache_base(
+                Some(OsString::from("relative/cache")),
+                Some(platform.clone())
+            ),
             platform
         );
     }
@@ -978,7 +988,10 @@ mod tests {
         let old = NOW - Duration::from_secs(30 * 24 * 3600);
         touch_at(&jar, old);
         let before = std::fs::metadata(&jar).unwrap().modified().unwrap();
-        assert!(before < SystemTime::now(), "fixture should start in the past");
+        assert!(
+            before < SystemTime::now(),
+            "fixture should start in the past"
+        );
 
         touch(&jar).unwrap();
 
@@ -1040,7 +1053,14 @@ mod tests {
         // Five fresh entries; the budget is clamped to MIN_CACHE_BUDGET
         // for a tiny build, so the *count* is what limits retention.
         let names: Vec<String> = (1..=5u8)
-            .map(|n| entry(&root, &hash_name(n), 1024, Duration::from_secs(5 - n as u64)))
+            .map(|n| {
+                entry(
+                    &root,
+                    &hash_name(n),
+                    1024,
+                    Duration::from_secs(5 - n as u64),
+                )
+            })
             .collect();
         // The current build is the newest, as it would be in practice.
         let current: HashSet<String> = [names[4].clone()].into_iter().collect();
@@ -1097,7 +1117,12 @@ mod tests {
     #[test]
     fn sweep_keeps_entries_younger_than_the_age_limit() {
         let root = tempdir();
-        let recent = entry(&root, &hash_name(1), 10, Duration::from_secs(29 * 24 * 3600));
+        let recent = entry(
+            &root,
+            &hash_name(1),
+            10,
+            Duration::from_secs(29 * 24 * 3600),
+        );
         let current: HashSet<String> = HashSet::new();
 
         let report = sweep(&root, &current, 0, NOW);

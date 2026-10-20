@@ -128,14 +128,17 @@ fn check(exe: &Path, png: &Path) -> Result<String, String> {
         .ok_or("no resource directory at all — nothing was ever stamped")?;
 
     // --- the MAINICON group must declare every resolution ----------------
-    let widths = group_widths(resources)
-        .ok_or("no RT_GROUP_ICON / MAINICON entry — the EXE has no icon")?;
+    let widths =
+        group_widths(resources).ok_or("no RT_GROUP_ICON / MAINICON entry — the EXE has no icon")?;
     if widths.is_empty() {
         return Err("MAINICON group is empty".to_string());
     }
     // A zero bWidth is how a GRPICONDIRENTRY spells 256, since the field
     // is a single byte.
-    let declared: Vec<u32> = widths.iter().map(|&w| if w == 0 { 256 } else { w as u32 }).collect();
+    let declared: Vec<u32> = widths
+        .iter()
+        .map(|&w| if w == 0 { 256 } else { w as u32 })
+        .collect();
     if let Some(missing) = expected_widths().iter().find(|w| !declared.contains(w)) {
         return Err(format!(
             "MAINICON declares {declared:?} but is missing the {missing}x{missing} \
@@ -177,7 +180,11 @@ fn check(exe: &Path, png: &Path) -> Result<String, String> {
                 "{} orphan RT_ICON entr{} left from an earlier stamp \
                  ({} referenced by MAINICON) — this file is carrying dead icon bytes",
                 total - widths.len(),
-                if total - widths.len() == 1 { "y" } else { "ies" },
+                if total - widths.len() == 1 {
+                    "y"
+                } else {
+                    "ies"
+                },
                 widths.len(),
             ));
         }
@@ -203,14 +210,16 @@ fn expected_widths() -> Vec<u32> {
 /// correct for no gain: snug-cli's `image` dependency already has the
 /// `png` feature, so this decodes with what is already linked in.
 fn decode_entry(bytes: &[u8]) -> Result<image::RgbaImage, String> {
-    image::load_from_memory(bytes).map(|i| i.to_rgba8()).map_err(|e| {
-        format!(
-            "MAINICON holds {len} bytes that are not a decodable image: {e}\n\
+    image::load_from_memory(bytes)
+        .map(|i| i.to_rgba8())
+        .map_err(|e| {
+            format!(
+                "MAINICON holds {len} bytes that are not a decodable image: {e}\n\
              first 16 bytes: {prefix}",
-            len = bytes.len(),
-            prefix = hex(&bytes[..bytes.len().min(16)]),
-        )
-    })
+                len = bytes.len(),
+                prefix = hex(&bytes[..bytes.len().min(16)]),
+            )
+        })
 }
 
 /// Compare two same-sized RGBA images, reporting the first pixel that
@@ -254,8 +263,9 @@ fn compare_rgba(actual: &image::RgbaImage, expected: &image::RgbaImage) -> Resul
 /// The `bWidth` of every `GRPICONDIRENTRY` in the `MAINICON` group, in
 /// declaration order. `None` when the group is absent or malformed.
 fn group_widths(resources: &editpe::ResourceDirectory) -> Option<Vec<u8>> {
-    let editpe::ResourceEntry::Table(group_table) =
-        resources.root().get(editpe::ResourceEntryName::ID(RT_GROUP_ICON))?
+    let editpe::ResourceEntry::Table(group_table) = resources
+        .root()
+        .get(editpe::ResourceEntryName::ID(RT_GROUP_ICON))?
     else {
         return None;
     };
@@ -285,8 +295,9 @@ fn group_widths(resources: &editpe::ResourceDirectory) -> Option<Vec<u8>> {
 
 /// How many `RT_ICON` entries the file holds, referenced or not.
 fn icon_entry_count(resources: &editpe::ResourceDirectory) -> Option<usize> {
-    let editpe::ResourceEntry::Table(table) =
-        resources.root().get(editpe::ResourceEntryName::ID(RT_ICON))?
+    let editpe::ResourceEntry::Table(table) = resources
+        .root()
+        .get(editpe::ResourceEntryName::ID(RT_ICON))?
     else {
         return None;
     };
@@ -344,7 +355,10 @@ mod tests {
     #[test]
     fn the_payload_is_a_bare_png() {
         let bytes = encode_png(&gradient(2, 2));
-        assert_eq!(&bytes[..8], &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]);
+        assert_eq!(
+            &bytes[..8],
+            &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]
+        );
         assert_eq!(&bytes[..8], &encode_png(&gradient(2, 2))[..8]);
     }
 
@@ -372,7 +386,10 @@ mod tests {
     fn non_image_bytes_are_rejected_with_a_hex_prefix() {
         let err = decode_entry(&[0xde, 0xad, 0xbe, 0xef, 0x00, 0x11])
             .expect_err("garbage should not decode");
-        assert!(err.contains("de ad be ef"), "expected a hex dump, got: {err}");
+        assert!(
+            err.contains("de ad be ef"),
+            "expected a hex dump, got: {err}"
+        );
     }
 
     #[test]

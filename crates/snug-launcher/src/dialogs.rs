@@ -303,11 +303,7 @@ pub fn resolve<'a>(caller: Option<&'a str>, catalog: &'a str) -> Option<&'a str>
 /// to hand back -- so an empty caller string falls through to the
 /// catalog rather than painting nothing.
 pub fn pick<'a>(caller: &'a str, catalog: &'a str) -> &'a str {
-    if caller.is_empty() {
-        catalog
-    } else {
-        caller
-    }
+    if caller.is_empty() { catalog } else { caller }
 }
 
 /// The assembled copy plus the [`crate::localize::generation`] it was
@@ -378,93 +374,93 @@ pub fn dialogs() -> &'static Dialogs {
 fn assemble() -> Dialogs {
     use crate::localize::lookup;
     Dialogs {
-            runtime: RuntimeDialogs {
-                prompt: InstallPromptDialog {
-                    title: lookup("runtime.prompt.title"),
-                    heading: lookup("runtime.prompt.heading"),
-                    subheading: lookup("runtime.prompt.subheading"),
-                    content: lookup("runtime.prompt.content"),
-                    info_heading: lookup("runtime.prompt.info_heading"),
-                    info_subtext: lookup("runtime.prompt.info_subtext"),
-                    info_subtext_2: lookup("runtime.prompt.info_subtext_2"),
-                    button_download: lookup("runtime.prompt.button_download"),
-                    button_cancel: lookup("runtime.prompt.button_cancel"),
-                },
-                metadata_failed: MetadataFailedDialog {
-                    title: lookup("runtime.metadata_failed.title"),
-                    heading: lookup("runtime.metadata_failed.heading"),
-                    subheading: lookup("runtime.metadata_failed.subheading"),
-                    content: lookup("runtime.metadata_failed.content"),
-                    info_heading: lookup("runtime.metadata_failed.info_heading"),
-                    info_subtext: lookup("runtime.metadata_failed.info_subtext"),
-                    info_subtext_2: lookup("runtime.metadata_failed.info_subtext_2"),
-                    button_open_browser: lookup("runtime.metadata_failed.button_open_browser"),
-                    button_cancel: lookup("runtime.metadata_failed.button_cancel"),
-                },
-                progress: ProgressDialog {
-                    title: lookup("runtime.progress.title"),
-                    heading: lookup("runtime.progress.heading"),
-                    subheading: lookup("runtime.progress.subheading"),
-                    content: lookup("runtime.progress.content"),
-                    pct_label: lookup("runtime.progress.pct_label"),
-                    phase_label: lookup("runtime.progress.phase_label"),
-                    detail_with_size: lookup("runtime.progress.detail_with_size"),
-                    detail_no_size: lookup("runtime.progress.detail_no_size"),
-                    detail_eta_seconds: lookup("runtime.progress.detail_eta_seconds"),
-                    detail_eta_second: lookup("runtime.progress.detail_eta_second"),
-                    detail_eta_done: lookup("runtime.progress.detail_eta_done"),
-                    info_heading: lookup("runtime.progress.info_heading"),
-                    info_subtext: lookup("runtime.progress.info_subtext"),
-                    info_subtext_2: lookup("runtime.progress.info_subtext_2"),
-                    arch_macos_arm64: lookup("runtime.progress.arch_macos_arm64"),
-                    arch_macos_x86_64: lookup("runtime.progress.arch_macos_x86_64"),
-                    arch_windows_x86_64: lookup("runtime.progress.arch_windows_x86_64"),
-                },
-                failure: FailureDialog {
-                    title: lookup("runtime.failure.title"),
-                    heading: lookup("runtime.failure.heading"),
-                    subheading: lookup("runtime.failure.subheading"),
-                    // Intentionally empty in the baseline: `error_window`
-                    // treats an empty body as "use the module default".
-                    content: lookup("runtime.failure.content"),
-                    info_heading: lookup("runtime.failure.info_heading"),
-                    info_subtext: lookup("runtime.failure.info_subtext"),
-                    info_subtext_2: lookup("runtime.failure.info_subtext_2"),
-                    button_label: lookup("runtime.failure.button_label"),
-                },
-                retry: RetryDialog {
-                    title: lookup("runtime.retry.title"),
-                    heading: lookup("runtime.retry.heading"),
-                    subheading: lookup("runtime.retry.subheading"),
-                    content: lookup("runtime.retry.content"),
-                    info_heading: lookup("runtime.retry.info_heading"),
-                    info_subtext: lookup("runtime.retry.info_subtext"),
-                    info_subtext_2: lookup("runtime.retry.info_subtext_2"),
-                    button_retry: lookup("runtime.retry.button_retry"),
-                    button_cancel: lookup("runtime.retry.button_cancel"),
-                },
+        runtime: RuntimeDialogs {
+            prompt: InstallPromptDialog {
+                title: lookup("runtime.prompt.title"),
+                heading: lookup("runtime.prompt.heading"),
+                subheading: lookup("runtime.prompt.subheading"),
+                content: lookup("runtime.prompt.content"),
+                info_heading: lookup("runtime.prompt.info_heading"),
+                info_subtext: lookup("runtime.prompt.info_subtext"),
+                info_subtext_2: lookup("runtime.prompt.info_subtext_2"),
+                button_download: lookup("runtime.prompt.button_download"),
+                button_cancel: lookup("runtime.prompt.button_cancel"),
             },
-            generic: GenericDialogs {
-                error_dialog_ok: lookup("generic.error_dialog_ok"),
-                info_dialog_continue: lookup("generic.info_dialog_continue"),
+            metadata_failed: MetadataFailedDialog {
+                title: lookup("runtime.metadata_failed.title"),
+                heading: lookup("runtime.metadata_failed.heading"),
+                subheading: lookup("runtime.metadata_failed.subheading"),
+                content: lookup("runtime.metadata_failed.content"),
+                info_heading: lookup("runtime.metadata_failed.info_heading"),
+                info_subtext: lookup("runtime.metadata_failed.info_subtext"),
+                info_subtext_2: lookup("runtime.metadata_failed.info_subtext_2"),
+                button_open_browser: lookup("runtime.metadata_failed.button_open_browser"),
+                button_cancel: lookup("runtime.metadata_failed.button_cancel"),
             },
-            launcher: LauncherDialogs {
-                error: LauncherErrorDialogs {
-                    title: lookup("launcher.error.title"),
-                    heading: lookup("launcher.error.heading"),
-                    subheading: lookup("launcher.error.subheading"),
-                    // `{error}` — the launcher fills this from the
-                    // matching `err.*` key, which is how a localized
-                    // error body lands in a localized frame.
-                    content: lookup("launcher.error.content"),
-                    info_heading: lookup("launcher.error.info_heading"),
-                    info_subtext: lookup("launcher.error.info_subtext"),
-                    info_subtext_2: lookup("launcher.error.info_subtext_2"),
-                    button_exit: lookup("launcher.error.button_exit"),
-            button_update: lookup("launcher.error.button_update"),
-                        },
+            progress: ProgressDialog {
+                title: lookup("runtime.progress.title"),
+                heading: lookup("runtime.progress.heading"),
+                subheading: lookup("runtime.progress.subheading"),
+                content: lookup("runtime.progress.content"),
+                pct_label: lookup("runtime.progress.pct_label"),
+                phase_label: lookup("runtime.progress.phase_label"),
+                detail_with_size: lookup("runtime.progress.detail_with_size"),
+                detail_no_size: lookup("runtime.progress.detail_no_size"),
+                detail_eta_seconds: lookup("runtime.progress.detail_eta_seconds"),
+                detail_eta_second: lookup("runtime.progress.detail_eta_second"),
+                detail_eta_done: lookup("runtime.progress.detail_eta_done"),
+                info_heading: lookup("runtime.progress.info_heading"),
+                info_subtext: lookup("runtime.progress.info_subtext"),
+                info_subtext_2: lookup("runtime.progress.info_subtext_2"),
+                arch_macos_arm64: lookup("runtime.progress.arch_macos_arm64"),
+                arch_macos_x86_64: lookup("runtime.progress.arch_macos_x86_64"),
+                arch_windows_x86_64: lookup("runtime.progress.arch_windows_x86_64"),
             },
-        }
+            failure: FailureDialog {
+                title: lookup("runtime.failure.title"),
+                heading: lookup("runtime.failure.heading"),
+                subheading: lookup("runtime.failure.subheading"),
+                // Intentionally empty in the baseline: `error_window`
+                // treats an empty body as "use the module default".
+                content: lookup("runtime.failure.content"),
+                info_heading: lookup("runtime.failure.info_heading"),
+                info_subtext: lookup("runtime.failure.info_subtext"),
+                info_subtext_2: lookup("runtime.failure.info_subtext_2"),
+                button_label: lookup("runtime.failure.button_label"),
+            },
+            retry: RetryDialog {
+                title: lookup("runtime.retry.title"),
+                heading: lookup("runtime.retry.heading"),
+                subheading: lookup("runtime.retry.subheading"),
+                content: lookup("runtime.retry.content"),
+                info_heading: lookup("runtime.retry.info_heading"),
+                info_subtext: lookup("runtime.retry.info_subtext"),
+                info_subtext_2: lookup("runtime.retry.info_subtext_2"),
+                button_retry: lookup("runtime.retry.button_retry"),
+                button_cancel: lookup("runtime.retry.button_cancel"),
+            },
+        },
+        generic: GenericDialogs {
+            error_dialog_ok: lookup("generic.error_dialog_ok"),
+            info_dialog_continue: lookup("generic.info_dialog_continue"),
+        },
+        launcher: LauncherDialogs {
+            error: LauncherErrorDialogs {
+                title: lookup("launcher.error.title"),
+                heading: lookup("launcher.error.heading"),
+                subheading: lookup("launcher.error.subheading"),
+                // `{error}` — the launcher fills this from the
+                // matching `err.*` key, which is how a localized
+                // error body lands in a localized frame.
+                content: lookup("launcher.error.content"),
+                info_heading: lookup("launcher.error.info_heading"),
+                info_subtext: lookup("launcher.error.info_subtext"),
+                info_subtext_2: lookup("launcher.error.info_subtext_2"),
+                button_exit: lookup("launcher.error.button_exit"),
+                button_update: lookup("launcher.error.button_update"),
+            },
+        },
+    }
 }
 
 /// Substitute `{name}` placeholders in `template` with the
@@ -532,10 +528,7 @@ mod tests {
     fn an_escape_is_local_to_its_own_brace() {
         let subs = [("size_mb", "7"), ("total_mb", "9")];
         // Escaped, live: the escape affects only its own brace.
-        assert_eq!(
-            fill(r"\{size_mb} of {total_mb}", &subs),
-            "{size_mb} of 9"
-        );
+        assert_eq!(fill(r"\{size_mb} of {total_mb}", &subs), "{size_mb} of 9");
         // Both escaped: both survive verbatim, which is what a book
         // scaffold wants when it is documenting slots rather than
         // filling them.
@@ -599,21 +592,33 @@ mod tests {
             ("prompt.button_download", &d.runtime.prompt.button_download),
             ("prompt.button_cancel", &d.runtime.prompt.button_cancel),
             ("metadata_failed.title", &d.runtime.metadata_failed.title),
-            ("metadata_failed.content", &d.runtime.metadata_failed.content),
-            ("metadata_failed.button_cancel", &d.runtime.metadata_failed.button_cancel),
+            (
+                "metadata_failed.content",
+                &d.runtime.metadata_failed.content,
+            ),
+            (
+                "metadata_failed.button_cancel",
+                &d.runtime.metadata_failed.button_cancel,
+            ),
             ("progress.title", &d.runtime.progress.title),
             ("progress.heading", &d.runtime.progress.heading),
             ("progress.subheading", &d.runtime.progress.subheading),
             ("progress.content", &d.runtime.progress.content),
             ("progress.pct_label", &d.runtime.progress.pct_label),
-            ("progress.detail_with_size", &d.runtime.progress.detail_with_size),
+            (
+                "progress.detail_with_size",
+                &d.runtime.progress.detail_with_size,
+            ),
             ("failure.title", &d.runtime.failure.title),
             ("failure.button_label", &d.runtime.failure.button_label),
             ("retry.title", &d.runtime.retry.title),
             ("retry.content", &d.runtime.retry.content),
             ("retry.button_retry", &d.runtime.retry.button_retry),
             ("generic.error_dialog_ok", &d.generic.error_dialog_ok),
-            ("generic.info_dialog_continue", &d.generic.info_dialog_continue),
+            (
+                "generic.info_dialog_continue",
+                &d.generic.info_dialog_continue,
+            ),
             ("launcher.error.title", &d.launcher.error.title),
             ("launcher.error.content", &d.launcher.error.content),
             ("launcher.error.button_exit", &d.launcher.error.button_exit),
@@ -644,8 +649,14 @@ mod tests {
         assert!(!prompt.contains("\\n"), "escapes were not decoded");
 
         let failed = &d.runtime.metadata_failed.content;
-        assert!(failed.contains("\n"), "metadata body lost its line break: {failed:?}");
-        assert!(failed.starts_with("Technical detail:\n{error}"), "{failed:?}");
+        assert!(
+            failed.contains("\n"),
+            "metadata body lost its line break: {failed:?}"
+        );
+        assert!(
+            failed.starts_with("Technical detail:\n{error}"),
+            "{failed:?}"
+        );
         assert!(!failed.contains("\\n"), "escapes were not decoded");
     }
 
@@ -665,7 +676,10 @@ mod tests {
         // by default, the same as every other key in the dialog.
         let content = crate::dialogs::fill(
             dialogs().runtime.failure.content.as_str(),
-            &[("version", "25.0.1+9"), ("error", "HTTP 503 from api.adoptium.net")],
+            &[
+                ("version", "25.0.1+9"),
+                ("error", "HTTP 503 from api.adoptium.net"),
+            ],
         );
         assert!(
             content.contains("HTTP 503 from api.adoptium.net"),

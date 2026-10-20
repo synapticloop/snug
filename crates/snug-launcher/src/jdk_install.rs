@@ -57,9 +57,7 @@ use windows_sys::Win32::Foundation::HWND;
 #[cfg(windows)]
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 #[cfg(windows)]
-use windows_sys::Win32::UI::WindowsAndMessaging::{
-    HICON, IDCANCEL, IDOK, IDYES, SW_SHOWNORMAL,
-};
+use windows_sys::Win32::UI::WindowsAndMessaging::{HICON, IDCANCEL, IDOK, IDYES, SW_SHOWNORMAL};
 
 /// Mirrors of the Win32 control IDs, for platforms that have no
 /// `windows-sys` dependency at all.
@@ -112,9 +110,7 @@ impl std::fmt::Display for JdkError {
             JdkError::NoMetadataForVersion(_) => {
                 crate::localize::lookup("jdk.err.no_metadata_for_version")
             }
-            JdkError::BadMetadataShape(_) => {
-                crate::localize::lookup("jdk.err.bad_metadata_shape")
-            }
+            JdkError::BadMetadataShape(_) => crate::localize::lookup("jdk.err.bad_metadata_shape"),
             JdkError::BadField { .. } => crate::localize::lookup("jdk.err.bad_field"),
             JdkError::Download(_) => crate::localize::lookup("jdk.err.download"),
             JdkError::Sha256Mismatch { .. } => crate::localize::lookup("jdk.err.sha256_mismatch"),
@@ -139,24 +135,18 @@ impl std::fmt::Display for JdkError {
             JdkError::Download(m) => {
                 crate::localize::fill_placeholders(&s, &[("0", &m.to_string())])
             }
-            JdkError::Sha256Mismatch { declared, computed } => {
-                crate::localize::fill_placeholders(
-                    &s,
-                    &[("declared", declared), ("computed", computed)],
-                )
-            }
+            JdkError::Sha256Mismatch { declared, computed } => crate::localize::fill_placeholders(
+                &s,
+                &[("declared", declared), ("computed", computed)],
+            ),
             JdkError::Extract(m) => {
                 crate::localize::fill_placeholders(&s, &[("0", &m.to_string())])
             }
             JdkError::NoJavaExe(p) => {
                 crate::localize::fill_placeholders(&s, &[("0", &p.display().to_string())])
             }
-            JdkError::Io(e) => {
-                crate::localize::fill_placeholders(&s, &[("0", &e.to_string())])
-            }
-            JdkError::Dialog(m) => {
-                crate::localize::fill_placeholders(&s, &[("0", &m.to_string())])
-            }
+            JdkError::Io(e) => crate::localize::fill_placeholders(&s, &[("0", &e.to_string())]),
+            JdkError::Dialog(m) => crate::localize::fill_placeholders(&s, &[("0", &m.to_string())]),
         };
         f.write_str(&rendered)
     }
@@ -281,8 +271,8 @@ pub fn fetch_metadata(min_java_major: u16) -> Result<JdkMetadata, JdkError> {
     let body = resp
         .into_string()
         .map_err(|e| JdkError::MetadataFetch(e.to_string()))?;
-    let list: AdoptiumAssetList = serde_json::from_str(&body)
-        .map_err(|e| JdkError::BadMetadataShape(e.to_string()))?;
+    let list: AdoptiumAssetList =
+        serde_json::from_str(&body).map_err(|e| JdkError::BadMetadataShape(e.to_string()))?;
 
     let asset = list
         .0
@@ -319,7 +309,6 @@ pub fn fetch_metadata(min_java_major: u16) -> Result<JdkMetadata, JdkError> {
         major: min_java_major,
     })
 }
-
 
 // ===========================================================================
 //  Progress dialog: callback + thread-local shared state
@@ -600,10 +589,17 @@ pub(crate) fn find_best_icon_hicon(cx: i32, cy: i32) -> Option<HICON> {
         // Try the "MAINICON" name first (which is what `editpe`
         // writes), then fall back to id=1 (Windows convention, used
         // by `rcedit` and similar tools).
-        let name_w: Vec<u16> = "MAINICON".encode_utf16().chain(std::iter::once(0)).collect();
+        let name_w: Vec<u16> = "MAINICON"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
         let hres_named = FindResourceW(hinst, name_w.as_ptr(), RT_GROUP_ICON as *const u16);
         let hres = if hres_named.is_null() {
-            FindResourceW(hinst, std::ptr::dangling::<u16>(), RT_GROUP_ICON as *const u16)
+            FindResourceW(
+                hinst,
+                std::ptr::dangling::<u16>(),
+                RT_GROUP_ICON as *const u16,
+            )
         } else {
             hres_named
         };
@@ -655,11 +651,7 @@ pub(crate) fn find_best_icon_hicon(cx: i32, cy: i32) -> Option<HICON> {
 
         // RT_ICON contains either PNG-compressed pixels or a DIB, not
         // a complete ICO file. Let Windows decode either representation.
-        let hres_icon = FindResourceW(
-            hinst,
-            best_id as usize as *const u16,
-            RT_ICON as *const u16,
-        );
+        let hres_icon = FindResourceW(hinst, best_id as usize as *const u16, RT_ICON as *const u16);
         if hres_icon.is_null() {
             return None;
         }
@@ -679,24 +671,11 @@ pub(crate) fn find_best_icon_hicon(cx: i32, cy: i32) -> Option<HICON> {
         // `CreateIconFromResourceEx` flags: `fIcon=1` (true) for icons,
         // `dwVer=0x00030000` for Win3.0+ format. `LR_SHARED` returns a
         // shared handle the system manages â€” no `DestroyIcon` needed.
-        let hicon = CreateIconFromResourceEx(
-            pbits as *const u8,
-            bytes,
-            1,
-            0x00030000,
-            cx,
-            cy,
-            LR_SHARED,
-        );
-        if hicon.is_null() {
-            None
-        } else {
-            Some(hicon)
-        }
+        let hicon =
+            CreateIconFromResourceEx(pbits as *const u8, bytes, 1, 0x00030000, cx, cy, LR_SHARED);
+        if hicon.is_null() { None } else { Some(hicon) }
     }
 }
-
-
 
 // ===========================================================================
 //  Stream-to-disk, hash-on-disk, extract
@@ -719,7 +698,10 @@ fn download_to_disk(
         .call()
         .map_err(|e| JdkError::Download(e.to_string()))?;
     if resp.status() != 200 {
-        return Err(JdkError::Download(format!("HTTP {} for {url}", resp.status())));
+        return Err(JdkError::Download(format!(
+            "HTTP {} for {url}",
+            resp.status()
+        )));
     }
 
     let mut f = std::fs::File::create(dest)?;
@@ -768,7 +750,11 @@ fn hash_file_sha256(path: &Path, cancel: &AtomicBool) -> Result<String, JdkError
         }
         hasher.update(&buf[..n]);
     }
-    Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
 }
 
 /// Unpack a downloaded JDK archive into `dest_dir`.
@@ -840,11 +826,7 @@ fn expect_extension(archive: &Path, expected: &str) -> Result<(), JdkError> {
 }
 
 #[cfg(windows)]
-fn extract_jdk_zip(
-    zip: &Path,
-    dest_dir: &Path,
-    cancel: &AtomicBool,
-) -> Result<PathBuf, JdkError> {
+fn extract_jdk_zip(zip: &Path, dest_dir: &Path, cancel: &AtomicBool) -> Result<PathBuf, JdkError> {
     let file = std::fs::File::open(zip)?;
     let mut zip_reader = zip::ZipArchive::new(file)?;
     std::fs::create_dir_all(dest_dir)?;
@@ -1108,11 +1090,11 @@ fn worker_thread(
 
     // The bar is split monotonically across the three phases so the user
     // never sees it move backwards:
-//   - phase 0 (download)   : 0 â†’ 95%
-//   - phase 1 (verify SHA) : 95 â†’ 98%
-//   - phase 2 (extract)    : 98 â†’ 100%
-// The earlier 0â†’99â†’95â†’99â†’100 sequence made the bar look like it
-// reset when the user clicked Download â€” confusing.
+    //   - phase 0 (download)   : 0 â†’ 95%
+    //   - phase 1 (verify SHA) : 95 â†’ 98%
+    //   - phase 2 (extract)    : 98 â†’ 100%
+    // The earlier 0â†’99â†’95â†’99â†’100 sequence made the bar look like it
+    // reset when the user clicked Download â€” confusing.
 
     // Phase 0: download. `on_progress` updates the bytes/pct shared
     // state so the dialog callback can render live text + bar.
@@ -1340,12 +1322,16 @@ const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(300);
 const LOCK_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(900);
 
 #[cfg(windows)]
-fn cfg_if_lock(path: &Path, major: u16, wait: std::time::Duration) -> Result<InstallLock, JdkError> {
+fn cfg_if_lock(
+    path: &Path,
+    major: u16,
+    wait: std::time::Duration,
+) -> Result<InstallLock, JdkError> {
     use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::System::IO::OVERLAPPED;
     use windows_sys::Win32::Storage::FileSystem::{
-        LockFileEx, LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY,
+        LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY, LockFileEx,
     };
+    use windows_sys::Win32::System::IO::OVERLAPPED;
 
     let file = std::fs::OpenOptions::new()
         .read(true)
@@ -1421,7 +1407,11 @@ fn cfg_unlock(_path: &Path) {}
 /// than papered over, so the difference is visible if this ever runs
 /// somewhere it matters.
 #[cfg(not(windows))]
-fn cfg_if_lock(path: &Path, major: u16, wait: std::time::Duration) -> Result<InstallLock, JdkError> {
+fn cfg_if_lock(
+    path: &Path,
+    major: u16,
+    wait: std::time::Duration,
+) -> Result<InstallLock, JdkError> {
     let deadline = std::time::Instant::now() + wait;
     loop {
         match std::fs::OpenOptions::new()
@@ -1516,8 +1506,7 @@ pub fn maybe_install(
         Ok(m) => {
             log::log(&format!(
                 "Adoptium metadata: version={}, size={} bytes",
-                m.version,
-                m.size_bytes
+                m.version, m.size_bytes
             ));
             log::log(&format!("Adoptium package link: {}", m.package_link));
             log::log(&format!("Adoptium SHA-256: {}", m.sha256));
@@ -1525,12 +1514,9 @@ pub fn maybe_install(
         }
         Err(e) => {
             log::log(&format!("Adoptium metadata fetch failed: {e}"));
-            if ui::metadata_failed(parent, min_java_major, &e.to_string())
-                == IDYES
-            {
-                let url = format!(
-                    "https://adoptium.net/temurin/releases/?version={min_java_major}"
-                );
+            if ui::metadata_failed(parent, min_java_major, &e.to_string()) == IDYES {
+                let url =
+                    format!("https://adoptium.net/temurin/releases/?version={min_java_major}");
                 let _ = open_in_browser(&url);
                 log::log(&format!("opened browser at {url}"));
             }
@@ -1562,7 +1548,11 @@ pub fn maybe_install(
     // Named after the actual archive format: `extract_jdk_archive`
     // dispatches on this extension, and a `.zip.tmp` holding a tarball
     // would be handed to the zip reader.
-    let archive_suffix = if cfg!(target_os = "macos") { ".tar.gz" } else { ".zip" };
+    let archive_suffix = if cfg!(target_os = "macos") {
+        ".tar.gz"
+    } else {
+        ".zip"
+    };
     let tmp_zip = install_root.join(format!("{min_java_major}{archive_suffix}.tmp"));
 
     for attempt in 1..=MAX_DOWNLOAD_ATTEMPTS {
@@ -1664,7 +1654,10 @@ fn run_one_install_attempt(
     let staging = staging_dir(install_dir);
     let _ = std::fs::remove_dir_all(&staging);
     if let Err(e) = std::fs::create_dir_all(&staging) {
-        log::log(&format!("could not create staging {}: {e}", staging.display()));
+        log::log(&format!(
+            "could not create staging {}: {e}",
+            staging.display()
+        ));
         return AttemptOutcome::Failed(format!("creating staging directory: {e}"));
     }
     let _ = std::fs::remove_file(tmp_zip);
@@ -1673,12 +1666,7 @@ fn run_one_install_attempt(
     // outstanding thing is a human decision — never a worker thread
     // waiting on a window that may never appear. See `ui::consent`.
     let size_mb = (metadata.size_bytes as f64 / 1_048_576.0).round() as u32;
-    if !ui::consent(
-        parent,
-        &metadata.version,
-        size_mb,
-        &metadata.sha256,
-    ) {
+    if !ui::consent(parent, &metadata.version, size_mb, &metadata.sha256) {
         log::log("user declined the install prompt; not downloading");
         return AttemptOutcome::Cancelled;
     }
@@ -1799,7 +1787,11 @@ fn staging_dir(install_dir: &Path) -> PathBuf {
 /// sees no directory at all, or a finished one. Removing the old tree first
 /// is safe *because the caller holds the install lock* -- see
 /// [`InstallLock`].
-fn publish(staging: &Path, install_dir: &Path, home_in_staging: &Path) -> Result<PathBuf, JdkError> {
+fn publish(
+    staging: &Path,
+    install_dir: &Path,
+    home_in_staging: &Path,
+) -> Result<PathBuf, JdkError> {
     let rel = home_in_staging
         .strip_prefix(staging)
         .map_err(|e| JdkError::Io(std::io::Error::other(format!("rebase {e}"))))?;
@@ -1867,12 +1859,7 @@ mod ui {
     /// escape hatch, but it never opened anything — only `Download`
     /// counted as consent — so it closed the dialog and did nothing.
     #[cfg(windows)]
-    pub fn consent(
-        parent: ParentWindow,
-        version: &str,
-        size_mb: u32,
-        sha256: &str,
-    ) -> bool {
+    pub fn consent(parent: ParentWindow, version: &str, size_mb: u32, sha256: &str) -> bool {
         let d = dialogs::dialogs();
         // Pass 0 and let `modal_window` resolve the mascot itself. It
         // already does exactly this when a caller has nothing to offer:
@@ -1904,12 +1891,7 @@ mod ui {
     }
 
     #[cfg(target_os = "macos")]
-    pub fn consent(
-        _parent: ParentWindow,
-        version: &str,
-        size_mb: u32,
-        sha256: &str,
-    ) -> bool {
+    pub fn consent(_parent: ParentWindow, version: &str, size_mb: u32, sha256: &str) -> bool {
         crate::appkit::consent(version, size_mb, sha256)
     }
 
@@ -1926,24 +1908,12 @@ mod ui {
 
     /// Retry / Cancel between failed attempts. `true` means "retry".
     #[cfg(windows)]
-    pub fn retry(
-        parent: ParentWindow,
-        attempt: u32,
-        max: u32,
-        version: &str,
-        err: &str,
-    ) -> bool {
+    pub fn retry(parent: ParentWindow, attempt: u32, max: u32, version: &str, err: &str) -> bool {
         unsafe { super::show_retry_dialog(parent, attempt, max, version, err) }
     }
 
     #[cfg(target_os = "macos")]
-    pub fn retry(
-        _parent: ParentWindow,
-        attempt: u32,
-        max: u32,
-        version: &str,
-        err: &str,
-    ) -> bool {
+    pub fn retry(_parent: ParentWindow, attempt: u32, max: u32, version: &str, err: &str) -> bool {
         crate::appkit::retry(attempt, max, version, err)
     }
 
@@ -1985,8 +1955,7 @@ mod ui {
         main: &str,
         shared: Arc<ProgressShared>,
     ) -> bool {
-        let clicked =
-            unsafe { crate::progress_window::show(parent, title, main, shared.clone()) };
+        let clicked = unsafe { crate::progress_window::show(parent, title, main, shared.clone()) };
         if clicked != IDOK {
             shared.cancel.store(true, Ordering::SeqCst);
             if shared.done.load(Ordering::SeqCst) == 0 {
@@ -2256,7 +2225,9 @@ pub(crate) fn open_in_browser(url: &str) -> Result<(), JdkError> {
     if code > 32 {
         Ok(())
     } else {
-        Err(JdkError::Dialog(format!("ShellExecuteW failed: code={code}")))
+        Err(JdkError::Dialog(format!(
+            "ShellExecuteW failed: code={code}"
+        )))
     }
 }
 
@@ -2400,9 +2371,17 @@ mod tests {
             .filter(|e| e.path().is_dir() && !e.file_name().to_string_lossy().starts_with('.'))
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(scanned, vec!["25".to_string()], "staging must not be scanned");
+        assert_eq!(
+            scanned,
+            vec!["25".to_string()],
+            "staging must not be scanned"
+        );
         assert!(
-            staging.file_name().unwrap().to_string_lossy().starts_with('.'),
+            staging
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with('.'),
             "staging must be dot-prefixed so the filter can see it: {}",
             staging.display()
         );
@@ -2427,7 +2406,10 @@ mod tests {
 
         assert!(!staging.exists(), "staging must be gone after the rename");
         assert!(published.starts_with(&install_dir));
-        assert!(published.ends_with("jdk-25.0.4+1"), "rebased: {published:?}");
+        assert!(
+            published.ends_with("jdk-25.0.4+1"),
+            "rebased: {published:?}"
+        );
         assert!(published.join("bin").join("marker.txt").is_file());
     }
 
@@ -2445,9 +2427,13 @@ mod tests {
         std::fs::write(java_binary(&nested), b"").unwrap();
 
         let home_in_staging = find_java_home(&staging).expect("home inside staging");
-        let published = publish(&staging, &install_dir, &home_in_staging).expect("publish over existing");
+        let published =
+            publish(&staging, &install_dir, &home_in_staging).expect("publish over existing");
 
-        assert!(!install_dir.join("old").exists(), "old tree must be replaced");
+        assert!(
+            !install_dir.join("old").exists(),
+            "old tree must be replaced"
+        );
         assert_eq!(published, install_dir.join("jdk-25.0.5+1"));
         assert!(java_binary(&published).is_file());
     }
@@ -2517,7 +2503,11 @@ mod tests {
         // the macOS path — the Windows layout has neither the `.jdk`
         // bundle nor the dylib.
         let dir = tempdir();
-        let src = dir.join("src").join("jdk-21.0.1.jdk").join("Contents").join("Home");
+        let src = dir
+            .join("src")
+            .join("jdk-21.0.1.jdk")
+            .join("Contents")
+            .join("Home");
         std::fs::create_dir_all(src.join("bin")).unwrap();
         std::fs::create_dir_all(src.join("lib").join("server")).unwrap();
         std::fs::create_dir_all(src.join("conf")).unwrap();
@@ -2530,7 +2520,8 @@ mod tests {
             let file = std::fs::File::create(&archive).unwrap();
             let enc = flate2::write::GzEncoder::new(file, flate2::Compression::default());
             let mut builder = tar::Builder::new(enc);
-            builder.append_dir_all("jdk-21.0.1.jdk", dir.join("src").join("jdk-21.0.1.jdk"))
+            builder
+                .append_dir_all("jdk-21.0.1.jdk", dir.join("src").join("jdk-21.0.1.jdk"))
                 .unwrap();
             builder.into_inner().unwrap().finish().unwrap();
         }
@@ -2542,7 +2533,12 @@ mod tests {
         // The home is the `Contents/Home` directory, not the `.jdk` root.
         assert!(home.ends_with("Contents/Home"), "got {}", home.display());
         assert!(home.join("bin").join("java").is_file());
-        assert!(home.join("lib").join("server").join("libjvm.dylib").is_file());
+        assert!(
+            home.join("lib")
+                .join("server")
+                .join("libjvm.dylib")
+                .is_file()
+        );
     }
 
     #[cfg(target_os = "macos")]
@@ -2581,7 +2577,6 @@ mod tests {
         };
         println!("metadata ok after {:?}: {}", t0.elapsed(), meta.version);
 
-
         // Reproduce the launcher's conditions exactly: the agent from
         // `http_agent()` (with timeouts) and the download on a *spawned
         // worker thread*, which is where `worker_thread` puts it.
@@ -2593,10 +2588,7 @@ mod tests {
                 Ok(a) => a,
                 Err(e) => return Err(format!("agent: {e}")),
             };
-            let resp = agent
-                .get(&url)
-                .call()
-                .map_err(|e| format!("call: {e}"))?;
+            let resp = agent.get(&url).call().map_err(|e| format!("call: {e}"))?;
             println!("  [worker] headers after {:?}", t1.elapsed());
             let mut reader = resp.into_reader();
             let mut buf = vec![0u8; 256 * 1024];
@@ -2612,7 +2604,8 @@ mod tests {
                                 "  [worker] {:.0}/{:.0} MiB at {:.1} MiB/s ({:?})",
                                 total as f64 / 1_048_576.0,
                                 total_bytes as f64 / 1_048_576.0,
-                                total as f64 / started.elapsed().as_secs_f64().max(0.001)
+                                total as f64
+                                    / started.elapsed().as_secs_f64().max(0.001)
                                     / 1_048_576.0,
                                 started.elapsed(),
                             );
@@ -2709,7 +2702,10 @@ mod tests {
     fn hash_file_sha256_matches_known_value() {
         let dir = tempdir();
         let p = dir.join("a.txt");
-        std::fs::File::create(&p).unwrap().write_all(b"hello").unwrap();
+        std::fs::File::create(&p)
+            .unwrap()
+            .write_all(b"hello")
+            .unwrap();
 
         let h = hash_file_sha256(&p, &never_cancel()).unwrap();
         assert_eq!(
@@ -2740,7 +2736,10 @@ mod tests {
         }
         extract_jdk_zip(&zip_path, &extract_into, &never_cancel()).unwrap();
         let java = extract_into.join("jdk-25/bin/java.exe");
-        assert!(java.exists(), "extracted zip should have jdk-25/bin/java.exe");
+        assert!(
+            java.exists(),
+            "extracted zip should have jdk-25/bin/java.exe"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2778,8 +2777,8 @@ mod tests {
           }
         ]"#;
 
-        let list: AdoptiumAssetList = serde_json::from_str(body)
-            .expect("Adoptium feature_releases JSON shape drifted");
+        let list: AdoptiumAssetList =
+            serde_json::from_str(body).expect("Adoptium feature_releases JSON shape drifted");
         let asset = &list.0[0];
         let binary = &asset.binaries[0];
 
@@ -2805,23 +2804,33 @@ mod tests {
         // Within phase 0, the download is a straight climb from 0 to
         // PHASE_0_PCT_MAX.
         assert_eq!(PHASE_0_PCT_MAX, 95);
-        const { assert!(PHASE_0_PCT_MAX > 0); }
+        const {
+            assert!(PHASE_0_PCT_MAX > 0);
+        }
 
         // Phase 0 â†’ phase 1: no jump backwards.
-        const { assert!(PHASE_1_PCT_START >= PHASE_0_PCT_MAX); }
+        const {
+            assert!(PHASE_1_PCT_START >= PHASE_0_PCT_MAX);
+        }
         // Phase 1 itself climbs.
-        const { assert!(PHASE_1_PCT_END > PHASE_1_PCT_START); }
+        const {
+            assert!(PHASE_1_PCT_END > PHASE_1_PCT_START);
+        }
         assert_eq!(PHASE_1_PCT_END, 98);
 
         // Phase 1 â†’ phase 2: no jump backwards.
-        const { assert!(PHASE_2_PCT_START >= PHASE_1_PCT_END); }
+        const {
+            assert!(PHASE_2_PCT_START >= PHASE_1_PCT_END);
+        }
         assert_eq!(PHASE_2_PCT_START, 99);
 
         // Phase 2 ends at 100.
         // (Verified indirectly: we don't have PHASE_2_PCT_END as a
         // const because we use a literal 100. Asserting against the
         // literal here keeps the invariant explicit.)
-        const { assert!(PHASE_2_PCT_START < 100); }
+        const {
+            assert!(PHASE_2_PCT_START < 100);
+        }
     }
 
     #[test]

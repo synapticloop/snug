@@ -55,7 +55,7 @@ use std::path::{Path, PathBuf};
 // 2024 style-edition sort would reorder it, but the crate is written in
 // the established order and a one-line diff here isn't worth a
 // repo-wide reformat.
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::localization::{DEFAULT_EN_TAG, DEFAULT_EN_TEXT, expected_filename};
 

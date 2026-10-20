@@ -19,10 +19,6 @@ pub use self::windows::locate_payload;
 #[cfg(windows)]
 pub use self::windows::run;
 
-#[cfg(target_os = "macos")]
-pub use self::macos::locate_payload;
-#[cfg(target_os = "macos")]
-pub use self::macos::run;
 /// Payload filename suffix — `<App>.snugpayload`.
 ///
 /// Exported because a producer and a consumer must agree on this name
@@ -31,6 +27,10 @@ pub use self::macos::run;
 /// `.sngpayload` / `.snugpayload` mismatch gets written.
 #[cfg(target_os = "macos")]
 pub use self::macos::PAYLOAD_SUFFIX;
+#[cfg(target_os = "macos")]
+pub use self::macos::locate_payload;
+#[cfg(target_os = "macos")]
+pub use self::macos::run;
 
 #[cfg(not(any(windows, target_os = "macos")))]
 pub use self::other::locate_payload;

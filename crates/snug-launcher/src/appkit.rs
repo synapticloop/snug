@@ -76,16 +76,14 @@ use objc2::runtime::ProtocolObject;
 use objc2::{MainThreadMarker, MainThreadOnly, define_class, extern_methods};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSButton, NSFont,
-    NSLineBreakMode, NSProgressIndicator, NSProgressIndicatorStyle, NSStackView,
-    NSTextField, NSUserInterfaceLayoutOrientation, NSWindow,
-    NSWindowDelegate, NSWindowStyleMask,
+    NSLineBreakMode, NSProgressIndicator, NSProgressIndicatorStyle, NSStackView, NSTextField,
+    NSUserInterfaceLayoutOrientation, NSWindow, NSWindowDelegate, NSWindowStyleMask,
 };
 use objc2_app_kit::{
     NSEventMask, NSImage, NSImageNameApplicationIcon, NSImageScaling, NSImageView,
 };
 use objc2_foundation::{
-    NSDate, NSObject, NSObjectProtocol, NSPoint, NSRect, NSRunLoop, NSRunLoopMode, NSSize,
-    NSString,
+    NSDate, NSObject, NSObjectProtocol, NSPoint, NSRect, NSRunLoop, NSRunLoopMode, NSSize, NSString,
 };
 
 use crate::dialogs;
@@ -613,9 +611,7 @@ fn mascot_image() -> Option<Retained<NSImage>> {
     // arguments. It must run on the main thread, which every caller here
     // is already on by way of owning a `MainThreadMarker`.
     let bundled = unsafe { NSImage::imageNamed(NSImageNameApplicationIcon) };
-    MASCOT_OVERRIDE
-        .with(|m| m.borrow().clone())
-        .or(bundled)
+    MASCOT_OVERRIDE.with(|m| m.borrow().clone()).or(bundled)
 }
 
 /// Add the mascot to `content`, vertically centred in the `height` of
@@ -626,12 +622,7 @@ fn mascot_image() -> Option<Retained<NSImage>> {
 /// a bundle without one simply lays out as it always did. Callers inset by
 /// the return value rather than by the constant, because "no mascot" and
 /// "mascot" then need no branch of their own.
-fn add_mascot(
-    mtm: MainThreadMarker,
-    content: &objc2_app_kit::NSView,
-    y: f64,
-    height: f64,
-) -> f64 {
+fn add_mascot(mtm: MainThreadMarker, content: &objc2_app_kit::NSView, y: f64, height: f64) -> f64 {
     let Some(image) = mascot_image() else {
         return 0.0;
     };
@@ -1091,11 +1082,7 @@ fn stop_app() {
 /// previewer's own state. Same net effect for the reviewer: pick a
 /// language, click a dialog, read it in that language.
 #[cfg(target_os = "macos")]
-pub fn preview_picker(
-    dialogs: &[&str],
-    languages: &[&str],
-) -> Option<(usize, usize)> {
-
+pub fn preview_picker(dialogs: &[&str], languages: &[&str]) -> Option<(usize, usize)> {
     if dialogs.is_empty() {
         return None;
     }
@@ -1160,8 +1147,8 @@ pub fn preview_picker(
 
     let buttons_h = dialogs.len() as f64 * ROW_H + (dialogs.len() as f64 - 1.0) * ROW_GAP;
     let w = 360.0;
-    let h = TOP + TITLE_H + GAP + SUB_H + GAP + POPUP_H + GAP + buttons_h + CLOSE_GAP + ROW_H
-        + BOTTOM;
+    let h =
+        TOP + TITLE_H + GAP + SUB_H + GAP + POPUP_H + GAP + buttons_h + CLOSE_GAP + ROW_H + BOTTOM;
 
     let window = new_window(mtm, w, h);
     window.setTitle(&NSString::from_str("snug — dialog preview"));
@@ -1258,15 +1245,7 @@ pub fn preview_picker(
 
     y = put(&mut y, ROW_H, 0.0);
     // SAFETY: as above, with the responder still alive.
-    let close = unsafe {
-        button(
-            mtm,
-            "Close",
-            -1,
-            &responder,
-            objc2::sel!(dialogClicked:),
-        )
-    };
+    let close = unsafe { button(mtm, "Close", -1, &responder, objc2::sel!(dialogClicked:)) };
     let cw = close.frame().size.width;
     close.setFrame(rect(w - margin - cw, y, cw, ROW_H));
     content.addSubview(&close);
@@ -1330,15 +1309,18 @@ pub fn progress_demo() -> bool {
             std::thread::sleep(Duration::from_millis(60));
             let pct = i * 100 / STEPS;
             writer.pct.store(pct, Ordering::SeqCst);
-            writer.bytes.store(TOTAL * u64::from(pct) / 100, Ordering::SeqCst);
-            // 0 = downloading, then verifying, then extracting.
             writer
-                .phase
-                .store(match pct {
+                .bytes
+                .store(TOTAL * u64::from(pct) / 100, Ordering::SeqCst);
+            // 0 = downloading, then verifying, then extracting.
+            writer.phase.store(
+                match pct {
                     ..=70 => 0,
                     71..=90 => 1,
                     _ => 2,
-                }, Ordering::SeqCst);
+                },
+                Ordering::SeqCst,
+            );
         }
         writer.phase.store(2, Ordering::SeqCst);
         writer.pct.store(100, Ordering::SeqCst);
@@ -1440,10 +1422,7 @@ fn log_only_progress(shared: &std::sync::Arc<crate::jdk_install::ProgressShared>
         if crate::jdk_install::should_report(phase, last_phase, pct, last_pct) {
             last_phase = phase;
             last_pct = pct;
-            eprintln!(
-                "{}",
-                progress_status(phase, pct, done, total, mib_s, arch)
-            );
+            eprintln!("{}", progress_status(phase, pct, done, total, mib_s, arch));
         }
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
@@ -1707,11 +1686,7 @@ mod tests {
         // that cannot be shown must resolve to "no" rather than
         // proceeding.
         let shown = shown_by(0, || {
-            assert!(consent(
-                "25.0.4+101.0.LTS",
-                115,
-                "deadbeef",
-            ));
+            assert!(consent("25.0.4+101.0.LTS", 115, "deadbeef",));
         });
         assert!(
             shown.detail.contains("25.0.4+101.0.LTS"),
@@ -1776,14 +1751,7 @@ mod tests {
         let no_rate = progress_status(0, 5, 5 << 20, 100 << 20, None, "macOS arm64");
         assert!(!no_rate.contains("MB/s"), "invented a rate: {no_rate}");
 
-        let with_rate = progress_status(
-            0,
-            20,
-            20 << 20,
-            100 << 20,
-            Some(3.7),
-            "macOS arm64",
-        );
+        let with_rate = progress_status(0, 20, 20 << 20, 100 << 20, Some(3.7), "macOS arm64");
         assert!(with_rate.contains("MB/s"), "rate missing: {with_rate}");
         // 20 MiB of 100 MiB at 3.7 MB/s, as the Win32 window shows it.
         assert!(with_rate.contains("20"), "done_mb missing: {with_rate}");

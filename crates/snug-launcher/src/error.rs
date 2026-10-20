@@ -30,7 +30,9 @@ pub enum LauncherError {
     #[error("could not locate a Java {min_java}+ JVM in any of the configured discovery locations")]
     JvmNotFound { min_java: u16 },
 
-    #[error("located JVM at {path} but its major version {found} is below the required minimum {min_java}")]
+    #[error(
+        "located JVM at {path} but its major version {found} is below the required minimum {min_java}"
+    )]
     JvmTooOld {
         path: std::path::PathBuf,
         found: u16,
@@ -91,14 +93,11 @@ pub enum LauncherError {
 pub fn localize_launcher_error(err: &LauncherError) -> String {
     let s = match err {
         LauncherError::Zip(e) => localize::t("err.zip", &[("0", &e.to_string())]),
-        LauncherError::SelfPath(e) => {
-            localize::t("err.self_path", &[("0", &e.to_string())])
-        }
+        LauncherError::SelfPath(e) => localize::t("err.self_path", &[("0", &e.to_string())]),
         LauncherError::Io(e) => localize::t("err.io", &[("0", &e.to_string())]),
-        LauncherError::JvmNotFound { min_java } => localize::t(
-            "err.jvm_not_found",
-            &[("min_java", &min_java.to_string())],
-        ),
+        LauncherError::JvmNotFound { min_java } => {
+            localize::t("err.jvm_not_found", &[("min_java", &min_java.to_string())])
+        }
         LauncherError::JvmTooOld {
             path,
             found,
@@ -125,9 +124,7 @@ pub fn localize_launcher_error(err: &LauncherError) -> String {
         LauncherError::JniAttach(s) => localize::t("err.jni_attach", &[("0", s)]),
         LauncherError::JniInvoke(s) => localize::t("err.jni_invoke", &[("0", s)]),
         LauncherError::NoMainClass => localize::lookup("err.no_main_class"),
-        LauncherError::MainClassNotFound(s) => {
-            localize::t("err.main_class_not_found", &[("0", s)])
-        }
+        LauncherError::MainClassNotFound(s) => localize::t("err.main_class_not_found", &[("0", s)]),
         LauncherError::NoMainMethod(s) => localize::t("err.no_main_method", &[("0", s)]),
         LauncherError::JavaException(s) => localize::t("err.java_exception", &[("0", s)]),
         LauncherError::UnsupportedPlatform => localize::lookup("err.unsupported_platform"),
@@ -179,12 +176,13 @@ mod tests {
     /// literal and never display `err.io` to the user.
     #[test]
     fn localize_falls_back_to_english_when_uninitialised() {
-        let err = LauncherError::Io(std::io::Error::other(
-            "disk on fire",
-        ));
+        let err = LauncherError::Io(std::io::Error::other("disk on fire"));
         let out = localize_launcher_error(&err);
         assert!(!out.starts_with("err."), "raw key leaked to user: {out:?}");
-        assert!(out.contains("disk on fire"), "fallback lost the source: {out:?}");
+        assert!(
+            out.contains("disk on fire"),
+            "fallback lost the source: {out:?}"
+        );
     }
 
     #[test]

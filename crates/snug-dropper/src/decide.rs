@@ -116,7 +116,9 @@ mod tests {
             .map(|i| PathBuf::from(format!("item{i}")))
             .collect();
         let mut it = kinds.iter().copied();
-        decide_with(paths, |_| it.next().expect("classifier asked for too many items"))
+        decide_with(paths, |_| {
+            it.next().expect("classifier asked for too many items")
+        })
     }
 
     #[test]
@@ -167,11 +169,7 @@ mod tests {
         // Counting comes first: three items is a count problem even when
         // two of them are things we could have built individually.
         assert_eq!(
-            decide_kinds(&[
-                ItemKind::Jar,
-                ItemKind::Jar,
-                ItemKind::Other
-            ]),
+            decide_kinds(&[ItemKind::Jar, ItemKind::Jar, ItemKind::Other]),
             Mode::Reject(Reject::TooManyItems)
         );
     }
@@ -197,14 +195,8 @@ mod tests {
 
     #[test]
     fn classify_reads_extensions_case_insensitively() {
-        assert_eq!(
-            ItemKind::of(Path::new("C:/tmp/App.JAR")),
-            ItemKind::Jar
-        );
-        assert_eq!(
-            ItemKind::of(Path::new("C:/tmp/App.Jar")),
-            ItemKind::Jar
-        );
+        assert_eq!(ItemKind::of(Path::new("C:/tmp/App.JAR")), ItemKind::Jar);
+        assert_eq!(ItemKind::of(Path::new("C:/tmp/App.Jar")), ItemKind::Jar);
     }
 
     #[test]

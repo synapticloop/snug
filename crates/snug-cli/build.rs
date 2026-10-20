@@ -131,9 +131,7 @@ fn write_multi_resolution_ico(png_src: &Path, ico_dst: &Path) {
             let mut cursor = std::io::Cursor::new(&mut buf);
             resized
                 .write_to(&mut cursor, image::ImageFormat::Png)
-                .unwrap_or_else(|e| {
-                    panic!("snug-cli build.rs: encode {size}x{size} PNG: {e}")
-                });
+                .unwrap_or_else(|e| panic!("snug-cli build.rs: encode {size}x{size} PNG: {e}"));
         }
         entries.push((size, size, buf));
     }
@@ -173,6 +171,5 @@ fn write_multi_resolution_ico(png_src: &Path, ico_dst: &Path) {
         ico.extend_from_slice(png);
     }
 
-    fs::write(ico_dst, &ico)
-        .unwrap_or_else(|e| panic!("snug-cli build.rs: write ICO: {e}"));
+    fs::write(ico_dst, &ico).unwrap_or_else(|e| panic!("snug-cli build.rs: write ICO: {e}"));
 }

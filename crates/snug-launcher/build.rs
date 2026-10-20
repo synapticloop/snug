@@ -179,8 +179,8 @@ fn write_macos_icns(png_src: &str, icns_dst: &Path) {
     // when it never had been.
     println!("cargo:rerun-if-changed=build.rs");
 
-    let bytes = fs::read(png_src)
-        .unwrap_or_else(|e| panic!("snug-launcher build.rs: read {png_src}: {e}"));
+    let bytes =
+        fs::read(png_src).unwrap_or_else(|e| panic!("snug-launcher build.rs: read {png_src}: {e}"));
     let img = image::load_from_memory(&bytes)
         .unwrap_or_else(|e| panic!("snug-launcher build.rs: decode {png_src}: {e}"));
 
@@ -212,12 +212,8 @@ fn write_macos_icns(png_src: &str, icns_dst: &Path) {
     let total = (out.len() as u32).to_be_bytes();
     out[4..8].copy_from_slice(&total);
 
-    fs::write(icns_dst, &out).unwrap_or_else(|e| {
-        panic!(
-            "snug-launcher build.rs: write {}: {e}",
-            icns_dst.display()
-        )
-    });
+    fs::write(icns_dst, &out)
+        .unwrap_or_else(|e| panic!("snug-launcher build.rs: write {}: {e}", icns_dst.display()));
 }
 
 /// Standard Windows icon sizes. Picked to cover File Explorer
@@ -250,11 +246,7 @@ fn write_multi_resolution_ico(png_src: &str, ico_dst: &Path) {
     // Encode each size as PNG, keeping the (width, height, bytes).
     let mut entries: Vec<(u32, u32, Vec<u8>)> = Vec::with_capacity(ICON_SIZES.len());
     for &size in ICON_SIZES {
-        let resized = src_img.resize_exact(
-            size,
-            size,
-            image::imageops::FilterType::Lanczos3,
-        );
+        let resized = src_img.resize_exact(size, size, image::imageops::FilterType::Lanczos3);
         // `image::write_to` requires `Write + Seek` — `Vec<u8>` only
         // implements `Write`, so we wrap in a `Cursor` and pull the
         // inner `Vec` back out afterwards.
@@ -311,8 +303,7 @@ fn write_multi_resolution_ico(png_src: &str, ico_dst: &Path) {
         ico.extend_from_slice(png);
     }
 
-    fs::write(ico_dst, &ico)
-        .unwrap_or_else(|e| panic!("snug-launcher build.rs: write ICO: {e}"));
+    fs::write(ico_dst, &ico).unwrap_or_else(|e| panic!("snug-launcher build.rs: write ICO: {e}"));
 
     // Re-run this build script whenever the PNG changes.
     println!("cargo:rerun-if-changed={png_src}");

@@ -215,7 +215,9 @@ fn print_help() {
     eprintln!("  retry              Try again / Cancel prompt (show_retry_dialog)");
     eprintln!("  error              Terminal post-install-failure dialog (show_error_dialog)");
     eprintln!("  java-error         Launcher-runtime error dialog (show_launcher_error)");
-    eprintln!("  install-prompt-v5  prompt_window (custom-painted modal, same paint path as the rest of the dialog family)");
+    eprintln!(
+        "  install-prompt-v5  prompt_window (custom-painted modal, same paint path as the rest of the dialog family)"
+    );
     eprintln!();
     eprintln!("options:");
     eprintln!("  --static         (progress only) pin at 50%, no animation");
@@ -334,13 +336,8 @@ fn run_metadata_failed() -> Option<i32> {
     // expanded section reads. The production code passes a real
     // `JdkError` Display here.
     let fake_error = "DNS error: no such host is known. (api.adoptium.net:443)";
-    let result = unsafe {
-        jdk_install::show_metadata_failed_dialog(
-            std::ptr::null_mut(),
-            25,
-            fake_error,
-        )
-    };
+    let result =
+        unsafe { jdk_install::show_metadata_failed_dialog(std::ptr::null_mut(), 25, fake_error) };
     eprintln!(
         "dialogs_preview: kind={} button={result}",
         Kind::MetadataFailed.as_str()
@@ -353,13 +350,7 @@ fn run_retry() -> Option<i32> {
     // real `JdkError` Display here.
     let fake_error = "Connection reset by peer (HTTP 0 after 47.2 MB)";
     let retry_again = unsafe {
-        jdk_install::show_retry_dialog(
-            std::ptr::null_mut(),
-            1,
-            3,
-            "25.0.1+8.LTS",
-            fake_error,
-        )
+        jdk_install::show_retry_dialog(std::ptr::null_mut(), 1, 3, "25.0.1+8.LTS", fake_error)
     };
     eprintln!(
         "dialogs_preview: kind={} retry_again={retry_again}",
@@ -421,10 +412,7 @@ fn run_java_error() -> Option<i32> {
     // the URL in the user's default browser on click.
     let dlg = snug_launcher::dialogs::dialogs();
     let fake_err = "Cannot read configuration file at /etc/myapp/config.yaml: No such file or directory (ENOENT)";
-    let content = snug_launcher::dialogs::fill(
-        &dlg.launcher.error.content,
-        &[("error", fake_err)],
-    );
+    let content = snug_launcher::dialogs::fill(&dlg.launcher.error.content, &[("error", fake_err)]);
     let fake_update_url = "https://example.com/myapp/releases";
     let result = unsafe {
         error_window::show(
@@ -459,16 +447,8 @@ fn run_install_prompt_v5() -> Option<i32> {
     // Snug character without us having to load anything here.
     let d = snug_launcher::dialogs::dialogs();
     let prompt = &d.runtime.prompt;
-    let choice = unsafe {
-        snug_launcher::prompt_window::show(
-            std::ptr::null_mut(),
-            0,
-            prompt,
-            "",
-            "",
-            "",
-        )
-    };
+    let choice =
+        unsafe { snug_launcher::prompt_window::show(std::ptr::null_mut(), 0, prompt, "", "", "") };
     eprintln!(
         "dialogs_preview: kind={} prompt_window choice = {choice:?}",
         Kind::InstallPromptV5.as_str()

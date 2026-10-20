@@ -56,7 +56,7 @@ pub struct MetadataFailedDialog<'a> {
 /// `NULL` or a live `HWND` owned by that thread, and with any non-zero
 /// `mascot_hbitmap` a live handle that outlives the call.
 pub unsafe fn show(parent: HWND, dlg: MetadataFailedDialog<'_>) -> i32 {
-    use crate::dialogs::{dialogs, pick, resolve, DialogCopy};
+    use crate::dialogs::{DialogCopy, dialogs, pick, resolve};
 
     let mfd = &dialogs().runtime.metadata_failed;
 

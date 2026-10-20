@@ -83,38 +83,36 @@ use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{HMODULE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, CreateFontW, CreateRoundRectRgn, CreateSolidBrush, DeleteObject, DT_LEFT,
-    DT_SINGLELINE, DT_VCENTER, DT_WORDBREAK, DrawTextW, EndPaint, FillRect, FillRgn,
-    DFC_BUTTON, DFCS_BUTTONCHECK, DFCS_CHECKED, DFCS_FLAT, DrawFrameControl, HBRUSH, HBITMAP,
-    HDC, HFONT, InvalidateRect, PAINTSTRUCT, SelectObject, SetBkMode, SetTextColor,
-    TRANSPARENT,
+    BeginPaint, CreateFontW, CreateRoundRectRgn, CreateSolidBrush, DFC_BUTTON, DFCS_BUTTONCHECK,
+    DFCS_CHECKED, DFCS_FLAT, DT_LEFT, DT_SINGLELINE, DT_VCENTER, DT_WORDBREAK, DeleteObject,
+    DrawFrameControl, DrawTextW, EndPaint, FillRect, FillRgn, HBITMAP, HBRUSH, HDC, HFONT,
+    InvalidateRect, PAINTSTRUCT, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
 };
 use windows_sys::Win32::Graphics::GdiPlus::{
-    GdiplusShutdown, GdiplusStartup, GdiplusStartupInput, GdipCreateBitmapFromFile,
-    GdipCreateFromHDC, GdipCreateImageAttributes, GdipDeleteGraphics, GdipDisposeImage,
-    GdipDisposeImageAttributes, GdipDrawImageRectRectI, GdipGetImageHeight, GdipGetImageWidth,
-    GdipSetImageAttributesWrapMode, GpBitmap, GpGraphics, GpImage, GpImageAttributes, UnitPixel,
+    GdipCreateBitmapFromFile, GdipCreateFromHDC, GdipCreateImageAttributes, GdipDeleteGraphics,
+    GdipDisposeImage, GdipDisposeImageAttributes, GdipDrawImageRectRectI, GdipGetImageHeight,
+    GdipGetImageWidth, GdipSetImageAttributesWrapMode, GdiplusShutdown, GdiplusStartup,
+    GdiplusStartupInput, GpBitmap, GpGraphics, GpImage, GpImageAttributes, UnitPixel,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
-use windows_sys::Win32::UI::HiDpi::{
-    AdjustWindowRectExForDpi, GetDpiForSystem, GetDpiForWindow, SetProcessDpiAwarenessContext,
-    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
-};
 use windows_sys::Win32::UI::Controls::BST_CHECKED;
+use windows_sys::Win32::UI::HiDpi::{
+    AdjustWindowRectExForDpi, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForSystem,
+    GetDpiForWindow, SetProcessDpiAwarenessContext,
+};
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CB_ADDSTRING, CB_GETCOUNT, CB_GETCURSEL, CB_RESETCONTENT, CB_SETCURSEL, CBN_SELCHANGE,
-    CBS_DROPDOWNLIST, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    DrawIconEx, GetClientRect, GetDlgItem, GetMessageW, GetSystemMetrics, LoadCursorW, LoadImageW,
-    MoveWindow, MSG, PostThreadMessageW,
-    RegisterClassExW, SendMessageW, SetWindowPos, SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE,
-    SWP_NOZORDER, TranslateMessage, BM_GETCHECK, BM_SETCHECK, BN_CLICKED,
-    BS_AUTOCHECKBOX, BS_PUSHBUTTON, WM_ERASEBKGND,
-    DI_NORMAL, HICON, ICON_BIG, ICON_SMALL, IDC_ARROW, IMAGE_ICON, LR_DEFAULTSIZE,
-    LR_LOADFROMFILE, LR_SHARED, WM_CLOSE, WM_COMMAND,
-    WM_CREATE, WM_DESTROY, WM_NCDESTROY, WM_PAINT, WM_QUIT, WM_SETICON, WNDCLASSEXW, WS_CAPTION,
-    WS_CHILD, WS_EX_TOPMOST, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_PUSHBUTTON, CB_ADDSTRING,
+    CB_GETCOUNT, CB_GETCURSEL, CB_RESETCONTENT, CB_SETCURSEL, CBN_SELCHANGE, CBS_DROPDOWNLIST,
+    CreateWindowExW, DI_NORMAL, DefWindowProcW, DestroyWindow, DispatchMessageW, DrawIconEx,
+    GetClientRect, GetDlgItem, GetMessageW, GetSystemMetrics, HICON, ICON_BIG, ICON_SMALL,
+    IDC_ARROW, IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE, LR_SHARED, LoadCursorW, LoadImageW,
+    MSG, MoveWindow, PostThreadMessageW, RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN,
+    SWP_NOACTIVATE, SWP_NOZORDER, SendMessageW, SetWindowPos, TranslateMessage, WM_CLOSE,
+    WM_COMMAND, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_NCDESTROY, WM_PAINT, WM_QUIT, WM_SETICON,
+    WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP,
+    WS_VISIBLE, WS_VSCROLL,
 };
 
 use snug_format::Localization;
@@ -330,8 +328,7 @@ const fn close_x() -> i32 {
 /// closing the launcher leaves every dialog you have opened alive, and
 /// the `--help` NOTES were the only place it was written down.
 const HEADING_TEXT: &str = "snug dialog preview";
-const SUBTITLE_TEXT: &str =
-    "Each dialog opens in its own window and stays open until you close it, \
+const SUBTITLE_TEXT: &str = "Each dialog opens in its own window and stays open until you close it, \
      so you can compare two side by side.";
 
 /// Language picker — a `COMBOBOX` between the subtitle and the dialog
@@ -393,7 +390,6 @@ const WM_DPICHANGED: u32 = 0x02E0;
 //  to the heading that the two lines read as the same weight at a
 //  glance, which is the thing a two-level hierarchy cannot afford.
 const COLOR_BG: u32 = 0x00FF_FFFF; // #FFFFFF
-
 
 const COLOR_HEADING: u32 = 0x0020_1A15; // #151A20, cool near-black
 const COLOR_BODY: u32 = 0x005A_5550; // #50555A
@@ -516,9 +512,7 @@ fn inspected_plate_inner(outer: (i32, i32, i32, i32), dpi: u32) -> (i32, i32, i3
 /// window class. `LR_SHARED` keeps Windows from handing us a
 /// per-process copy that we'd have to `DestroyIcon` later — the
 /// icon handle stays valid for the lifetime of the EXE module.
-fn load_exe_main_icons(
-    hinst: windows_sys::Win32::Foundation::HMODULE,
-) -> (HICON, HICON) {
+fn load_exe_main_icons(hinst: windows_sys::Win32::Foundation::HMODULE) -> (HICON, HICON) {
     // `--icon` wins for the launcher window too, so the window you're
     // clicking and the dialogs it spawns show the same artwork. The
     // override is already installed by the time we get here (main runs
@@ -535,22 +529,8 @@ fn load_exe_main_icons(
     let mainicon_w: Vec<u16> = "MAINICON\0".encode_utf16().collect();
     let id1: *const u16 = std::ptr::dangling::<u16>();
     unsafe {
-        let by_name_big = LoadImageW(
-            hinst,
-            mainicon_w.as_ptr(),
-            IMAGE_ICON,
-            32,
-            32,
-            LR_SHARED,
-        );
-        let by_name_small = LoadImageW(
-            hinst,
-            mainicon_w.as_ptr(),
-            IMAGE_ICON,
-            16,
-            16,
-            LR_SHARED,
-        );
+        let by_name_big = LoadImageW(hinst, mainicon_w.as_ptr(), IMAGE_ICON, 32, 32, LR_SHARED);
+        let by_name_small = LoadImageW(hinst, mainicon_w.as_ptr(), IMAGE_ICON, 16, 16, LR_SHARED);
         // Fall back to the numeric ID 1 path. MAKEINTRESOURCE(1)
         // is encoded as the pointer value 1 — the high 16 bits are
         // 0, which Windows uses as the discriminator between
@@ -559,8 +539,16 @@ fn load_exe_main_icons(
         let by_id_small = LoadImageW(hinst, id1, IMAGE_ICON, 16, 16, LR_SHARED);
 
         (
-            if !by_name_big.is_null() { by_name_big } else { by_id_big },
-            if !by_name_small.is_null() { by_name_small } else { by_id_small },
+            if !by_name_big.is_null() {
+                by_name_big
+            } else {
+                by_id_big
+            },
+            if !by_name_small.is_null() {
+                by_name_small
+            } else {
+                by_id_small
+            },
         )
     }
 }
@@ -778,10 +766,7 @@ fn build_localisations(entries: &[std::path::PathBuf]) -> Result<Vec<Localizatio
     ));
     let files = snug_format::discover_localization_files(entries).map_err(|e| e.to_string())?;
     for path in &files {
-        log(&format!(
-            "preview i18n:   discovered {}",
-            path.display()
-        ));
+        log(&format!("preview i18n:   discovered {}", path.display()));
     }
 
     let mut user: Vec<Localization> = Vec::new();
@@ -799,8 +784,8 @@ fn build_localisations(entries: &[std::path::PathBuf]) -> Result<Vec<Localizatio
                 "duplicate localisation tag `{tag}` — pass each tag exactly once"
             ));
         }
-        let bundle =
-            Localization::parse(&tag, &text).map_err(|e| format!("parsing {}: {e}", path.display()))?;
+        let bundle = Localization::parse(&tag, &text)
+            .map_err(|e| format!("parsing {}: {e}", path.display()))?;
         log(&format!(
             "preview i18n:   parsed tag `{tag}` from {} ({} key/value lines)",
             path.display(),
@@ -811,9 +796,7 @@ fn build_localisations(entries: &[std::path::PathBuf]) -> Result<Vec<Localizatio
 
     if user.iter().any(|b| b.tag == snug_format::DEFAULT_EN_TAG) {
         // The user's `en` is already the baseline; nothing to append.
-        log(
-            "preview i18n: user supplied an `en` bundle; built-in baseline NOT appended",
-        );
+        log("preview i18n: user supplied an `en` bundle; built-in baseline NOT appended");
         log(&format!(
             "preview i18n: final dropdown order: [{}]",
             user.iter()
@@ -824,11 +807,8 @@ fn build_localisations(entries: &[std::path::PathBuf]) -> Result<Vec<Localizatio
         return Ok(user);
     }
 
-    let builtin = Localization::parse(
-        snug_format::DEFAULT_EN_TAG,
-        snug_format::DEFAULT_EN_TEXT,
-    )
-    .map_err(|e| format!("parsing the built-in English baseline: {e}"))?;
+    let builtin = Localization::parse(snug_format::DEFAULT_EN_TAG, snug_format::DEFAULT_EN_TEXT)
+        .map_err(|e| format!("parsing the built-in English baseline: {e}"))?;
     log(&format!(
         "preview i18n: appended built-in baseline `{}`",
         snug_format::DEFAULT_EN_TAG
@@ -883,7 +863,9 @@ fn activate_localisations(bundles: Vec<Localization>, index: usize) {
 fn select_language(index: usize) {
     let bundles = localisations();
     if bundles.is_empty() {
-        log(&format!("preview i18n: select_language({index}) ignored — registry empty"));
+        log(&format!(
+            "preview i18n: select_language({index}) ignored — registry empty"
+        ));
         return;
     }
     let chosen = bundles
@@ -987,8 +969,8 @@ fn gdiplus_start() -> Result<Gdiplus, String> {
 /// are parked in a static for the process lifetime alongside the icon.
 fn hicon_from_image_via_gdiplus(path: &std::path::Path, px: i32) -> Result<HICON, String> {
     use windows_sys::Win32::Graphics::Gdi::{
-        CreateBitmap, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC,
-        ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+        BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateBitmap, CreateCompatibleDC, CreateDIBSection,
+        DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, ReleaseDC, SelectObject,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{CreateIconIndirect, ICONINFO};
 
@@ -1314,7 +1296,10 @@ where
             }
         }
     }
-    Cli::Run { localisations, icon }
+    Cli::Run {
+        localisations,
+        icon,
+    }
 }
 
 /// The `--help` body.
@@ -1551,7 +1536,12 @@ pub fn run() {
         // we loaded into the class — they stay valid for the
         // module lifetime via `LR_SHARED`, no DestroyIcon needed.
         SendMessageW(hwnd, WM_SETICON, ICON_BIG as usize, hicon_class as isize);
-        SendMessageW(hwnd, WM_SETICON, ICON_SMALL as usize, hicon_sm_class as isize);
+        SendMessageW(
+            hwnd,
+            WM_SETICON,
+            ICON_SMALL as usize,
+            hicon_sm_class as isize,
+        );
 
         // Pump messages until PostQuitMessage.
         let mut msg: MSG = std::mem::zeroed();
@@ -1570,12 +1560,7 @@ pub fn run() {
 //  Window procedure
 // ============================================================================
 
-unsafe extern "system" fn wndproc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
+unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_CREATE => unsafe {
             // The window's own DPI, not the process one: this can be
@@ -1591,11 +1576,7 @@ unsafe extern "system" fn wndproc(
                 0,
                 wide("COMBOBOX").as_ptr(),
                 std::ptr::null(),
-                WS_CHILD
-                    | WS_VISIBLE
-                    | WS_TABSTOP
-                    | WS_VSCROLL
-                    | (CBS_DROPDOWNLIST as u32),
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | (CBS_DROPDOWNLIST as u32),
                 scale_px(COMBO_X, dpi),
                 scale_px(COMBO_Y, dpi),
                 scale_px(COMBO_W, dpi),
@@ -1610,12 +1591,7 @@ unsafe extern "system" fn wndproc(
                 SendMessageW(combo, CB_RESETCONTENT, 0, 0);
                 let bundles = localisations();
                 for bundle in &bundles {
-                    SendMessageW(
-                        combo,
-                        CB_ADDSTRING,
-                        0,
-                        wide(&bundle.tag).as_ptr() as isize,
-                    );
+                    SendMessageW(combo, CB_ADDSTRING, 0, wide(&bundle.tag).as_ptr() as isize);
                 }
                 // Pre-select whatever `main` already activated. Both
                 // sides derive the index the same way, so the combo
@@ -1625,7 +1601,10 @@ unsafe extern "system" fn wndproc(
                 let added = SendMessageW(combo, CB_GETCOUNT, 0, 0);
                 log(&format!(
                     "preview i18n: combo filled - CB_GETCOUNT={added}, CB_SETCURSEL={start} (tag `{}`); items: [{}]",
-                    bundles.get(start).map(|b| b.tag.as_str()).unwrap_or("<none>"),
+                    bundles
+                        .get(start)
+                        .map(|b| b.tag.as_str())
+                        .unwrap_or("<none>"),
                     bundles
                         .iter()
                         .map(|b| b.tag.as_str())
@@ -2049,7 +2028,7 @@ unsafe extern "system" fn wndproc(
             apply_fonts(hwnd, dpi);
             InvalidateRect(hwnd, std::ptr::null(), 1);
             0
-        }
+        },
         WM_DESTROY => {
             // Nothing to do — let `WM_NCDESTROY` handle the counter
             // decrement once the window is fully torn down.
@@ -2293,8 +2272,7 @@ fn apply_token_switch(hwnd: HWND) {
 /// invented per call site so a slot reads the same wherever it appears.
 const EXAMPLE_VERSION: &str = "25.0.1";
 const EXAMPLE_SIZE_MB: &str = "192";
-const EXAMPLE_SHA256: &str =
-    "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
+const EXAMPLE_SHA256: &str = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
 
 fn run_install_prompt_v5() {
     let d = dialogs::dialogs();
@@ -2472,13 +2450,7 @@ unsafe fn layout_controls(hwnd: HWND, dpi: u32) {
         }
     };
 
-    place(
-        ID_COMBO_LANGUAGE as i32,
-        COMBO_X,
-        COMBO_Y,
-        COMBO_W,
-        COMBO_H,
-    );
+    place(ID_COMBO_LANGUAGE as i32, COMBO_X, COMBO_Y, COMBO_W, COMBO_H);
     for (i, (_, id)) in DIALOG_BUTTONS.iter().enumerate() {
         let i = i as i32;
         place(
@@ -2489,13 +2461,7 @@ unsafe fn layout_controls(hwnd: HWND, dpi: u32) {
             BTN_H,
         );
     }
-    place(
-        ID_CHK_REPLACE_TOKENS as i32,
-        CHK_X,
-        CHK_Y,
-        CHK_W,
-        CHK_H,
-    );
+    place(ID_CHK_REPLACE_TOKENS as i32, CHK_X, CHK_Y, CHK_W, CHK_H);
     place(
         ID_BTN_CLOSE as i32,
         close_x(),
@@ -2648,7 +2614,8 @@ mod tests {
         // And the value it now hands over is a real one, not the bare key.
         let d = dialogs::dialogs();
         assert!(
-            !d.runtime.progress.title.is_empty() && d.runtime.progress.title != "runtime.progress.title",
+            !d.runtime.progress.title.is_empty()
+                && d.runtime.progress.title != "runtime.progress.title",
             "the progress title resolved to {:?}",
             d.runtime.progress.title
         );
@@ -2674,10 +2641,7 @@ mod tests {
         let h = help_text();
         let listed = DIALOG_BUTTONS
             .iter()
-            .filter(|(label, _)| {
-                h.lines()
-                    .any(|line| line.trim_start().starts_with(label))
-            })
+            .filter(|(label, _)| h.lines().any(|line| line.trim_start().starts_with(label)))
             .count();
         assert_eq!(listed, DIALOG_BUTTONS.len());
     }
@@ -2850,7 +2814,10 @@ mod tests {
     fn help_text_documents_the_icon_flag() {
         let h = help_text();
         assert!(h.contains("--icon <FILE>"), "{h}");
-        assert!(h.contains(".png") && h.contains(".ico"), "both formats: {h}");
+        assert!(
+            h.contains(".png") && h.contains(".ico"),
+            "both formats: {h}"
+        );
     }
 
     // ------------------------------------------------------------------
@@ -2993,10 +2960,8 @@ mod tests {
 
     #[test]
     fn a_missing_path_is_an_error_not_a_silent_empty_dropdown() {
-        let err = build_localisations(&[std::path::PathBuf::from(
-            "C:/definitely/not/here.txt",
-        )])
-        .expect_err("missing path");
+        let err = build_localisations(&[std::path::PathBuf::from("C:/definitely/not/here.txt")])
+            .expect_err("missing path");
         assert!(err.contains("stat-ing localization entry"), "{err}");
     }
 
@@ -3131,8 +3096,7 @@ mod tests {
         // `close_y` is read by both `WM_CREATE` and the
         // `WM_DPICHANGED` relayout, so a dialog added to
         // `DIALOG_BUTTONS` moves Close in both paths or in neither.
-        let last_bottom =
-            BTN_FIRST_Y + (dialog_button_rows() - 1) * (BTN_H + BTN_GAP) + BTN_H;
+        let last_bottom = BTN_FIRST_Y + (dialog_button_rows() - 1) * (BTN_H + BTN_GAP) + BTN_H;
         assert_eq!(close_y(), last_bottom + BTN_CLOSE_GAP);
         assert_eq!(
             close_y() + BTN_CLOSE_H + BTN_CLOSE_MARGIN_BOTTOM,
@@ -3264,9 +3228,18 @@ mod tests {
         let r = COLOR_PLATE_EDGE & 0xFF;
         let min = r.min(g).min(b);
         let max = r.max(g).max(b);
-        assert!(min > 0x60, "too dark to be a light grey: {COLOR_PLATE_EDGE:#010x}");
-        assert!(max < 0xF0, "too light to read as an edge: {COLOR_PLATE_EDGE:#010x}");
-        assert!(max - min <= 0x08, "expected a neutral grey: {COLOR_PLATE_EDGE:#010x}");
+        assert!(
+            min > 0x60,
+            "too dark to be a light grey: {COLOR_PLATE_EDGE:#010x}"
+        );
+        assert!(
+            max < 0xF0,
+            "too light to read as an edge: {COLOR_PLATE_EDGE:#010x}"
+        );
+        assert!(
+            max - min <= 0x08,
+            "expected a neutral grey: {COLOR_PLATE_EDGE:#010x}"
+        );
     }
 
     #[test]

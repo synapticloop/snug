@@ -38,7 +38,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use snug_format::Localization;
 
 /// Canonical BCP 47 tag for the built-in English baseline bundle.
@@ -86,8 +86,7 @@ pub fn validate_localization_path(s: &str) -> Result<PathBuf, String> {
     // Accept either a single file or a directory. A directory entry is
     // expanded by `collect()` at build time; here we just confirm it
     // exists so the user gets a clear error rather than a silent miss.
-    let meta = std::fs::metadata(&path)
-        .map_err(|e| format!("reading {}: {e}", path.display()))?;
+    let meta = std::fs::metadata(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
     if meta.is_dir() {
         return Ok(path);
     }
@@ -103,11 +102,10 @@ pub fn validate_localization_path(s: &str) -> Result<PathBuf, String> {
     }
     // Pre-parse so the user sees a line-numbered error at the CLI
     // boundary instead of at build time.
-    let text = std::fs::read_to_string(&path)
-        .map_err(|e| format!("reading {}: {e}", path.display()))?;
+    let text =
+        std::fs::read_to_string(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
     let tag = tag_from_path(&path).expect("checked above");
-    Localization::parse(&tag, &text)
-        .map_err(|e| format!("parsing {}: {e}", path.display()))?;
+    Localization::parse(&tag, &text).map_err(|e| format!("parsing {}: {e}", path.display()))?;
     Ok(path)
 }
 
@@ -216,11 +214,8 @@ fn expand_user_paths(user_paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
 /// rather than fatal.
 fn warn_on_missing_keys(bundles: &[Localization]) {
     let baseline = &bundles[0];
-    let baseline_keys: std::collections::HashSet<&str> = baseline
-        .entries
-        .iter()
-        .map(|(k, _)| k.as_str())
-        .collect();
+    let baseline_keys: std::collections::HashSet<&str> =
+        baseline.entries.iter().map(|(k, _)| k.as_str()).collect();
 
     let user_bundles = &bundles[1..];
     if user_bundles.is_empty() {
@@ -229,11 +224,8 @@ fn warn_on_missing_keys(bundles: &[Localization]) {
     }
 
     for bundle in user_bundles {
-        let covered: std::collections::HashSet<&str> = bundle
-            .entries
-            .iter()
-            .map(|(k, _)| k.as_str())
-            .collect();
+        let covered: std::collections::HashSet<&str> =
+            bundle.entries.iter().map(|(k, _)| k.as_str()).collect();
         let missing: Vec<&str> = baseline_keys.difference(&covered).copied().collect();
         if missing.is_empty() {
             continue;
@@ -324,7 +316,10 @@ fn warn_on_placeholder_drift(bundles: &[Localization]) {
                 if set.is_empty() {
                     "(none)".to_string()
                 } else {
-                    set.iter().map(|s| format!("{{{s}}}")).collect::<Vec<_>>().join(" ")
+                    set.iter()
+                        .map(|s| format!("{{{s}}}"))
+                        .collect::<Vec<_>>()
+                        .join(" ")
                 }
             };
             let (extra, dropped): (Vec<&&str>, Vec<&&str>) = (
@@ -336,24 +331,34 @@ fn warn_on_placeholder_drift(bundles: &[Localization]) {
                 notes.push(format!(
                     "not in the baseline, so nothing will fill them and they print literally: \
                      {}",
-                    extra.iter().map(|s| format!("{{{s}}}")).collect::<Vec<_>>().join(" ")
+                    extra
+                        .iter()
+                        .map(|s| format!("{{{s}}}"))
+                        .collect::<Vec<_>>()
+                        .join(" ")
                 ));
             }
             if !dropped.is_empty() {
                 notes.push(format!(
                     "present in the baseline but missing here, so the translated sentence \
                      silently loses that value: {}",
-                    dropped.iter().map(|s| format!("{{{s}}}")).collect::<Vec<_>>().join(" ")
+                    dropped
+                        .iter()
+                        .map(|s| format!("{{{s}}}"))
+                        .collect::<Vec<_>>()
+                        .join(" ")
                 ));
             }
-            eprintln!("snug:   - {key}: baseline {}, bundle {}", format(want), format(got));
+            eprintln!(
+                "snug:   - {key}: baseline {}, bundle {}",
+                format(want),
+                format(got)
+            );
             for note in notes {
                 eprintln!("snug:       {note}");
             }
         }
-        eprintln!(
-            "snug:   (run `snug --list-tokens` for the full baseline contract)"
-        );
+        eprintln!("snug:   (run `snug --list-tokens` for the full baseline contract)");
     }
 }
 
@@ -639,10 +644,7 @@ mod tests {
         assert_eq!(bundles[0].tag, DEFAULT_EN_TAG);
         let user_tags: std::collections::HashSet<&str> =
             bundles[1..].iter().map(|b| b.tag.as_str()).collect();
-        assert_eq!(
-            user_tags,
-            ["de", "ja", "pt-BR"].into_iter().collect()
-        );
+        assert_eq!(user_tags, ["de", "ja", "pt-BR"].into_iter().collect());
     }
 
     #[test]

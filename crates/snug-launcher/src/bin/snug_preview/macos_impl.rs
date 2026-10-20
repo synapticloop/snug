@@ -24,9 +24,9 @@
 
 use std::path::{Path, PathBuf};
 
+use snug_format::Localization;
 use snug_launcher::appkit;
 use snug_launcher::localize;
-use snug_format::Localization;
 
 fn log(msg: &str) {
     eprintln!("snug_preview: {msg}");
@@ -85,7 +85,10 @@ fn build_localisations(entries: &[PathBuf]) -> Result<Vec<Localization>, String>
             Localization::parse(&tag, &text)
                 .map_err(|e| format!("parsing {}: {e}", path.display()))?,
         );
-        log(&format!("loaded localisation `{tag}` from {}", path.display()));
+        log(&format!(
+            "loaded localisation `{tag}` from {}",
+            path.display()
+        ));
     }
     Ok(out)
 }
@@ -97,8 +100,7 @@ const DEMO_VERSION: &str = "25.0.4.1+1";
 const DEMO_SIZE_MB: u32 = 190;
 const DEMO_URL: &str = "https://api.adoptium.net/v3/binary/version/jdk-25.0.4.1%2B1/mac/x64/jdk/hotspot/normal/eclipse";
 const DEMO_SHA: &str = "3f1a9c7e2b8d4056af19c2e7b0d4a8135ce6f9021b7da4e58c0a3f19b6d72e45c";
-const DEMO_ERROR: &str =
-    "the connection was reset while reading the archive (curl error 56)";
+const DEMO_ERROR: &str = "the connection was reset while reading the archive (curl error 56)";
 
 /// The dialogs the picker offers, in the order the install flow reaches
 /// them. The label is what the button says, so it doubles as the map from

@@ -11,8 +11,8 @@ use crate::cli::Cli;
 use crate::localization;
 use crate::manifest::{read_main_class_from_bytes, survey_main_classes};
 use crate::resources::ResourcePlan;
-use editpe::constants::IMAGE_SUBSYSTEM_WINDOWS_GUI;
 use crate::stub::STUB_BYTES;
+use editpe::constants::IMAGE_SUBSYSTEM_WINDOWS_GUI;
 use snug_format::{
     AppMetadata, EmbeddedFile, LauncherBehavior, LauncherConfig, SnugEmbedded, SnugPayload,
     SplashConfig, SplashImage, embedded_file, encode,
@@ -706,9 +706,11 @@ mod tests {
 
         // Same for a directory input.
         let dir = Cli::parse_from(["snug", "libs"]);
-        assert!(output_path(&dir)
-            .to_string_lossy()
-            .ends_with(DEFAULT_OUTPUT_EXT));
+        assert!(
+            output_path(&dir)
+                .to_string_lossy()
+                .ends_with(DEFAULT_OUTPUT_EXT)
+        );
     }
 
     #[test]
@@ -805,7 +807,12 @@ mod tests {
         let jar = dir.join("demo.jar");
         write_fake_jar(&jar, Some("com.example.Main"));
         let spelled = dir.join(".").join("demo.jar");
-        let cli = Cli::parse_from(["snug", jar.to_str().unwrap(), "-o", spelled.to_str().unwrap()]);
+        let cli = Cli::parse_from([
+            "snug",
+            jar.to_str().unwrap(),
+            "-o",
+            spelled.to_str().unwrap(),
+        ]);
         assert!(
             guard_output_collision(&cli).is_err(),
             "an equivalent spelling of the input must still be refused"
@@ -827,14 +834,19 @@ mod tests {
             "-o",
             dir.join("demo.exe").to_str().unwrap(),
         ]);
-        assert!(guard_output_collision(&plain).is_ok(), "distinct output refused");
+        assert!(
+            guard_output_collision(&plain).is_ok(),
+            "distinct output refused"
+        );
 
         // Also the no-`-o` default, resolved in a different CWD.
         let implicit = Cli::parse_from(["snug", jar.to_str().unwrap()]);
         assert_eq!(output_path(&implicit), jar.with_extension("exe"));
-        assert!(guard_output_collision(&implicit).is_ok(), "default output refused");
+        assert!(
+            guard_output_collision(&implicit).is_ok(),
+            "default output refused"
+        );
     }
-
 
     #[test]
     fn the_staging_path_sits_beside_the_output_and_keeps_its_extension() {
@@ -867,12 +879,7 @@ mod tests {
         let exe = dir.join("App.exe");
         std::fs::write(&exe, b"the previous, working build").unwrap();
 
-        let cli = Cli::parse_from([
-            "snug",
-            jar.to_str().unwrap(),
-            "-o",
-            exe.to_str().unwrap(),
-        ]);
+        let cli = Cli::parse_from(["snug", jar.to_str().unwrap(), "-o", exe.to_str().unwrap()]);
         let payload = build_payload(&cli).unwrap();
 
         // Occupy the staging path with a directory so writing it must fail.
@@ -906,8 +913,12 @@ mod tests {
         let dir = tempdir();
         let jar = dir.join("demo.jar");
         write_fake_jar(&jar, Some("com.example.Main"));
-        let cli = Cli::parse_from(["snug", jar.to_str().unwrap(), "-o",
-            dir.join("demo.exe").to_str().unwrap()]);
+        let cli = Cli::parse_from([
+            "snug",
+            jar.to_str().unwrap(),
+            "-o",
+            dir.join("demo.exe").to_str().unwrap(),
+        ]);
 
         let payload = build_payload(&cli).unwrap();
         let embedded = SnugEmbedded::new(payload);
@@ -919,8 +930,7 @@ mod tests {
             .expect("locate")
             .expect("payload present");
         assert_eq!(
-            found.payload_len,
-            embedded.payload_len,
+            found.payload_len, embedded.payload_len,
             "the EXE must carry the caller's encoded payload, not a rebuilt one"
         );
         assert_eq!(found.payload_crc32, embedded.payload_crc32);
@@ -932,12 +942,7 @@ mod tests {
         let jar = dir.join("demo.jar");
         write_fake_jar(&jar, Some("com.example.Main"));
         let exe = dir.join("App.exe");
-        let cli = Cli::parse_from([
-            "snug",
-            jar.to_str().unwrap(),
-            "-o",
-            exe.to_str().unwrap(),
-        ]);
+        let cli = Cli::parse_from(["snug", jar.to_str().unwrap(), "-o", exe.to_str().unwrap()]);
         let payload = build_payload(&cli).unwrap();
 
         let embedded = SnugEmbedded::new(payload);
@@ -1036,9 +1041,10 @@ mod tests {
 
     #[test]
     fn cache_dir_survives_a_payload_roundtrip() {
-        use snug_format::{decode, encode, SnugEmbedded};
+        use snug_format::{SnugEmbedded, decode, encode};
         let target = tempdir().join("roundtrip-cache");
-        let embedded = SnugEmbedded::new(build_payload(&cli_for(Some(target.to_str().unwrap()))).unwrap());
+        let embedded =
+            SnugEmbedded::new(build_payload(&cli_for(Some(target.to_str().unwrap()))).unwrap());
         let decoded = decode(&encode(&embedded).unwrap()).unwrap();
         assert_eq!(
             decoded.payload.config.behavior.cache_dir.as_deref(),

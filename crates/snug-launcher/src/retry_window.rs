@@ -46,7 +46,7 @@ pub struct RetryDialog<'a> {
 /// `NULL` or a live `HWND` owned by that thread, and with any non-zero
 /// `mascot_hbitmap` a live handle that outlives the call.
 pub unsafe fn show(parent: HWND, dlg: RetryDialog<'_>) -> i32 {
-    use crate::dialogs::{dialogs, pick, resolve, DialogCopy};
+    use crate::dialogs::{DialogCopy, dialogs, pick, resolve};
 
     let retry = &dialogs().runtime.retry;
 

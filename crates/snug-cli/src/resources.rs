@@ -116,32 +116,22 @@ impl ResourcePlan {
     /// payload has been embedded as an `RT_RCDATA` resource entry, so
     /// the version / icon / manifest all end up in the same resource
     /// directory that the launcher will read at runtime.
-    pub fn apply(
-        &self,
-        resources: &mut ResourceDirectory,
-        payload: &SnugEmbedded,
-    ) -> Result<()> {
+    pub fn apply(&self, resources: &mut ResourceDirectory, payload: &SnugEmbedded) -> Result<()> {
         if let Some(icon_path) = &self.icon {
             let icon_str = icon_path.to_str().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "icon path {} is not valid UTF-8",
+                anyhow::anyhow!("icon path {} is not valid UTF-8", icon_path.display())
+            })?;
+            resources.set_main_icon_file(icon_str).with_context(|| {
+                format!(
+                    "stamping icon from {} (PNG and ICO are supported via the `images` feature)",
                     icon_path.display()
                 )
             })?;
-            resources
-                .set_main_icon_file(icon_str)
-                .with_context(|| {
-                    format!(
-                        "stamping icon from {} (PNG and ICO are supported via the `images` feature)",
-                        icon_path.display()
-                    )
-                })?;
         }
 
         if let Some(manifest_path) = &self.manifest {
-            let manifest_xml = std::fs::read_to_string(manifest_path).with_context(|| {
-                format!("reading manifest XML at {}", manifest_path.display())
-            })?;
+            let manifest_xml = std::fs::read_to_string(manifest_path)
+                .with_context(|| format!("reading manifest XML at {}", manifest_path.display()))?;
             // Reject a malformed manifest *here*, at build time.
             //
             // `editpe`'s `set_manifest` validates only the resource-table
@@ -153,14 +143,12 @@ impl ResourcePlan {
             // a typo in a file the user wrote by hand.
             validate_xml_well_formed(&manifest_xml)
                 .with_context(|| format!("parsing manifest XML at {}", manifest_path.display()))?;
-            resources
-                .set_manifest(&manifest_xml)
-                .with_context(|| {
-                    format!(
-                        "embedding application manifest from {}",
-                        manifest_path.display()
-                    )
-                })?;
+            resources.set_manifest(&manifest_xml).with_context(|| {
+                format!(
+                    "embedding application manifest from {}",
+                    manifest_path.display()
+                )
+            })?;
         }
         // NOTE: a v6 common-controls manifest (`assets/snug-default-manifest.xml`)
         // used to be embedded by default, but on some Windows installs it
@@ -188,10 +176,7 @@ impl ResourcePlan {
         let mut image = Image::parse_file(exe)
             .with_context(|| format!("parsing {} as a PE image", exe.display()))?;
 
-        let mut resources = image
-            .resource_directory()
-            .cloned()
-            .unwrap_or_default();
+        let mut resources = image.resource_directory().cloned().unwrap_or_default();
 
         self.apply(&mut resources, payload)?;
 
@@ -247,7 +232,9 @@ fn build_version_info(app: &AppMetadata) -> VersionInfo {
         key: VERSION_STRING_TABLE_KEY.to_string(),
         ..VersionStringTable::default()
     };
-    string_table.strings.insert("ProductName".to_string(), app.name.clone());
+    string_table
+        .strings
+        .insert("ProductName".to_string(), app.name.clone());
     string_table
         .strings
         .insert("CompanyName".to_string(), app.company.clone());
@@ -324,7 +311,7 @@ pub fn validate_app_version(s: &str) -> Result<String, String> {
                 return Err(format!(
                     "version component `{part}` in `{s}` is out of range: \
                      each component must be 0-{MAX_COMPONENT}"
-                ))
+                ));
             }
         }
     }
@@ -402,7 +389,10 @@ mod tests {
         assert_eq!(info.strings.len(), 1);
         let table = &info.strings[0];
         assert_eq!(table.key, VERSION_STRING_TABLE_KEY);
-        assert_eq!(table.strings.get("ProductName").map(String::as_str), Some("Demo"));
+        assert_eq!(
+            table.strings.get("ProductName").map(String::as_str),
+            Some("Demo")
+        );
         assert_eq!(
             table.strings.get("CompanyName").map(String::as_str),
             Some("SynapticLoop")
@@ -443,7 +433,14 @@ mod tests {
     #[test]
     fn validate_app_version_accepts_one_to_four_components() {
         for good in [
-            "0", "1", "25", "1.2", "1.2.3", "1.2.3.4", "0.0.0.0", "65535.0.0.0",
+            "0",
+            "1",
+            "25",
+            "1.2",
+            "1.2.3",
+            "1.2.3.4",
+            "0.0.0.0",
+            "65535.0.0.0",
         ] {
             assert_eq!(
                 validate_app_version(good).unwrap(),
@@ -456,7 +453,10 @@ mod tests {
     #[test]
     fn validate_app_version_rejects_too_many_components() {
         let err = validate_app_version("1.2.3.4.5").unwrap_err();
-        assert!(err.contains("too many components"), "unexpected error: {err}");
+        assert!(
+            err.contains("too many components"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -549,11 +549,11 @@ mod tests {
         // machine as an SxS activation error, with nothing in the build log
         // to connect it to a typo in a hand-written file.
         for bad in [
-            r#"<assembly><trustInfo>"#,           // unclosed
-            r#"<assembly></assembl>"#,            // mismatched end tag
+            r#"<assembly><trustInfo>"#,          // unclosed
+            r#"<assembly></assembl>"#,           // mismatched end tag
             r#"<assembly><a b="c/></assembly>"#, // unterminated attribute
             r#"<assembly><a></b></assembly>"#,   // crossed nesting
-            "",                                    // not a document
+            "",                                  // not a document
         ] {
             assert!(
                 validate_xml_well_formed(bad).is_err(),

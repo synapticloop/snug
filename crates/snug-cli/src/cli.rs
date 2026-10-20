@@ -161,20 +161,33 @@ pub struct Cli {
     /// Output Windows executable path.
     ///
     /// Defaults to `<jar-stem>.exe` in the current directory.
-    #[arg(short = 'o', long = "output", value_name = "EXE", help_heading = "Input / output")]
+    #[arg(
+        short = 'o',
+        long = "output",
+        value_name = "EXE",
+        help_heading = "Input / output"
+    )]
     pub output: Option<PathBuf>,
 
     /// Application display name (e.g. `"My App"`).
     ///
     /// Maps to the `ProductName` / `FileDescription` Windows version
     /// resource fields and to the per-user cache directory.
-    #[arg(long = "name", value_name = "NAME", help_heading = "Application metadata")]
+    #[arg(
+        long = "name",
+        value_name = "NAME",
+        help_heading = "Application metadata"
+    )]
     pub name: Option<String>,
 
     /// Company / vendor name (e.g. `"SynapticLoop"`).
     ///
     /// Maps to the `CompanyName` Windows version resource field.
-    #[arg(long = "company", value_name = "COMPANY", help_heading = "Application metadata")]
+    #[arg(
+        long = "company",
+        value_name = "COMPANY",
+        help_heading = "Application metadata"
+    )]
     pub company: Option<String>,
 
     /// Application version (e.g. `1.2.3`).
@@ -198,14 +211,22 @@ pub struct Cli {
     /// Short description (Windows `FileDescription`).
     ///
     /// Shown by File Explorer on the EXE's "Details" tab.
-    #[arg(long = "description", value_name = "TEXT", help_heading = "Application metadata")]
+    #[arg(
+        long = "description",
+        value_name = "TEXT",
+        help_heading = "Application metadata"
+    )]
     pub description: Option<String>,
 
     /// Copyright string (Windows `LegalCopyright`).
     ///
     /// Shown by File Explorer on the EXE's "Details" tab alongside
     /// `--version` and `--description`.
-    #[arg(long = "copyright", value_name = "TEXT", help_heading = "Application metadata")]
+    #[arg(
+        long = "copyright",
+        value_name = "TEXT",
+        help_heading = "Application metadata"
+    )]
     pub copyright: Option<String>,
 
     /// URL surfaced as a clickable "Check for a newer version" link
@@ -217,34 +238,60 @@ pub struct Cli {
     /// that it's your own EXE pointing at your own URL — no URL
     /// validation is performed at build time, so be careful what you
     /// bake in.
-    #[arg(long = "update-url", value_name = "URL", help_heading = "Application metadata")]
+    #[arg(
+        long = "update-url",
+        value_name = "URL",
+        help_heading = "Application metadata"
+    )]
     pub update_url: Option<String>,
 
     /// Minimum required Java major version.
     ///
     /// Defaults to `25` (the project's development target).
-    #[arg(long = "min-java", value_name = "N", default_value_t = 25, help_heading = "Java runtime")]
+    #[arg(
+        long = "min-java",
+        value_name = "N",
+        default_value_t = 25,
+        help_heading = "Java runtime"
+    )]
     pub min_java: u16,
 
     /// Override the `Main-Class` read from the JAR manifest.
-    #[arg(long = "main-class", value_name = "CLASS", help_heading = "Java runtime")]
+    #[arg(
+        long = "main-class",
+        value_name = "CLASS",
+        help_heading = "Java runtime"
+    )]
     pub main_class: Option<String>,
 
     /// Extra JVM option forwarded to `JNI_CreateJavaVM`.
     ///
     /// Repeatable. Examples:
     /// `--jvm-arg=-Xms256m --jvm-arg=-Xmx2g --jvm-arg=-Dfile.encoding=UTF-8`
-    #[arg(long = "jvm-arg", value_name = "OPTION", allow_hyphen_values = true, help_heading = "Java runtime")]
+    #[arg(
+        long = "jvm-arg",
+        value_name = "OPTION",
+        allow_hyphen_values = true,
+        help_heading = "Java runtime"
+    )]
     pub jvm_args: Vec<String>,
 
     /// `.ico` or `.png` file used as the Windows Explorer icon for the EXE.
-    #[arg(long = "icon", value_name = "PNG/ICO", help_heading = "Windows resources")]
+    #[arg(
+        long = "icon",
+        value_name = "PNG/ICO",
+        help_heading = "Windows resources"
+    )]
     pub icon: Option<PathBuf>,
 
     /// Optional Windows application manifest (XML) embedded as
     /// `RT_MANIFEST`. Use this to declare DPI-awareness, side-by-side
     /// assembly identity, or `requestedExecutionLevel` for UAC.
-    #[arg(long = "manifest", value_name = "XML", help_heading = "Windows resources")]
+    #[arg(
+        long = "manifest",
+        value_name = "XML",
+        help_heading = "Windows resources"
+    )]
     pub manifest: Option<PathBuf>,
 
     /// PNG splash image shown by the native launcher before the JVM starts.
@@ -255,14 +302,23 @@ pub struct Cli {
     /// `640x360`. Anything bigger triggers a build-time warning
     /// (see `--splash-max`); anything smaller renders fine but may
     /// look lost on high-DPI displays.
-    #[arg(long = "splash", value_name = "PNG", help_heading = "Windows resources")]
+    #[arg(
+        long = "splash",
+        value_name = "PNG",
+        help_heading = "Windows resources"
+    )]
     pub splash: Option<PathBuf>,
 
     /// Minimum splash duration in milliseconds.
     ///
     /// The splash is dismissed once the JVM signals readiness *or* this
     /// duration elapses, whichever is later. Defaults to `1500`.
-    #[arg(long = "splash-ms", value_name = "MS", default_value_t = 1_500, help_heading = "Windows resources")]
+    #[arg(
+        long = "splash-ms",
+        value_name = "MS",
+        default_value_t = 1_500,
+        help_heading = "Windows resources"
+    )]
     pub splash_ms: u32,
 
     /// Maximum recommended splash dimensions, or `off` to silence the

@@ -43,13 +43,13 @@ use jni::signature::RuntimeMethodSignature;
 use jni::strings::JNIString;
 use jni::{InitArgsBuilder, JNIVersion, JavaVM};
 
-use snug_format::{decode, DownloadJdkMode, FormatError, JvmDiscovery, SnugEmbedded};
+use snug_format::{DownloadJdkMode, FormatError, JvmDiscovery, SnugEmbedded, decode};
 
+use crate::LauncherError;
 use crate::cache;
 use crate::jdk_install;
 use crate::log;
 use crate::manifest;
-use crate::LauncherError;
 
 /// Suffix of the payload file snug writes into a `.app` bundle.
 ///
@@ -142,10 +142,7 @@ pub fn run(self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherErr
         if let Err(e) = cache::touch(&dest) {
             // Non-fatal: the JAR is on disk and usable. It just won't be
             // protected from the sweep, so it may be re-extracted later.
-            log::log(&format!(
-                "cache: could not touch {}: {e}",
-                dest.display()
-            ));
+            log::log(&format!("cache: could not touch {}: {e}", dest.display()));
         }
         cached_paths.push(dest);
     }
@@ -203,7 +200,10 @@ pub fn run(self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherErr
             log_path.display()
         ),
     }
-    log::log(&format!("app: {} / {}", config.app.company, config.app.name));
+    log::log(&format!(
+        "app: {} / {}",
+        config.app.company, config.app.name
+    ));
     log::log(&format!("app version: {}", config.app.version));
     log::log(&format!("cache_root: {}", cache_root.display()));
     log::log(&format!(
@@ -249,9 +249,7 @@ pub fn run(self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherErr
                 // `Force` normally skips discovery so the install path can
                 // run first; doing that again here would ask the same
                 // question twice and, on a JDK we cannot find, loop.
-                log::log(
-                    "resumed after the JDK install; discovering rather than offering again",
-                );
+                log::log("resumed after the JDK install; discovering rather than offering again");
                 discover_jvm(&config.behavior.jvm_discovery, config.min_java)?
             } else {
                 log::log("JVM discovery: skipped (download-jdk=force)");
@@ -303,7 +301,10 @@ pub fn run(self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherErr
         let result = jdk_install::maybe_install((), config.min_java, &install_root);
         match result {
             Ok(Some(new_home)) => {
-                log::log(&format!("JDK install flow succeeded: {}", new_home.display()));
+                log::log(&format!(
+                    "JDK install flow succeeded: {}",
+                    new_home.display()
+                ));
                 // Hand off to a fresh copy of ourselves.
                 //
                 // Showing that dialog required an `NSApplication`, and
@@ -413,7 +414,6 @@ pub fn run(self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherErr
         Vec::new()
     };
 
-
     // 5. Build the JNI InitArgs. All cached JARs go on the classpath so
     //    `find_class` resolves through the system loader. `join_paths`
     //    supplies the platform's separator — do NOT hand-roll this with
@@ -508,12 +508,10 @@ pub fn run(self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherErr
 
     crate::appkit::run_event_loop();
 
-    worker
-        .join()
-        .map_err(|_| LauncherError::LibraryLoad {
-            library: "jvm worker".to_string(),
-            message: "worker thread panicked".to_string(),
-        })?
+    worker.join().map_err(|_| LauncherError::LibraryLoad {
+        library: "jvm worker".to_string(),
+        message: "worker thread panicked".to_string(),
+    })?
 }
 
 /// Create the VM, run the app's entry point, and tear the VM down.
@@ -558,145 +556,135 @@ fn run_java_entry_point(
     let main_class_name_for_err = main_class_name.clone();
     let argv_for_main = argv_strings;
 
-    let exit_code: i32 = vm
-        .attach_current_thread(|env| -> Result<i32, LauncherError> {
-            let class = env
-                .find_class(JNIString::new(&main_class_jni))
-                .map_err(|e| {
-                    LauncherError::MainClassNotFound(format!("{main_class_name_for_err} ({e})"))
-                })?;
+    let exit_code: i32 = vm.attach_current_thread(|env| -> Result<i32, LauncherError> {
+        let class = env
+            .find_class(JNIString::new(&main_class_jni))
+            .map_err(|e| {
+                LauncherError::MainClassNotFound(format!("{main_class_name_for_err} ({e})"))
+            })?;
 
-            // args[] as a String[]. The empty-arg case still allocates a
-            // zero-length array so we have a real JObject to hand to JNI.
-            let args_arr: JObjectArray<JString> = if argv_for_main.is_empty() {
-                let placeholder = env
-                    .new_string("")
-                    .map_err(|e| LauncherError::JniInvoke(format!("new_string placeholder: {e}")))?;
-                JObjectArray::<JString>::new(env, 0, &placeholder)
-                    .map_err(|e| LauncherError::JniInvoke(format!("new String[0]: {e}")))?
-            } else {
-                let first = env.new_string(&argv_for_main[0]).map_err(|e| {
-                    LauncherError::JniInvoke(format!("new_string[0]: {e}"))
-                })?;
-                let arr = JObjectArray::<JString>::new(env, argv_for_main.len(), &first)
-                    .map_err(|e| LauncherError::JniInvoke(format!("new String[]: {e}")))?;
-                for (i, s) in argv_for_main.iter().enumerate().skip(1) {
-                    let jstr = env.new_string(s).map_err(|e| {
-                        LauncherError::JniInvoke(format!("new_string[{i}]: {e}"))
-                    })?;
-                    let jstr_ref: &JString = jstr.as_ref();
-                    arr.set_element(env, i, jstr_ref).map_err(|e| {
-                        LauncherError::JniInvoke(format!("set_element[{i}]: {e}"))
-                    })?;
-                }
-                arr
-            };
+        // args[] as a String[]. The empty-arg case still allocates a
+        // zero-length array so we have a real JObject to hand to JNI.
+        let args_arr: JObjectArray<JString> = if argv_for_main.is_empty() {
+            let placeholder = env
+                .new_string("")
+                .map_err(|e| LauncherError::JniInvoke(format!("new_string placeholder: {e}")))?;
+            JObjectArray::<JString>::new(env, 0, &placeholder)
+                .map_err(|e| LauncherError::JniInvoke(format!("new String[0]: {e}")))?
+        } else {
+            let first = env
+                .new_string(&argv_for_main[0])
+                .map_err(|e| LauncherError::JniInvoke(format!("new_string[0]: {e}")))?;
+            let arr = JObjectArray::<JString>::new(env, argv_for_main.len(), &first)
+                .map_err(|e| LauncherError::JniInvoke(format!("new String[]: {e}")))?;
+            for (i, s) in argv_for_main.iter().enumerate().skip(1) {
+                let jstr = env
+                    .new_string(s)
+                    .map_err(|e| LauncherError::JniInvoke(format!("new_string[{i}]: {e}")))?;
+                let jstr_ref: &JString = jstr.as_ref();
+                arr.set_element(env, i, jstr_ref)
+                    .map_err(|e| LauncherError::JniInvoke(format!("set_element[{i}]: {e}")))?;
+            }
+            arr
+        };
 
-            let args_obj: &JObjectArray<JString> = &args_arr;
-            let args_value: JValue = args_obj.into();
+        let args_obj: &JObjectArray<JString> = &args_arr;
+        let args_value: JValue = args_obj.into();
 
-            let main_sig = RuntimeMethodSignature::from_str("([Ljava/lang/String;)V")
-                .map_err(|e| LauncherError::JniInvoke(format!("parse main signature: {e}")))?;
+        let main_sig = RuntimeMethodSignature::from_str("([Ljava/lang/String;)V")
+            .map_err(|e| LauncherError::JniInvoke(format!("parse main signature: {e}")))?;
 
-            log::debug(&format!(
-                "jni: found class {main_class_jni}; built String[{}]",
-                argv_for_main.len()
-            ));
-            log::debug("jni: resolving static main([Ljava/lang/String;)V");
-            let main_method_result = env.get_static_method_id(
-                &class,
-                JNIString::new("main"),
-                main_sig.method_signature(),
-            );
+        log::debug(&format!(
+            "jni: found class {main_class_jni}; built String[{}]",
+            argv_for_main.len()
+        ));
+        log::debug("jni: resolving static main([Ljava/lang/String;)V");
+        let main_method_result =
+            env.get_static_method_id(&class, JNIString::new("main"), main_sig.method_signature());
 
-            let result = match main_method_result {
-                Ok(_) => {
-                    // The single most useful line in the file. Everything
-                    // above is snug; everything the app does from here on
-                    // is the JVM. If the log stops *after* this and
-                    // nothing returns, the app is blocked inside its own
-                    // `main` (or in a toolkit it initialised) and no
-                    // amount of snug-side logging will say more — that
-                    // wants a JVM thread dump instead.
-                    log::debug("jni: >>> calling main(String[]) — blocks until the app returns <<<");
-                    env.call_static_method(
+        let result = match main_method_result {
+            Ok(_) => {
+                // The single most useful line in the file. Everything
+                // above is snug; everything the app does from here on
+                // is the JVM. If the log stops *after* this and
+                // nothing returns, the app is blocked inside its own
+                // `main` (or in a toolkit it initialised) and no
+                // amount of snug-side logging will say more — that
+                // wants a JVM thread dump instead.
+                log::debug("jni: >>> calling main(String[]) — blocks until the app returns <<<");
+                env.call_static_method(
                     &class,
                     JNIString::new("main"),
                     main_sig.method_signature(),
-                        &[args_value],
-                    )
-                }
-                Err(jni::errors::Error::MethodNotFound { .. }) => {
-                    log::debug("jni: no main method; falling back to javafx Application.launch");
-                    // JavaFX fallback: invoke Application.launch(userClass,
-                    // args) iff the user's class extends
-                    // javafx.application.Application.
-                    let app_class = env
-                        .find_class(JNIString::new("javafx/application/Application"))
-                        .map_err(|e| {
-                            LauncherError::JniInvoke(format!(
-                                "find javafx.application.Application: {e}"
-                            ))
-                        })?;
-                    let is_fx = env.is_assignable_from(&app_class, &class).map_err(|e| {
+                    &[args_value],
+                )
+            }
+            Err(jni::errors::Error::MethodNotFound { .. }) => {
+                log::debug("jni: no main method; falling back to javafx Application.launch");
+                // JavaFX fallback: invoke Application.launch(userClass,
+                // args) iff the user's class extends
+                // javafx.application.Application.
+                let app_class = env
+                    .find_class(JNIString::new("javafx/application/Application"))
+                    .map_err(|e| {
                         LauncherError::JniInvoke(format!(
-                            "isAssignableFrom(Application): {e}"
+                            "find javafx.application.Application: {e}"
                         ))
                     })?;
-                    if !is_fx {
-                        return Err(LauncherError::NoMainMethod(
-                            main_class_name_for_err.clone(),
-                        ));
-                    }
-                    let launch_sig =
-                        RuntimeMethodSignature::from_str("(Ljava/lang/Class;[Ljava/lang/String;)V")
-                            .map_err(|e| {
-                                LauncherError::JniInvoke(format!("parse launch signature: {e}"))
-                            })?;
-                    let class_obj: &JObject = class.as_ref();
-                    let class_value: JValue = JValue::Object(class_obj);
-                    env.call_static_method(
-                        &app_class,
-                        JNIString::new("launch"),
-                        launch_sig.method_signature(),
-                        &[class_value, args_value],
-                    )
+                let is_fx = env.is_assignable_from(&app_class, &class).map_err(|e| {
+                    LauncherError::JniInvoke(format!("isAssignableFrom(Application): {e}"))
+                })?;
+                if !is_fx {
+                    return Err(LauncherError::NoMainMethod(main_class_name_for_err.clone()));
                 }
-                Err(e) => {
-                    return Err(LauncherError::JniInvoke(format!("get main method: {e}")));
-                }
-            };
-
-            match result {
-                Ok(_) => {
-                    // The other half of the `>>> calling main <<<` bracket:
-                    // seeing this line means the app ran to completion, so
-                    // a hang before it is inside the app, not in snug.
-                    log::debug("jni: <<< main returned cleanly");
-                    Ok(0)
-                }
-                Err(jni::errors::Error::MethodNotFound { .. }) => {
-                    Err(LauncherError::NoMainMethod(main_class_name_for_err.clone()))
-                }
-                Err(e) => {
-                    // Full stacktrace to stderr before clearing — preserves
-                    // detail for log-file debugging.
-                    if env.exception_check() {
-                        let _ = env.exception_describe();
-                    }
-
-                    // User-facing detail via Throwable.getMessage(). Falls
-                    // back to "No error message" when it returns
-                    // null/empty, and to the raw JNI error when no Java
-                    // exception is pending.
-                    let detail = take_exception_message(env).unwrap_or_else(|| {
-                        format!("{main_class_name_for_err}: {e}")
-                    });
-
-                    Err(LauncherError::JavaException(detail))
-                }
+                let launch_sig =
+                    RuntimeMethodSignature::from_str("(Ljava/lang/Class;[Ljava/lang/String;)V")
+                        .map_err(|e| {
+                            LauncherError::JniInvoke(format!("parse launch signature: {e}"))
+                        })?;
+                let class_obj: &JObject = class.as_ref();
+                let class_value: JValue = JValue::Object(class_obj);
+                env.call_static_method(
+                    &app_class,
+                    JNIString::new("launch"),
+                    launch_sig.method_signature(),
+                    &[class_value, args_value],
+                )
             }
-        })?;
+            Err(e) => {
+                return Err(LauncherError::JniInvoke(format!("get main method: {e}")));
+            }
+        };
+
+        match result {
+            Ok(_) => {
+                // The other half of the `>>> calling main <<<` bracket:
+                // seeing this line means the app ran to completion, so
+                // a hang before it is inside the app, not in snug.
+                log::debug("jni: <<< main returned cleanly");
+                Ok(0)
+            }
+            Err(jni::errors::Error::MethodNotFound { .. }) => {
+                Err(LauncherError::NoMainMethod(main_class_name_for_err.clone()))
+            }
+            Err(e) => {
+                // Full stacktrace to stderr before clearing — preserves
+                // detail for log-file debugging.
+                if env.exception_check() {
+                    let _ = env.exception_describe();
+                }
+
+                // User-facing detail via Throwable.getMessage(). Falls
+                // back to "No error message" when it returns
+                // null/empty, and to the raw JNI error when no Java
+                // exception is pending.
+                let detail = take_exception_message(env)
+                    .unwrap_or_else(|| format!("{main_class_name_for_err}: {e}"));
+
+                Err(LauncherError::JavaException(detail))
+            }
+        }
+    })?;
 
     // 8. Best-effort teardown, on a *detached* thread.
     //
@@ -1284,7 +1272,10 @@ mod tests {
         let client = home.join("lib").join("client").join("libjvm.dylib");
         fs::create_dir_all(client.parent().unwrap()).unwrap();
         fs::write(&client, b"fake").unwrap();
-        assert_eq!(locate_libjvm_dylib(&home).as_deref(), Some(client.as_path()));
+        assert_eq!(
+            locate_libjvm_dylib(&home).as_deref(),
+            Some(client.as_path())
+        );
     }
 
     #[test]
@@ -1312,7 +1303,10 @@ mod tests {
         fs::write(&flat, b"fake").unwrap();
 
         let server = home.join("lib").join("server").join("libjvm.dylib");
-        assert_eq!(locate_libjvm_dylib(&home).as_deref(), Some(server.as_path()));
+        assert_eq!(
+            locate_libjvm_dylib(&home).as_deref(),
+            Some(server.as_path())
+        );
     }
 
     #[test]
@@ -1360,7 +1354,9 @@ mod tests {
         // Below the floor is an error, not a silent skip: the caller wants
         // to say "found Java 8, needed 17" rather than "nothing found".
         match check_candidate(&root, 25) {
-            Err(LauncherError::JvmTooOld { found, min_java, .. }) => {
+            Err(LauncherError::JvmTooOld {
+                found, min_java, ..
+            }) => {
                 assert_eq!(found, 21);
                 assert_eq!(min_java, 25);
             }
@@ -1405,7 +1401,11 @@ mod tests {
         for (home, version) in [(&old_home, "11"), (&new_home, "25")] {
             std::fs::create_dir_all(home.join("bin")).unwrap();
             std::fs::write(home.join("bin").join("java"), b"").unwrap();
-            std::fs::write(home.join("release"), format!("JAVA_VERSION=\"{version}\"\n")).unwrap();
+            std::fs::write(
+                home.join("release"),
+                format!("JAVA_VERSION=\"{version}\"\n"),
+            )
+            .unwrap();
         }
 
         let mut too_old = None;
@@ -1453,8 +1453,8 @@ mod tests {
     #[ignore = "reads the host's JVM installs"]
     fn discovery_probe_reports_what_would_be_found() {
         for min in [8u16, 17, 21, 25] {
-            let found = discover_jvm(&JvmDiscovery::default(), min)
-                .expect("discovery should not error");
+            let found =
+                discover_jvm(&JvmDiscovery::default(), min).expect("discovery should not error");
             match found {
                 Some(home) => {
                     let major = read_java_major(&home).unwrap();

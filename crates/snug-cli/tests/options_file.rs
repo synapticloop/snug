@@ -41,8 +41,8 @@ fn write_jar(path: &PathBuf) {
     // across hosts (previously this helper spawned the system `zip`
     // binary, which only exists on macOS / Linux).
     use std::io::Write;
-    use zip::write::SimpleFileOptions;
     use zip::CompressionMethod;
+    use zip::write::SimpleFileOptions;
 
     let file = fs::File::create(path).expect("create jar");
     let mut zip = zip::ZipWriter::new(file);
@@ -299,7 +299,11 @@ fn options_file_load_skips_comments() {
 fn resolve_returns_nothing_when_no_default_and_no_explicit() {
     let tmp = tempdir();
     let args: Vec<String> = ["snug", "app.jar"].iter().map(|s| s.to_string()).collect();
-    assert!(options_file::resolve_all(&args, &tmp, "macos").unwrap().is_empty());
+    assert!(
+        options_file::resolve_all(&args, &tmp, "macos")
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -347,7 +351,11 @@ fn options_file_next_to_executable_is_ignored() {
     )
     .unwrap();
 
-    fs::write(cwd.join("snug.options"), "--min-java 17\n--name \"From CWD\"\n").unwrap();
+    fs::write(
+        cwd.join("snug.options"),
+        "--min-java 17\n--name \"From CWD\"\n",
+    )
+    .unwrap();
 
     let jar = cwd.join("demo.jar");
     write_jar(&jar);
@@ -431,7 +439,9 @@ fn merge_dedups_overridden_flags_but_keeps_repeatable() {
     // The CLI used space-separated --name CLI; the file used --name=File.
     // The CLI version wins, and the file's --name=File is dropped.
     assert!(
-        merged.windows(2).any(|w| w == ["--name".to_string(), "CLI".to_string()]),
+        merged
+            .windows(2)
+            .any(|w| w == ["--name".to_string(), "CLI".to_string()]),
         "CLI's --name CLI should be present: {merged:?}"
     );
     assert!(!merged.contains(&"--name=File".to_string()));
@@ -439,7 +449,10 @@ fn merge_dedups_overridden_flags_but_keeps_repeatable() {
     assert!(merged.contains(&"--company=Co".to_string()));
     // --jvm-arg appears twice (repeatable flag — both kept).
     let jvm_count = merged.iter().filter(|s| s.starts_with("--jvm-arg")).count();
-    assert_eq!(jvm_count, 2, "--jvm-arg should be kept from both: {merged:?}");
+    assert_eq!(
+        jvm_count, 2,
+        "--jvm-arg should be kept from both: {merged:?}"
+    );
 }
 
 // ---- The OS-specific options file, end to end ----------------------
@@ -482,11 +495,7 @@ fn os_options_file_overrides_the_generic_one() {
         "--min-java 21\n--name \"From Generic\"\n",
     )
     .unwrap();
-    fs::write(
-        host_os_file(&tmp),
-        "--name \"From OS File\"\n",
-    )
-    .unwrap();
+    fs::write(host_os_file(&tmp), "--name \"From OS File\"\n").unwrap();
 
     let output = Command::new(snug_bin())
         .current_dir(&tmp)
@@ -588,7 +597,11 @@ fn another_platforms_options_file_is_ignored() {
 
     // Name a file this host can never match.
     let mut foreign = "snug.".to_string();
-    foreign.push_str(if std::env::consts::OS == "windows" { "linux" } else { "windows" });
+    foreign.push_str(if std::env::consts::OS == "windows" {
+        "linux"
+    } else {
+        "windows"
+    });
     foreign.push_str(".options");
     fs::write(tmp.join(&foreign), "--min-java 99\n").unwrap();
 
@@ -631,7 +644,10 @@ fn missing_os_options_file_is_silent() {
     assert!(output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(
-        stderr.lines().filter(|l| l.contains("loaded options from")).count(),
+        stderr
+            .lines()
+            .filter(|l| l.contains("loaded options from"))
+            .count(),
         1,
         "only the generic file should be reported: {stderr}"
     );
@@ -719,7 +735,9 @@ fn effective_repo_output(os: &str) -> Result<Option<PathBuf>, clap::Error> {
 
     let merged = options_file::merge(&raw, layers);
     let cli = Cli::try_parse_from(merged)?;
-    Ok(cli.output.map(|o| if o.is_absolute() { o } else { root.join(o) }))
+    Ok(cli
+        .output
+        .map(|o| if o.is_absolute() { o } else { root.join(o) }))
 }
 
 #[test]
@@ -737,14 +755,18 @@ fn repo_options_files_merge_to_a_valid_argv_for_every_platform() {
 fn each_platform_gets_the_output_for_its_own_artefact() {
     let root = repo_root();
 
-    let macos = effective_repo_output("macos").unwrap().expect("macos sets --output");
+    let macos = effective_repo_output("macos")
+        .unwrap()
+        .expect("macos sets --output");
     assert_eq!(
         macos,
         root.join("assets/snug-javafx-demo.app"),
         "a macOS build must name a .app bundle, or snug writes a Windows PE"
     );
 
-    let windows = effective_repo_output("windows").unwrap().expect("windows sets --output");
+    let windows = effective_repo_output("windows")
+        .unwrap()
+        .expect("windows sets --output");
     assert_eq!(
         windows,
         root.join("assets/snug-javafx-demo-windows.exe"),

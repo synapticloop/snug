@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use snug_format::{
-    embedded_file, AppMetadata, LauncherBehavior, LauncherConfig, SnugEmbedded, SnugPayload,
+    AppMetadata, LauncherBehavior, LauncherConfig, SnugEmbedded, SnugPayload, embedded_file,
 };
 use snug_launcher::platform;
 // Taken from the same place the emitter uses, so a rename cannot make the
@@ -161,7 +161,11 @@ fn macos_launcher_runs_a_real_jar_through_a_real_jvm() {
     let bare_dir = work.join("bare");
     fs::create_dir_all(&bare_dir).unwrap();
     let fake_exe = bare_dir.join("SnugMacOSSmoke");
-    fs::write(&fake_exe, b"not a real Mach-O; run() is called directly below").unwrap();
+    fs::write(
+        &fake_exe,
+        b"not a real Mach-O; run() is called directly below",
+    )
+    .unwrap();
     fs::write(
         bare_dir.join(format!("SnugMacOSSmoke.{PAYLOAD_SUFFIX}")),
         &encoded,

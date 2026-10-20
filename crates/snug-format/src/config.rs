@@ -64,7 +64,8 @@ pub struct AppMetadata {
     /// latest" messages without forcing users to read the error text.
     #[serde(default)]
     pub update_check_url: Option<String>,
-}/// Optional native splash shown by the launcher before the JVM is loaded.
+}
+/// Optional native splash shown by the launcher before the JVM is loaded.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SplashConfig {
     /// Minimum display duration in milliseconds. The splash is dismissed

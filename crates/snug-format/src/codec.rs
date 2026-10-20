@@ -12,7 +12,7 @@
 //! +--------+----------------+--------------+--------------+----------------------+
 //! ```
 
-use crate::{EmbeddedFile, FormatError, SnugEmbedded, SnugPayload, FORMAT_VERSION, MAGIC};
+use crate::{EmbeddedFile, FORMAT_VERSION, FormatError, MAGIC, SnugEmbedded, SnugPayload};
 
 /// Encode a [`SnugPayload`] (without the outer wrapper) as postcard bytes.
 ///
@@ -252,6 +252,9 @@ mod tests {
         let embedded = SnugEmbedded::new(payload);
         let bytes = encode(&embedded).unwrap();
         let truncated = &bytes[..bytes.len() - 4];
-        assert!(matches!(decode(truncated), Err(FormatError::Truncated { .. })));
+        assert!(matches!(
+            decode(truncated),
+            Err(FormatError::Truncated { .. })
+        ));
     }
 }

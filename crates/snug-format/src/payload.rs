@@ -65,7 +65,6 @@ pub struct SnugPayload {
     // are never mismatched -- but do not read this removal as backward
     // compatible, and do not remove a field from the middle again on the
     // strength of `default` being present.
-
     /// Localization bundles for the launcher's runtime strings
     /// (error dialogs, splash errors, JDK-install errors, bare-stub
     /// fallback, etc.).

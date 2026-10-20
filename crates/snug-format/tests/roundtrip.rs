@@ -1,9 +1,8 @@
 //! Integration roundtrip test for snug-format.
 
 use snug_format::{
-    decode, embedded_file, encode, AppMetadata, DownloadJdkMode, JvmDiscovery,
-    LauncherBehavior, LauncherConfig, SnugEmbedded, SnugPayload, SplashConfig,
-    SplashImage, FORMAT_VERSION, MAGIC,
+    AppMetadata, DownloadJdkMode, FORMAT_VERSION, JvmDiscovery, LauncherBehavior, LauncherConfig,
+    MAGIC, SnugEmbedded, SnugPayload, SplashConfig, SplashImage, decode, embedded_file, encode,
 };
 
 fn sample_config() -> LauncherConfig {
@@ -32,9 +31,7 @@ fn sample_config() -> LauncherConfig {
                 height: 2,
                 bytes: vec![
                     0x00, 0x00, 0xFF, 0xFF, // B=0 G=0 R=255 A=255
-                    0x00, 0x00, 0xFF, 0xFF,
-                    0x00, 0x00, 0xFF, 0xFF,
-                    0x00, 0x00, 0xFF, 0xFF,
+                    0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0xFF, 0xFF,
                 ],
             },
         }),

@@ -35,12 +35,12 @@ pub use config::{
     AppMetadata, DownloadJdkMode, JvmDiscovery, LauncherBehavior, LauncherConfig, SplashConfig,
     SplashImage,
 };
-pub use embedded::{SnugEmbedded, FORMAT_VERSION, MAGIC};
+pub use embedded::{FORMAT_VERSION, MAGIC, SnugEmbedded};
 pub use error::FormatError;
 pub use localization::{
-    describe, discover_localization_files, expected_filename, placeholders, tag_from_path,
-    Localization, LocalizationLoadError, LocalizationParseError, DEFAULT_EN_TAG, DEFAULT_EN_TEXT,
-    TOKEN_DESCRIPTIONS,
+    DEFAULT_EN_TAG, DEFAULT_EN_TEXT, Localization, LocalizationLoadError, LocalizationParseError,
+    TOKEN_DESCRIPTIONS, describe, discover_localization_files, expected_filename, placeholders,
+    tag_from_path,
 };
 pub use payload::{EmbeddedFile, SnugPayload};
-pub use tokens::{injected_for, replacement_tokens_markdown, Injection, INJECTED_BY_KEY};
+pub use tokens::{INJECTED_BY_KEY, Injection, injected_for, replacement_tokens_markdown};

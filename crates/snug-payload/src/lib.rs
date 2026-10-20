@@ -33,7 +33,7 @@
 use std::path::Path;
 
 use editpe::Image;
-use snug_format::{decode, FormatError, SnugEmbedded};
+use snug_format::{FormatError, SnugEmbedded, decode};
 
 /// The resource entry name that holds the encoded snug payload.
 pub const PAYLOAD_RESOURCE_NAME: &str = "SNUGEMBD";
@@ -55,9 +55,9 @@ pub use snug_format::MAGIC;
 /// size.
 pub fn find_in_file(path: &Path) -> Result<Option<SnugEmbedded>, FormatError> {
     let image = Image::parse_file(path).map_err(|e| {
-        FormatError::Io(std::io::Error::other(
-            format!("parse self as PE image: {e}"),
-        ))
+        FormatError::Io(std::io::Error::other(format!(
+            "parse self as PE image: {e}"
+        )))
     })?;
 
     let dir = match image.resource_directory() {
@@ -69,9 +69,9 @@ pub fn find_in_file(path: &Path) -> Result<Option<SnugEmbedded>, FormatError> {
         Ok(Some(b)) => b,
         Ok(None) => return Ok(None),
         Err(e) => {
-            return Err(FormatError::Io(std::io::Error::other(
-                format!("read {PAYLOAD_RESOURCE_NAME} resource: {e}"),
-            )))
+            return Err(FormatError::Io(std::io::Error::other(format!(
+                "read {PAYLOAD_RESOURCE_NAME} resource: {e}"
+            ))));
         }
     };
 
@@ -81,9 +81,8 @@ pub fn find_in_file(path: &Path) -> Result<Option<SnugEmbedded>, FormatError> {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    
 
-    use snug_format::{embedded_file, AppMetadata, LauncherBehavior, LauncherConfig, SnugEmbedded};
+    use snug_format::{AppMetadata, LauncherBehavior, LauncherConfig, SnugEmbedded, embedded_file};
 
     use super::*;
 
@@ -119,10 +118,7 @@ mod tests {
         let mut image = Image::parse(&stub_bytes).expect("parse stub");
         image
             .set_resource_directory({
-                let mut dir = image
-                    .resource_directory()
-                    .cloned()
-                    .unwrap_or_default();
+                let mut dir = image.resource_directory().cloned().unwrap_or_default();
                 dir.set_rcdata(PAYLOAD_RESOURCE_NAME, encoded).unwrap();
                 dir
             })

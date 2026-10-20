@@ -54,7 +54,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use snug_format::SnugPayload;
 
 use crate::build::output_path;
@@ -109,8 +109,7 @@ pub fn build_app(cli: &Cli, payload: &SnugPayload) -> Result<PathBuf> {
     let macos_dir = contents.join("MacOS");
     let resources_dir = contents.join("Resources");
     for dir in [&macos_dir, &resources_dir] {
-        fs::create_dir_all(dir)
-            .with_context(|| format!("creating {}", dir.display()))?;
+        fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         set_mode(dir, BUNDLE_DIR_MODE)?;
     }
 
@@ -150,8 +149,7 @@ pub fn build_app(cli: &Cli, payload: &SnugPayload) -> Result<PathBuf> {
     //    is an icon to point CFBundleIconFile at.
     let plist = info_plist(&app_name, payload, icon_written);
     let plist_path = contents.join("Info.plist");
-    fs::write(&plist_path, plist)
-        .with_context(|| format!("writing {}", plist_path.display()))?;
+    fs::write(&plist_path, plist).with_context(|| format!("writing {}", plist_path.display()))?;
     set_mode(&plist_path, DATA_FILE_MODE)?;
 
     // 5. Sign. arm64 will not run an unsigned binary, so this is not
@@ -341,14 +339,24 @@ fn bundle_identifier(company: &str, name: &str) -> String {
     let part = |s: &str| -> String {
         let slug: String = s
             .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+            .map(|c| {
+                if c.is_ascii_alphanumeric() {
+                    c.to_ascii_lowercase()
+                } else {
+                    '-'
+                }
+            })
             .collect();
         let slug = slug
             .split('-')
             .filter(|seg| !seg.is_empty())
             .collect::<Vec<_>>()
             .join("-");
-        if slug.is_empty() { "app".to_string() } else { slug }
+        if slug.is_empty() {
+            "app".to_string()
+        } else {
+            slug
+        }
     };
     format!("com.{}.{}", part(company), part(name))
 }
@@ -362,20 +370,21 @@ fn bundle_identifier(company: &str, name: &str) -> String {
 fn short_version(raw: &str) -> String {
     let cleaned: String = raw
         .chars()
-        .map(|c| if c.is_ascii_digit() || c == '.' { c } else { '.' })
+        .map(|c| {
+            if c.is_ascii_digit() || c == '.' {
+                c
+            } else {
+                '.'
+            }
+        })
         .collect();
     // Collapsing the dot runs is what makes `1.0.0-beta.1` usable: the
     // `-beta` becomes a separator, so the result stays a legal
     // digits-and-dots string *and* keeps the user's version. Bailing out
     // to a constant here would report every pre-release build as 1.0.
     let trimmed = collapse_dots(&cleaned);
-    let valid = !trimmed.is_empty()
-        && trimmed.chars().next().is_some_and(|c| c.is_ascii_digit());
-    if valid {
-        trimmed
-    } else {
-        "1.0".to_string()
-    }
+    let valid = !trimmed.is_empty() && trimmed.chars().next().is_some_and(|c| c.is_ascii_digit());
+    if valid { trimmed } else { "1.0".to_string() }
 }
 
 /// `CFBundleVersion` is the build number: up to three dot-separated
@@ -383,7 +392,13 @@ fn short_version(raw: &str) -> String {
 fn build_version(raw: &str) -> String {
     let digits: String = raw
         .chars()
-        .map(|c| if c.is_ascii_digit() || c == '.' { c } else { '.' })
+        .map(|c| {
+            if c.is_ascii_digit() || c == '.' {
+                c
+            } else {
+                '.'
+            }
+        })
         .collect();
     let collapsed = collapse_dots(&digits);
     if collapsed.is_empty() {
@@ -420,15 +435,13 @@ fn write_icns(cli: &Cli, resources_dir: &Path) -> Result<bool> {
     let Some(src) = &cli.icon else {
         return Ok(false);
     };
-    let bytes = fs::read(src)
-        .with_context(|| format!("reading icon {}", src.display()))?;
+    let bytes = fs::read(src).with_context(|| format!("reading icon {}", src.display()))?;
     let image = image::load_from_memory(&bytes)
         .with_context(|| format!("decoding icon {}", src.display()))?;
 
     let iconset = resources_dir.join("App.iconset");
-    fs::create_dir_all(&iconset).with_context(|| {
-        format!("creating the temporary iconset {}", iconset.display())
-    })?;
+    fs::create_dir_all(&iconset)
+        .with_context(|| format!("creating the temporary iconset {}", iconset.display()))?;
 
     // (file name, pixel size)
     const ENTRIES: &[(&str, u32)] = &[
@@ -445,11 +458,7 @@ fn write_icns(cli: &Cli, resources_dir: &Path) -> Result<bool> {
     ];
 
     for (name, size) in ENTRIES {
-        let resized = image.resize_exact(
-            *size,
-            *size,
-            image::imageops::FilterType::Lanczos3,
-        );
+        let resized = image.resize_exact(*size, *size, image::imageops::FilterType::Lanczos3);
         let path = iconset.join(name);
         resized
             .save(&path)
@@ -579,7 +588,10 @@ mod tests {
         let dict = value.as_dictionary().expect("root must be a dict");
         let get = |k: &str| dict.get(k).and_then(|v| v.as_string()).map(String::from);
         assert_eq!(get("CFBundleExecutable").as_deref(), Some("Snug Demo"));
-        assert_eq!(get("CFBundleIdentifier").as_deref(), Some("com.synapticloop.snug-demo"));
+        assert_eq!(
+            get("CFBundleIdentifier").as_deref(),
+            Some("com.synapticloop.snug-demo")
+        );
         assert_eq!(get("CFBundlePackageType").as_deref(), Some("APPL"));
         assert_eq!(get("CFBundleShortVersionString").as_deref(), Some("2.3.4"));
         assert_eq!(get("CFBundleIconFile").as_deref(), Some("App"));
@@ -607,7 +619,10 @@ mod tests {
         assert_eq!(bundle_name("Sixteen Char Nam"), "Sixteen Char Nam");
         // Over the cap it is cut, and a word broken by the cut does not
         // leave a trailing space behind.
-        assert_eq!(bundle_name("A Very Long Application Name"), "A Very Long Appl");
+        assert_eq!(
+            bundle_name("A Very Long Application Name"),
+            "A Very Long Appl"
+        );
         assert_eq!(bundle_name("Seventeen Char Name"), "Seventeen Char N");
         // Counted in characters, not bytes, so a multi-byte name is not
         // cut in the middle of a code point.
@@ -620,13 +635,9 @@ mod tests {
         let xml = info_plist("snug-javafx-demo", &p, true);
         // The executable stays the slug so it matches the file in
         // Contents/MacOS...
-        assert!(xml.contains(
-            "<key>CFBundleExecutable</key>\n\t<string>snug-javafx-demo</string>"
-        ));
+        assert!(xml.contains("<key>CFBundleExecutable</key>\n\t<string>snug-javafx-demo</string>"));
         // ...while the application menu gets the name a user recognises.
-        assert!(xml.contains(
-            "<key>CFBundleName</key>\n\t<string>Snug JavaFX Demo</string>"
-        ));
+        assert!(xml.contains("<key>CFBundleName</key>\n\t<string>Snug JavaFX Demo</string>"));
     }
 
     #[test]

@@ -318,7 +318,10 @@ fn multi_release_overlays_are_not_reported_as_entry_points() {
         &jar,
         Some("com.example.Main"),
         &[
-            ("com/example/Main.class", class_with_main("com/example/Main")),
+            (
+                "com/example/Main.class",
+                class_with_main("com/example/Main"),
+            ),
             (
                 "META-INF/versions/17/com/example/Main.class",
                 class_with_main("com/example/Main"),

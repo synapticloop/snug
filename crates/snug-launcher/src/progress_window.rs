@@ -45,33 +45,29 @@ use std::time::Instant;
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    AC_SRC_ALPHA, AC_SRC_OVER, AlphaBlend, BeginPaint, BITMAP,
-    BLENDFUNCTION, CreateCompatibleDC, CreateFontW,
-    CreateRoundRectRgn, CreateSolidBrush, DeleteDC, DeleteObject, EndPaint,
-    FillRect, FillRgn, FW_NORMAL, GetObjectW, GetStockObject, HBRUSH, HDC, HBITMAP,
-    HFONT, InvalidateRect, NULL_BRUSH, PAINTSTRUCT, SelectObject, WHITE_BRUSH,
+    AC_SRC_ALPHA, AC_SRC_OVER, AlphaBlend, BITMAP, BLENDFUNCTION, BeginPaint, CreateCompatibleDC,
+    CreateFontW, CreateRoundRectRgn, CreateSolidBrush, DeleteDC, DeleteObject, EndPaint, FW_NORMAL,
+    FillRect, FillRgn, GetObjectW, GetStockObject, HBITMAP, HBRUSH, HDC, HFONT, InvalidateRect,
+    NULL_BRUSH, PAINTSTRUCT, SelectObject, WHITE_BRUSH,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    DrawIconEx, DI_NORMAL,
-    GetMessageW, HICON,
-    GetSystemMetrics, KillTimer, LoadIconW, MSG, PostQuitMessage,
-    RegisterClassExW, SendMessageW, SetTimer, SetWindowPos, SetWindowTextW, SetWindowLongPtrW,
-    SWP_NOACTIVATE, SWP_NOZORDER,
-    GetWindowLongPtrW, TranslateMessage, CW_USEDEFAULT, IDCANCEL, ICON_BIG, IDI_INFORMATION,
-    ICON_SMALL, SM_CXSCREEN, SM_CYSCREEN, BS_DEFPUSHBUTTON,
-    WM_COMMAND, WM_CREATE, WM_CLOSE, WM_NCDESTROY, WM_CTLCOLORSTATIC, WM_PAINT, WM_SETICON,
-    WM_TIMER,
-    WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_SYSMENU, WS_VISIBLE, WS_OVERLAPPED, WS_EX_TOPMOST,
+    AdjustWindowRectEx, BS_DEFPUSHBUTTON, CW_USEDEFAULT, CreateWindowExW, DI_NORMAL,
+    DefWindowProcW, DestroyWindow, DispatchMessageW, DrawIconEx, GetMessageW, GetSystemMetrics,
+    GetWindowLongPtrW, HICON, ICON_BIG, ICON_SMALL, IDCANCEL, IDI_INFORMATION, KillTimer,
+    LoadIconW, MSG, PostQuitMessage, RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE,
+    SWP_NOZORDER, SendMessageW, SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW,
+    TranslateMessage, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORSTATIC, WM_NCDESTROY, WM_PAINT,
+    WM_SETICON, WM_TIMER, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_OVERLAPPED,
+    WS_SYSMENU, WS_VISIBLE,
 };
 
-use crate::modal_window::measure_button_width;
 use crate::jdk_install::{
-    find_best_icon_hicon, load_exe_main_icon_hicon, mascot_icon_override, ProgressShared,
+    ProgressShared, find_best_icon_hicon, load_exe_main_icon_hicon, mascot_icon_override,
 };
 use crate::log;
+use crate::modal_window::measure_button_width;
 
 use crate::frame::*;
 
@@ -309,7 +305,8 @@ unsafe fn register_class() -> u16 {
 // Left alone, `cargo clippy --fix` "fixes" this by removing the borrow,
 // which satisfies needless_borrow and then fails the build on the rustc
 // lint instead. Hence the allow rather than a fix.
-#[allow(clippy::needless_borrow)]unsafe extern "system" fn progress_wndproc(
+#[allow(clippy::needless_borrow)]
+unsafe extern "system" fn progress_wndproc(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
@@ -329,53 +326,22 @@ unsafe fn register_class() -> u16 {
             // 480×270 window). Body text uses the default dialog
             // font (hfont = NULL) — keeps DPI behaviour simple and
             // matches the subtitle / info-box copy.
-            let hfont_heading = create_font_pt(
-                HEADING_PT,
-                HEADING_WEIGHT,
-                false,
-                FONT_FACE,
-            );
-            let hfont_subtitle = create_font_pt(
-                SUBTITLE_PT,
-                SUBTITLE_WEIGHT,
-                false,
-                FONT_FACE,
-            );
+            let hfont_heading = create_font_pt(HEADING_PT, HEADING_WEIGHT, false, FONT_FACE);
+            let hfont_subtitle = create_font_pt(SUBTITLE_PT, SUBTITLE_WEIGHT, false, FONT_FACE);
             let hfont_pct = create_font_pt(PCT_PT, PCT_WEIGHT, false, FONT_FACE);
-            let hfont_phase =
-                create_font_pt(PHASE_PT, PHASE_WEIGHT, false, FONT_FACE);
-            let hfont_detail_left = create_font_pt(
-                DETAIL_LEFT_PT,
-                DETAIL_LEFT_WEIGHT,
-                false,
-                FONT_FACE,
-            );
-            let hfont_detail_right = create_font_pt(
-                DETAIL_RIGHT_PT,
-                DETAIL_RIGHT_WEIGHT,
-                false,
-                FONT_FACE,
-            );
+            let hfont_phase = create_font_pt(PHASE_PT, PHASE_WEIGHT, false, FONT_FACE);
+            let hfont_detail_left =
+                create_font_pt(DETAIL_LEFT_PT, DETAIL_LEFT_WEIGHT, false, FONT_FACE);
+            let hfont_detail_right =
+                create_font_pt(DETAIL_RIGHT_PT, DETAIL_RIGHT_WEIGHT, false, FONT_FACE);
             let hfont_cancel = create_font_pt(CANCEL_PT, FW_NORMAL as i32, false, FONT_FACE);
-            let hfont_info_heading = create_font_pt(
-                INFO_HEADING_PT,
-                INFO_HEADING_WEIGHT,
-                false,
-                FONT_FACE,
-            );
-            let hfont_info_subtext = create_font_pt(
-                INFO_SUBTEXT_PT,
-                INFO_SUBTEXT_WEIGHT,
-                false,
-                FONT_FACE,
-            );
+            let hfont_info_heading =
+                create_font_pt(INFO_HEADING_PT, INFO_HEADING_WEIGHT, false, FONT_FACE);
+            let hfont_info_subtext =
+                create_font_pt(INFO_SUBTEXT_PT, INFO_SUBTEXT_WEIGHT, false, FONT_FACE);
             // Third line shares the first subtext's font.
-            let hfont_info_subtext2 = create_font_pt(
-                INFO_SUBTEXT_PT,
-                INFO_SUBTEXT_WEIGHT,
-                false,
-                FONT_FACE,
-            );
+            let hfont_info_subtext2 =
+                create_font_pt(INFO_SUBTEXT_PT, INFO_SUBTEXT_WEIGHT, false, FONT_FACE);
 
             // Cache the mascot icon **once**, here, instead of
             // re-running `find_best_icon_hicon` on every `WM_PAINT`
@@ -458,10 +424,7 @@ unsafe fn register_class() -> u16 {
             // slot is not a shell-like placeholder to be left visible.
             let phase_text = crate::dialogs::fill(
                 d.runtime.progress.phase_label.as_str(),
-                &[(
-                    "arch",
-                    &d.runtime.progress.arch_windows_x86_64,
-                )],
+                &[("arch", &d.runtime.progress.arch_windows_x86_64)],
             );
 
             let hwnd_phase = CreateWindowExW(
@@ -753,10 +716,7 @@ unsafe fn register_class() -> u16 {
             // set (production path).
             let raw = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut ProgressState;
             let (mascot_hbitmap, mascot_hicon) = if !raw.is_null() {
-                (
-                    (&(*raw).shared).mascot_hbitmap(),
-                    (*raw).mascot_hicon,
-                )
+                ((&(*raw).shared).mascot_hbitmap(), (*raw).mascot_hicon)
             } else {
                 (0, std::ptr::null_mut())
             };
@@ -775,9 +735,17 @@ unsafe fn register_class() -> u16 {
                 // on every paint.
                 if !mascot_hicon.is_null() {
                     if DrawIconEx(
-                        hdc, MASCOT_X, MASCOT_Y, mascot_hicon, MASCOT_W, MASCOT_H,
-                        0, std::ptr::null_mut(), DI_NORMAL,
-                    ) == 0 {
+                        hdc,
+                        MASCOT_X,
+                        MASCOT_Y,
+                        mascot_hicon,
+                        MASCOT_W,
+                        MASCOT_H,
+                        0,
+                        std::ptr::null_mut(),
+                        DI_NORMAL,
+                    ) == 0
+                    {
                         log::log("WM_PAINT mascot: DrawIconEx failed");
                     }
                 } else {
@@ -808,9 +776,7 @@ unsafe fn register_class() -> u16 {
             // lighter-weight grey text colour. Heading, info heading,
             // percent label, detail-left, and info subtext keep the
             // system default (black / COLOR_WINDOWTEXT).
-            use windows_sys::Win32::Graphics::Gdi::{
-                SetBkMode, SetTextColor, HDC, TRANSPARENT,
-            };
+            use windows_sys::Win32::Graphics::Gdi::{HDC, SetBkMode, SetTextColor, TRANSPARENT};
             let hdc: HDC = wparam as HDC;
             let hwnd_child = lparam as HWND;
             let raw = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut ProgressState;
@@ -831,7 +797,7 @@ unsafe fn register_class() -> u16 {
                 return GetStockObject(NULL_BRUSH) as LRESULT;
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
-        }
+        },
         WM_TIMER => unsafe {
             let raw = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut ProgressState;
             if raw.is_null() {
@@ -881,8 +847,7 @@ unsafe fn register_class() -> u16 {
             let id = (wparam as u32) & 0xFFFF;
             if id == IDCANCEL as u32 {
                 unsafe {
-                    let raw =
-                        GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut ProgressState;
+                    let raw = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut ProgressState;
                     if !raw.is_null() {
                         let started = (&(*raw).shared).started.load(Ordering::SeqCst);
                         if started {
@@ -950,7 +915,7 @@ unsafe fn register_class() -> u16 {
             }
             PostQuitMessage(0);
             0
-        }
+        },
         WM_NCDESTROY => unsafe {
             let raw = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut ProgressState;
             if !raw.is_null() {
@@ -998,7 +963,7 @@ unsafe fn register_class() -> u16 {
                 let _ = Box::from_raw(raw);
             }
             0
-        }
+        },
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
 }
@@ -1061,10 +1026,7 @@ fn format_view(
         None
     };
 
-    let pct_label = crate::dialogs::fill(
-        strings.pct_label.as_str(),
-        &[("pct", &pct.to_string())],
-    );
+    let pct_label = crate::dialogs::fill(strings.pct_label.as_str(), &[("pct", &pct.to_string())]);
 
     // Phase 1 (verify SHA) and phase 2 (extract) don't have a useful
     // "X MB of Y MB" reading — the byte counter has gone stale. Show
@@ -1173,17 +1135,7 @@ unsafe fn draw_mascot_hbitmap(hdc_dest: HDC, hbitmap: HBITMAP) {
     };
     unsafe {
         AlphaBlend(
-            hdc_dest,
-            MASCOT_X,
-            MASCOT_Y,
-            MASCOT_W,
-            MASCOT_H,
-            hdc_mem,
-            0,
-            0,
-            src_w,
-            src_h,
-            blend,
+            hdc_dest, MASCOT_X, MASCOT_Y, MASCOT_W, MASCOT_H, hdc_mem, 0, 0, src_w, src_h, blend,
         );
         SelectObject(hdc_mem, old);
         DeleteDC(hdc_mem);

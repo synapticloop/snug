@@ -73,7 +73,7 @@ pub struct ErrorDialog<'a> {
 /// `NULL` or a live `HWND` owned by that thread, and with any non-zero
 /// `mascot_hbitmap` a live handle that outlives the call.
 pub unsafe fn show(parent: HWND, dlg: ErrorDialog<'_>) -> i32 {
-    use crate::dialogs::{pick, resolve, DialogCopy};
+    use crate::dialogs::{DialogCopy, pick, resolve};
 
     let all = crate::dialogs::dialogs();
     let failure = &all.runtime.failure;

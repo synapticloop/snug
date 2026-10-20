@@ -21,24 +21,24 @@
 
 #![cfg(windows)]
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    AC_SRC_ALPHA, AC_SRC_OVER, BLENDFUNCTION, CreateCompatibleDC, CreateDIBSection, DeleteDC,
-    DeleteObject, GetDC, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
-    DIB_RGB_COLORS,
+    AC_SRC_ALPHA, AC_SRC_OVER, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION,
+    CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, ReleaseDC,
+    SelectObject,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetSystemMetrics,
-    LoadCursorW, MSG, PeekMessageW, PostMessageW, RegisterClassExW, ShowWindow, TranslateMessage,
-    UpdateLayeredWindow, WNDCLASSEXW, CS_HREDRAW, CS_OWNDC, CS_VREDRAW, IDC_ARROW, PM_REMOVE,
-    SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, ULW_ALPHA, WM_DESTROY, WM_QUIT, WS_EX_LAYERED,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    CS_HREDRAW, CS_OWNDC, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
+    DispatchMessageW, GetSystemMetrics, IDC_ARROW, LoadCursorW, MSG, PM_REMOVE, PeekMessageW,
+    PostMessageW, RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, ShowWindow,
+    TranslateMessage, ULW_ALPHA, UpdateLayeredWindow, WM_DESTROY, WM_QUIT, WNDCLASSEXW,
+    WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 /// How long the splash may stay up after `duration_ms` if the main
@@ -234,7 +234,10 @@ fn run_splash_thread(
     let mem_dc = unsafe { CreateCompatibleDC(screen_dc) };
     unsafe { ReleaseDC(std::ptr::null_mut(), screen_dc) };
     if mem_dc.is_null() {
-        eprintln!("snug-splash: {}", crate::localize::lookup("splash.err.create_compatible_dc"));
+        eprintln!(
+            "snug-splash: {}",
+            crate::localize::lookup("splash.err.create_compatible_dc")
+        );
         return;
     }
 
@@ -251,7 +254,10 @@ fn run_splash_thread(
     };
     if bitmap.is_null() || bits_ptr.is_null() {
         unsafe { DeleteDC(mem_dc) };
-        eprintln!("snug-splash: {}", crate::localize::lookup("splash.err.create_dib_section"));
+        eprintln!(
+            "snug-splash: {}",
+            crate::localize::lookup("splash.err.create_dib_section")
+        );
         return;
     }
 
@@ -313,7 +319,10 @@ fn run_splash_thread(
             DeleteObject(bitmap);
             DeleteDC(mem_dc);
         }
-        eprintln!("snug-splash: {}", crate::localize::lookup("splash.err.create_window"));
+        eprintln!(
+            "snug-splash: {}",
+            crate::localize::lookup("splash.err.create_window")
+        );
         return;
     }
 
@@ -349,7 +358,10 @@ fn run_splash_thread(
             DeleteObject(bitmap);
             DeleteDC(mem_dc);
         }
-        eprintln!("snug-splash: {}", crate::localize::lookup("splash.err.update_layered_window"));
+        eprintln!(
+            "snug-splash: {}",
+            crate::localize::lookup("splash.err.update_layered_window")
+        );
         return;
     }
 

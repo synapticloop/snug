@@ -96,11 +96,7 @@ pub(crate) const BODY_BOTTOM: i32 = BODY_Y + BODY_H;
 
 /// `i32::max` is not const, and this is a layout constant.
 const fn lower_of(a: i32, b: i32) -> i32 {
-    if a > b {
-        a
-    } else {
-        b
-    }
+    if a > b { a } else { b }
 }
 
 /// Padding between the button row and the bottom of the window.
@@ -132,8 +128,7 @@ pub(crate) const INFO_BOX_W: i32 = WINDOW_W - MARGIN * 2;
 /// install prompt. Taking the lower of the two is what makes "sit below
 /// the icon" and "do not overlap the body" the same statement.
 pub(crate) const INFO_BOX_GAP: i32 = MARGIN;
-pub(crate) const INFO_BOX_Y: i32 =
-    lower_of(MASCOT_Y + MASCOT_H, BODY_BOTTOM) + INFO_BOX_GAP;
+pub(crate) const INFO_BOX_Y: i32 = lower_of(MASCOT_Y + MASCOT_H, BODY_BOTTOM) + INFO_BOX_GAP;
 /// Sized for the heading plus **two** subtext lines. [`WINDOW_H`] is
 /// derived from this, so growing the box grows every dialog.
 pub(crate) const INFO_BOX_H: i32 = 74;
@@ -225,8 +220,7 @@ mod tests {
 
     /// The derivations themselves, so a reordering or a dropped term
     /// fails here rather than as a misplaced pixel.
-    const _: () =
-        assert!(INFO_BOX_Y == lower_of(MASCOT_Y + MASCOT_H, BODY_BOTTOM) + INFO_BOX_GAP);
+    const _: () = assert!(INFO_BOX_Y == lower_of(MASCOT_Y + MASCOT_H, BODY_BOTTOM) + INFO_BOX_GAP);
     /// The box must clear the mascot and the body band, not just one of
     /// them. The mascot is the shorter of the two today, so asserting
     /// against it alone would keep passing if the body grew into it.

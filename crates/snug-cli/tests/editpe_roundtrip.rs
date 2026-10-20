@@ -18,7 +18,7 @@ use image::{Rgba, RgbaImage};
 use snug_cli::build::build_exe;
 use snug_cli::cli::Cli;
 use snug_cli::resources::ResourcePlan;
-use snug_format::{embedded_file, AppMetadata, LauncherBehavior, LauncherConfig};
+use snug_format::{AppMetadata, LauncherBehavior, LauncherConfig, embedded_file};
 
 #[test]
 fn stamp_icon_version_and_manifest_then_roundtrip() {
@@ -115,7 +115,10 @@ fn stamp_icon_version_and_manifest_then_roundtrip() {
 
     // --- subsystem --------------------------------------------------------
     // The launcher's GUI subsystem should be preserved (or set) after stamp.
-    assert_eq!(image.subsystem(), editpe::constants::IMAGE_SUBSYSTEM_WINDOWS_GUI);
+    assert_eq!(
+        image.subsystem(),
+        editpe::constants::IMAGE_SUBSYSTEM_WINDOWS_GUI
+    );
 }
 
 #[test]
@@ -137,7 +140,8 @@ fn stamp_runs_without_icon_or_manifest_too() {
     let plan = ResourcePlan::default();
     assert!(plan.should_run(), "version-info stamping is always on");
     let embedded = snug_format::SnugEmbedded::new(payload.clone());
-    plan.run(&exe, &embedded).expect("ResourcePlan::run without icon/manifest");
+    plan.run(&exe, &embedded)
+        .expect("ResourcePlan::run without icon/manifest");
 
     let image = Image::parse_file(&exe).expect("parse_file");
     let resources = image.resource_directory().expect("resources present");
@@ -181,13 +185,7 @@ fn build_payload_for_test(cli: &Cli) -> snug_format::SnugPayload {
     }
 }
 
-fn construct_cli(
-    jar: &Path,
-    exe: &Path,
-    name: &str,
-    icon: &Path,
-    manifest: &Path,
-) -> Cli {
+fn construct_cli(jar: &Path, exe: &Path, name: &str, icon: &Path, manifest: &Path) -> Cli {
     use clap::Parser;
     let mut args = vec![
         "snug".to_string(),

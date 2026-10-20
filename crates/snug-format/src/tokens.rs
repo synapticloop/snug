@@ -69,63 +69,195 @@ pub struct Injection {
 /// because that is exactly the headroom a translator is allowed to use.
 pub const INJECTED_BY_KEY: &[Injection] = &[
     // --- err.* -- positional, from thiserror's Display ------------------
-    Injection { key: "err.format", tokens: &["0"] },
-    Injection { key: "err.invalid_state", tokens: &["0"] },
-    Injection { key: "err.io", tokens: &["0"] },
-    Injection { key: "err.java_exception", tokens: &["0"] },
-    Injection { key: "err.jni_attach", tokens: &["0"] },
-    Injection { key: "err.jni_create", tokens: &["0"] },
-    Injection { key: "err.jni_init", tokens: &["0"] },
-    Injection { key: "err.jni_invoke", tokens: &["0"] },
-    Injection { key: "err.main_class_not_found", tokens: &["0"] },
-    Injection { key: "err.no_main_method", tokens: &["0"] },
-    Injection { key: "err.self_path", tokens: &["0"] },
-    Injection { key: "err.zip", tokens: &["0"] },
+    Injection {
+        key: "err.format",
+        tokens: &["0"],
+    },
+    Injection {
+        key: "err.invalid_state",
+        tokens: &["0"],
+    },
+    Injection {
+        key: "err.io",
+        tokens: &["0"],
+    },
+    Injection {
+        key: "err.java_exception",
+        tokens: &["0"],
+    },
+    Injection {
+        key: "err.jni_attach",
+        tokens: &["0"],
+    },
+    Injection {
+        key: "err.jni_create",
+        tokens: &["0"],
+    },
+    Injection {
+        key: "err.jni_init",
+        tokens: &["0"],
+    },
+    Injection {
+        key: "err.jni_invoke",
+        tokens: &["0"],
+    },
+    Injection {
+        key: "err.main_class_not_found",
+        tokens: &["0"],
+    },
+    Injection {
+        key: "err.no_main_method",
+        tokens: &["0"],
+    },
+    Injection {
+        key: "err.self_path",
+        tokens: &["0"],
+    },
+    Injection {
+        key: "err.zip",
+        tokens: &["0"],
+    },
     // --- err.* -- named, from error.rs ----------------------------------
-    Injection { key: "err.jvm_not_found", tokens: &["min_java"] },
-    Injection { key: "err.jvm_too_old", tokens: &["path", "found", "min_java"] },
-    Injection { key: "err.library_load", tokens: &["library", "message"] },
-    Injection { key: "err.symbol_not_found", tokens: &["symbol", "library"] },
+    Injection {
+        key: "err.jvm_not_found",
+        tokens: &["min_java"],
+    },
+    Injection {
+        key: "err.jvm_too_old",
+        tokens: &["path", "found", "min_java"],
+    },
+    Injection {
+        key: "err.library_load",
+        tokens: &["library", "message"],
+    },
+    Injection {
+        key: "err.symbol_not_found",
+        tokens: &["symbol", "library"],
+    },
     // --- jdk.err.* ------------------------------------------------------
-    Injection { key: "jdk.err.bad_metadata_shape", tokens: &["0"] },
-    Injection { key: "jdk.err.dialog", tokens: &["0"] },
-    Injection { key: "jdk.err.download", tokens: &["0"] },
-    Injection { key: "jdk.err.extract", tokens: &["0"] },
-    Injection { key: "jdk.err.io", tokens: &["0"] },
-    Injection { key: "jdk.err.metadata_fetch", tokens: &["0"] },
-    Injection { key: "jdk.err.no_java_exe", tokens: &["0"] },
-    Injection { key: "jdk.err.no_metadata_for_version", tokens: &["0"] },
-    Injection { key: "jdk.err.bad_field", tokens: &["name", "value"] },
-    Injection { key: "jdk.err.sha256_mismatch", tokens: &["declared", "computed"] },
+    Injection {
+        key: "jdk.err.bad_metadata_shape",
+        tokens: &["0"],
+    },
+    Injection {
+        key: "jdk.err.dialog",
+        tokens: &["0"],
+    },
+    Injection {
+        key: "jdk.err.download",
+        tokens: &["0"],
+    },
+    Injection {
+        key: "jdk.err.extract",
+        tokens: &["0"],
+    },
+    Injection {
+        key: "jdk.err.io",
+        tokens: &["0"],
+    },
+    Injection {
+        key: "jdk.err.metadata_fetch",
+        tokens: &["0"],
+    },
+    Injection {
+        key: "jdk.err.no_java_exe",
+        tokens: &["0"],
+    },
+    Injection {
+        key: "jdk.err.no_metadata_for_version",
+        tokens: &["0"],
+    },
+    Injection {
+        key: "jdk.err.bad_field",
+        tokens: &["name", "value"],
+    },
+    Injection {
+        key: "jdk.err.sha256_mismatch",
+        tokens: &["declared", "computed"],
+    },
     // --- splash.err.* ---------------------------------------------------
-    Injection { key: "splash.err.thread_spawn", tokens: &["0"] },
-    Injection { key: "splash.err.buffer_length", tokens: &["expected", "actual"] },
+    Injection {
+        key: "splash.err.thread_spawn",
+        tokens: &["0"],
+    },
+    Injection {
+        key: "splash.err.buffer_length",
+        tokens: &["expected", "actual"],
+    },
     // --- launcher.* -----------------------------------------------------
-    Injection { key: "launcher.bare_stub.no_payload", tokens: &["path"] },
-    Injection { key: "launcher.error.content", tokens: &["error"] },
-    Injection { key: "launcher.error.info_subtext_2", tokens: &["update_check_url"] },
+    Injection {
+        key: "launcher.bare_stub.no_payload",
+        tokens: &["path"],
+    },
+    Injection {
+        key: "launcher.error.content",
+        tokens: &["error"],
+    },
+    Injection {
+        key: "launcher.error.info_subtext_2",
+        tokens: &["update_check_url"],
+    },
     // --- runtime.prompt.* -- the install offer ---------------------------
-    Injection { key: "runtime.prompt.content", tokens: &["version", "size_mb", "sha256"] },
+    Injection {
+        key: "runtime.prompt.content",
+        tokens: &["version", "size_mb", "sha256"],
+    },
     // Uses none today; the download button is filled by the same site, so
     // a translator may put the version or size in it.
-    Injection { key: "runtime.prompt.button_download", tokens: &["version", "size_mb", "sha256"] },
+    Injection {
+        key: "runtime.prompt.button_download",
+        tokens: &["version", "size_mb", "sha256"],
+    },
     // --- runtime.metadata_failed.* ---------------------------------------
     // Uses none today. `major` was here because the site's `fill` passes
     // it, and an earlier draft of the copy wanted the Java major in the
     // subheading.
-    Injection { key: "runtime.metadata_failed.subheading", tokens: &["major"] },
-    Injection { key: "runtime.metadata_failed.content", tokens: &["major", "error"] },
+    Injection {
+        key: "runtime.metadata_failed.subheading",
+        tokens: &["major"],
+    },
+    Injection {
+        key: "runtime.metadata_failed.content",
+        tokens: &["major", "error"],
+    },
     // --- runtime.progress.* ---------------------------------------------
-    Injection { key: "runtime.progress.content", tokens: &["version", "size_mb"] },
-    Injection { key: "runtime.progress.phase_label", tokens: &["arch"] },
-    Injection { key: "runtime.progress.pct_label", tokens: &["pct"] },
-    Injection { key: "runtime.progress.detail_with_size", tokens: &["done_mb", "total_mb", "speed_mb_s"] },
-    Injection { key: "runtime.progress.detail_no_size", tokens: &["pct"] },
-    Injection { key: "runtime.progress.detail_eta_seconds", tokens: &["n"] },
+    Injection {
+        key: "runtime.progress.content",
+        tokens: &["version", "size_mb"],
+    },
+    Injection {
+        key: "runtime.progress.phase_label",
+        tokens: &["arch"],
+    },
+    Injection {
+        key: "runtime.progress.pct_label",
+        tokens: &["pct"],
+    },
+    Injection {
+        key: "runtime.progress.detail_with_size",
+        tokens: &["done_mb", "total_mb", "speed_mb_s"],
+    },
+    Injection {
+        key: "runtime.progress.detail_no_size",
+        tokens: &["pct"],
+    },
+    Injection {
+        key: "runtime.progress.detail_eta_seconds",
+        tokens: &["n"],
+    },
     // --- runtime.failure.* / runtime.retry.* -----------------------------
-    Injection { key: "runtime.failure.content", tokens: &["version", "error"] },
-    Injection { key: "runtime.retry.subheading", tokens: &["version", "attempt", "max_attempts", "error"] },
-    Injection { key: "runtime.retry.content", tokens: &["version", "attempt", "max_attempts", "error"] },
+    Injection {
+        key: "runtime.failure.content",
+        tokens: &["version", "error"],
+    },
+    Injection {
+        key: "runtime.retry.subheading",
+        tokens: &["version", "attempt", "max_attempts", "error"],
+    },
+    Injection {
+        key: "runtime.retry.content",
+        tokens: &["version", "attempt", "max_attempts", "error"],
+    },
 ];
 
 /// The tokens a rendering site supplies for `key`, or an empty slice.
@@ -164,7 +296,7 @@ fn brace_list(tokens: &[&str]) -> String {
 /// comparing the two raw would fail on a fresh clone for a reason that
 /// has nothing to do with the content.
 pub fn replacement_tokens_markdown() -> String {
-    use crate::localization::{placeholders, Localization, TOKEN_DESCRIPTIONS};
+    use crate::localization::{Localization, TOKEN_DESCRIPTIONS, placeholders};
 
     let baseline = Localization::parse(crate::DEFAULT_EN_TAG, crate::DEFAULT_EN_TEXT)
         .expect("the built-in baseline must parse");
@@ -249,7 +381,7 @@ pub fn replacement_tokens_markdown() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::localization::{placeholders, Localization};
+    use crate::localization::{Localization, placeholders};
 
     fn baseline() -> Localization {
         Localization::parse(crate::DEFAULT_EN_TAG, crate::DEFAULT_EN_TEXT)
@@ -337,8 +469,8 @@ mod tests {
     #[test]
     #[ignore = "writes REPLACEMENT_TOKENS.md into the repository root"]
     fn regenerate_the_checked_in_table() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../REPLACEMENT_TOKENS.md");
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../REPLACEMENT_TOKENS.md");
         std::fs::write(&path, replacement_tokens_markdown()).expect("write table");
         println!("wrote {}", path.display());
     }

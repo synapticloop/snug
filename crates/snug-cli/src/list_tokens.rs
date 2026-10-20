@@ -29,7 +29,7 @@
 
 use std::collections::BTreeSet;
 
-use snug_format::{placeholders, Localization, DEFAULT_EN_TAG, DEFAULT_EN_TEXT};
+use snug_format::{DEFAULT_EN_TAG, DEFAULT_EN_TEXT, Localization, placeholders};
 
 /// The baseline inventory: keys with slots, and the flat token list.
 pub struct Inventory {

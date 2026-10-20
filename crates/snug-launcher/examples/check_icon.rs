@@ -33,15 +33,8 @@ fn main() {
 
         // Also try the integer-id form: Windows convention is id=1
         // when no name is associated.
-        let hres_id1 = FindResourceW(
-            hinst,
-            std::ptr::dangling::<u16>(),
-            14usize as *const u16,
-        );
-        eprintln!(
-            "FindResourceW(id=1, RT_GROUP_ICON=14) -> {:?}",
-            hres_id1
-        );
+        let hres_id1 = FindResourceW(hinst, std::ptr::dangling::<u16>(), 14usize as *const u16);
+        eprintln!("FindResourceW(id=1, RT_GROUP_ICON=14) -> {:?}", hres_id1);
     }
 
     eprintln!("done");

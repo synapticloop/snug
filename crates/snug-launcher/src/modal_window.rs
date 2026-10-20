@@ -62,26 +62,23 @@ use std::sync::OnceLock;
 use windows_sys::Win32::Foundation::SIZE;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, CreateCompatibleDC, CreateFontW, CreateRoundRectRgn, CreateSolidBrush, DeleteDC,
-    DeleteObject, DrawTextW, DT_EDITCONTROL, DT_WORDBREAK, EndPaint, FillRect, FillRgn, GetTextExtentPoint32W,
-    FW_NORMAL,
-    FW_SEMIBOLD,
-    GetStockObject, GetTextMetricsW, HBRUSH, HDC, HFONT, NULL_BRUSH, PAINTSTRUCT, SelectObject,
-    SetBkMode, SetTextColor, TEXTMETRICW, TRANSPARENT,
+    BeginPaint, CreateCompatibleDC, CreateFontW, CreateRoundRectRgn, CreateSolidBrush,
+    DT_EDITCONTROL, DT_WORDBREAK, DeleteDC, DeleteObject, DrawTextW, EndPaint, FW_NORMAL,
+    FW_SEMIBOLD, FillRect, FillRgn, GetStockObject, GetTextExtentPoint32W, GetTextMetricsW, HBRUSH,
+    HDC, HFONT, NULL_BRUSH, PAINTSTRUCT, SelectObject, SetBkMode, SetTextColor, TEXTMETRICW,
+    TRANSPARENT,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    DrawIconEx, DI_NORMAL,
-    GetMessageW, GetSystemMetrics, GetWindowLongPtrW, HICON, IDCANCEL, IDI_ERROR,
-    IDI_INFORMATION, IDI_WARNING, LoadCursorW, LoadIconW, MSG, PostQuitMessage,
-    RegisterClassExW, SendMessageW, SetCursor, SetWindowLongPtrW, SetWindowPos, SM_CXSCREEN,
-    SM_CYSCREEN, SWP_NOACTIVATE, SWP_NOZORDER,
-    TranslateMessage, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, WM_CLOSE, WM_COMMAND, WM_CREATE,
-    WM_CTLCOLORSTATIC, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_NCDESTROY, WM_PAINT,
-    WM_SETCURSOR,
-    WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_OVERLAPPED, WS_SYSMENU, WS_VISIBLE,
+    AdjustWindowRectEx, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, CreateWindowExW, DI_NORMAL,
+    DefWindowProcW, DestroyWindow, DispatchMessageW, DrawIconEx, GetMessageW, GetSystemMetrics,
+    GetWindowLongPtrW, HICON, IDCANCEL, IDI_ERROR, IDI_INFORMATION, IDI_WARNING, LoadCursorW,
+    LoadIconW, MSG, PostQuitMessage, RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE,
+    SWP_NOZORDER, SendMessageW, SetCursor, SetWindowLongPtrW, SetWindowPos, TranslateMessage,
+    WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORSTATIC, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_NCDESTROY,
+    WM_PAINT, WM_SETCURSOR, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_OVERLAPPED,
+    WS_SYSMENU, WS_VISIBLE,
 };
 
 use crate::jdk_install::{find_best_icon_hicon, load_exe_main_icon_hicon, mascot_icon_override};
@@ -671,12 +668,8 @@ const BUTTON_CLASS: &str = "BUTTON\0";
 // Left alone, `cargo clippy --fix` "fixes" this by removing the borrow,
 // which satisfies needless_borrow and then fails the build on the rustc
 // lint instead. Hence the allow rather than a fix.
-#[allow(clippy::needless_borrow)]unsafe extern "system" fn wndproc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
+#[allow(clippy::needless_borrow)]
+unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_CREATE => unsafe {
             let create_struct =
@@ -691,10 +684,8 @@ const BUTTON_CLASS: &str = "BUTTON\0";
             let hfont_subtitle = create_font_pt(SUBTITLE_PT, SUBTITLE_WEIGHT, false);
             let hfont_content = create_font_pt(CONTENT_PT, CONTENT_WEIGHT, false);
             let hfont_button = create_font_pt(BUTTON_PT, BUTTON_WEIGHT, false);
-            let hfont_info_heading =
-                create_font_pt(INFO_HEADING_PT, INFO_HEADING_WEIGHT, false);
-            let hfont_info_subtext =
-                create_font_pt(INFO_SUBTEXT_PT, INFO_SUBTEXT_WEIGHT, false);
+            let hfont_info_heading = create_font_pt(INFO_HEADING_PT, INFO_HEADING_WEIGHT, false);
+            let hfont_info_subtext = create_font_pt(INFO_SUBTEXT_PT, INFO_SUBTEXT_WEIGHT, false);
             // Third line reuses the first subtext's font, and is only
             // allocated when the text exists — otherwise the cleanup
             // path would be deleting a null it never created.
@@ -861,12 +852,7 @@ const BUTTON_CLASS: &str = "BUTTON\0";
             // resolves the standard predefined icon to a real handle.
             let icon_handle = load_info_icon((*state).info_icon_kind);
             if !icon_handle.is_null() {
-                SendMessageW(
-                    hwnd_info_icon,
-                    STM_SETICON,
-                    icon_handle as usize,
-                    0,
-                );
+                SendMessageW(hwnd_info_icon, STM_SETICON, icon_handle as usize, 0);
             }
 
             // ----- Info heading + subtext -----
@@ -940,9 +926,12 @@ const BUTTON_CLASS: &str = "BUTTON\0";
             // Buttons used to be vertically centred *inside* the info
             // box's band, overlapping it. They now have their own row
             // below it.
-            let mut created: [(HWND, i32); 3] =
-                [(std::ptr::null_mut(), 0); 3];
-            let button_ids = [IDC_BUTTON_PRIMARY, IDC_BUTTON_SECONDARY, IDC_BUTTON_TERTIARY];
+            let mut created: [(HWND, i32); 3] = [(std::ptr::null_mut(), 0); 3];
+            let button_ids = [
+                IDC_BUTTON_PRIMARY,
+                IDC_BUTTON_SECONDARY,
+                IDC_BUTTON_TERTIARY,
+            ];
             let button_count = (&(*state).buttons).len().min(3);
             for i in 0..button_count {
                 let (is_primary, label) = (&(*state).buttons)[i].clone();
@@ -1183,11 +1172,12 @@ const BUTTON_CLASS: &str = "BUTTON\0";
             // system hand cursor (`IDC_HAND`); otherwise let the
             // default arrow stand.
             let raw = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut State;
-            let link_visible =
-                !raw.is_null() && !(&(*raw).link_url_text).is_empty();
+            let link_visible = !raw.is_null() && !(&(*raw).link_url_text).is_empty();
             if link_visible {
                 let ht = (lparam & 0xFFFF) as u16;
-                if ht == 1 /* HTCLIENT */ {
+                if ht == 1
+                /* HTCLIENT */
+                {
                     let cursor = LoadCursorW(std::ptr::null_mut(), IDC_HAND);
                     if !cursor.is_null() {
                         SetCursor(cursor);
@@ -1196,26 +1186,22 @@ const BUTTON_CLASS: &str = "BUTTON\0";
                 }
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
-        }
+        },
         WM_MOUSEMOVE => unsafe {
             // Track whether the cursor is over the URL hit-test
             // rect so `WM_SETCURSOR` can flip to IDC_HAND. No
             // hover-paint effect today; reserved for future
             // "underline darkens" tweak.
             let raw = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut State;
-            let link_visible =
-                !raw.is_null() && !(&(*raw).link_url_text).is_empty();
+            let link_visible = !raw.is_null() && !(&(*raw).link_url_text).is_empty();
             if !link_visible {
                 return DefWindowProcW(hwnd, msg, wparam, lparam);
             }
             let x = (wparam & 0xFFFF) as i16 as i32;
             let y = ((wparam >> 16) & 0xFFFF) as i16 as i32;
             let pt = POINT { x, y };
-            let (rect, was_hover) =
-                ((*raw).link_url_rect, (*raw).link_hover);
-            let is_hover = windows_sys::Win32::Graphics::Gdi::PtInRect(
-                &rect, pt,
-            ) != 0;
+            let (rect, was_hover) = ((*raw).link_url_rect, (*raw).link_hover);
+            let is_hover = windows_sys::Win32::Graphics::Gdi::PtInRect(&rect, pt) != 0;
             if is_hover != was_hover {
                 (*raw).link_hover = is_hover;
                 let cursor = if is_hover {
@@ -1228,12 +1214,10 @@ const BUTTON_CLASS: &str = "BUTTON\0";
                 }
             }
             0
-        }
+        },
         WM_LBUTTONDOWN => unsafe {
             let raw = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut State;
-            let url_text: Option<String> = if raw.is_null()
-                || (&(*raw).link_url_text).is_empty()
-            {
+            let url_text: Option<String> = if raw.is_null() || (&(*raw).link_url_text).is_empty() {
                 None
             } else {
                 Some((*raw).link_url_text.clone())
@@ -1245,13 +1229,10 @@ const BUTTON_CLASS: &str = "BUTTON\0";
             let y = ((wparam >> 16) & 0xFFFF) as i16 as i32;
             let pt = POINT { x, y };
             let rect = (*raw).link_url_rect;
-            let over_link =
-                windows_sys::Win32::Graphics::Gdi::PtInRect(&rect, pt) != 0;
+            let over_link = windows_sys::Win32::Graphics::Gdi::PtInRect(&rect, pt) != 0;
             if over_link {
                 let url_w = wide(&url_text);
-                log::log(&format!(
-                    "modal_window: opening update URL: {url_text}"
-                ));
+                log::log(&format!("modal_window: opening update URL: {url_text}"));
                 let rc = ShellExecuteW(
                     std::ptr::null_mut(),
                     wide("open").as_ptr(),
@@ -1262,13 +1243,11 @@ const BUTTON_CLASS: &str = "BUTTON\0";
                 );
                 let rc = rc as isize;
                 if rc <= 32 {
-                    log::log(&format!(
-                        "modal_window: ShellExecuteW failed (code {rc})"
-                    ));
+                    log::log(&format!("modal_window: ShellExecuteW failed (code {rc})"));
                 }
             }
             0
-        }
+        },
         WM_COMMAND => {
             let id = (wparam as u32) & 0xFFFF;
             let state_ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *const State;
@@ -1349,7 +1328,7 @@ const BUTTON_CLASS: &str = "BUTTON\0";
                 drop(Box::from_raw(raw));
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
-        }
+        },
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
 }
@@ -1452,7 +1431,7 @@ fn load_info_icon(kind: InfoIcon) -> HICON {
 /// need the bitmap branch today.
 unsafe fn draw_mascot_hbitmap(hdc: HDC, hbitmap: isize) {
     use windows_sys::Win32::Graphics::Gdi::{
-        BITMAP, StretchDIBits, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
+        BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, StretchDIBits,
     };
     let mut bm: BITMAP = unsafe { std::mem::zeroed() };
     let bm_ok = unsafe {

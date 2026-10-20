@@ -34,10 +34,7 @@ fn main() {
         // `cargo run --bin stamp_preview_icon -- <exe> <png>` — explicit
         3 => (PathBuf::from(&args[1]), PathBuf::from(&args[2])),
         // `cargo run --bin stamp_preview_icon` — defaults below
-        _ => (
-            default_exe_path(),
-            default_png_path(),
-        ),
+        _ => (default_exe_path(), default_png_path()),
     };
 
     if let Err(e) = stamp_icon(&exe_path, &png_path) {
@@ -104,10 +101,7 @@ fn stamp_icon(exe: &std::path::Path, png: &std::path::Path) -> Result<(), String
     // other resources (RT_VERSION, RT_MANIFEST) survive the
     // re-stamp — `set_resource_directory` replaces the whole
     // directory, so we have to keep the old contents around.
-    let mut resources = image
-        .resource_directory()
-        .cloned()
-        .unwrap_or_default();
+    let mut resources = image.resource_directory().cloned().unwrap_or_default();
 
     // Two-step cleanup before adding the new icon:
     //
@@ -134,7 +128,9 @@ fn stamp_icon(exe: &std::path::Path, png: &std::path::Path) -> Result<(), String
         .map_err(|e| format!("remove_main_icon: {e}"))?;
 
     let icon_table_id = editpe::ResourceEntryName::ID(3);
-    if let Some(editpe::ResourceEntry::Table(icon_table)) = resources.root_mut().get_mut(&icon_table_id) {
+    if let Some(editpe::ResourceEntry::Table(icon_table)) =
+        resources.root_mut().get_mut(&icon_table_id)
+    {
         let keys: Vec<_> = icon_table.entries().into_iter().cloned().collect();
         for k in keys {
             icon_table.remove(k);

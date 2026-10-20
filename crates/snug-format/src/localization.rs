@@ -93,10 +93,12 @@ impl Localization {
             if line.is_empty() {
                 continue;
             }
-            let (key, value) = line.split_once('=').ok_or(LocalizationParseError::NoEquals {
-                tag: tag.clone(),
-                lineno,
-            })?;
+            let (key, value) = line
+                .split_once('=')
+                .ok_or(LocalizationParseError::NoEquals {
+                    tag: tag.clone(),
+                    lineno,
+                })?;
             let key = key.trim();
             if key.is_empty() {
                 return Err(LocalizationParseError::EmptyKey {
@@ -216,9 +218,9 @@ fn unescape(value: &str) -> String {
 
 fn is_valid_key(key: &str) -> bool {
     !key.is_empty()
-        && key.chars().all(|c| {
-            c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.'
-        })
+        && key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
 }
 
 /// The placeholder names a value uses — deduplicated and sorted.
@@ -255,8 +257,7 @@ pub fn placeholders(value: &str) -> BTreeSet<&str> {
         if bytes[i] == b'{' {
             if let Some(close) = value[i + 1..].find('}') {
                 let name = &value[i + 1..i + 1 + close];
-                if !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-                {
+                if !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
                     out.insert(name);
                 }
                 i = i + close + 2;
@@ -351,11 +352,9 @@ pub fn discover_localization_files(
 ) -> Result<Vec<PathBuf>, LocalizationLoadError> {
     let mut expanded: Vec<PathBuf> = Vec::with_capacity(entries.len());
     for path in entries {
-        let meta = std::fs::metadata(path).map_err(|source| {
-            LocalizationLoadError::Stat {
-                path: path.display().to_string(),
-                source,
-            }
+        let meta = std::fs::metadata(path).map_err(|source| LocalizationLoadError::Stat {
+            path: path.display().to_string(),
+            source,
         })?;
         if !meta.is_dir() {
             expanded.push(path.clone());
@@ -413,27 +412,36 @@ pub const TOKEN_DESCRIPTIONS: &[(&str, &str)] = &[
         "positional slot — the single argument this key is handed, usually an error message",
     ),
     // JVM discovery (error.rs).
-    ("min_java", "the Java major version the application requires"),
-    ("found", "the Java major version actually found on the machine"),
+    (
+        "min_java",
+        "the Java major version the application requires",
+    ),
+    (
+        "found",
+        "the Java major version actually found on the machine",
+    ),
     ("path", "a filesystem path that was located, or searched"),
     // JNI load failures (error.rs).
     ("library", "the library that failed to load"),
     ("symbol", "the exported symbol that was missing from it"),
-    ("message", "the OS-level error text explaining the failed load"),
+    (
+        "message",
+        "the OS-level error text explaining the failed load",
+    ),
     // JDK metadata (jdk_install.rs).
     ("name", "name of the metadata field that was malformed"),
     ("value", "the value the launcher received for that field"),
     ("declared", "the SHA-256 the publisher advertised"),
-    ("computed", "the SHA-256 the launcher calculated from the downloaded file"),
+    (
+        "computed",
+        "the SHA-256 the launcher calculated from the downloaded file",
+    ),
     // The download itself.
     (
         "version",
         "the JDK release being downloaded or installed, e.g. \"25.0.1+9\"",
     ),
-    (
-        "size_mb",
-        "approximate download size in megabytes",
-    ),
+    ("size_mb", "approximate download size in megabytes"),
     (
         "sha256",
         "the SHA-256 digest the download is verified against",
@@ -553,12 +561,17 @@ mod tests {
                     .match_indices('{')
                     .filter_map(|(i, _)| v[i + 1..].find('}').map(|c| &v[i + 1..i + 1 + c]))
                     .collect();
-                let named: Vec<&&str> =
-                    raw.iter().filter(|n| placeholders(v).contains(*n)).collect();
+                let named: Vec<&&str> = raw
+                    .iter()
+                    .filter(|n| placeholders(v).contains(*n))
+                    .collect();
                 (raw.len() != named.len()).then(|| format!("{k}: {raw:?}"))
             })
             .collect();
-        assert!(odd.is_empty(), "unrecognised brace contents in the baseline: {odd:?}");
+        assert!(
+            odd.is_empty(),
+            "unrecognised brace contents in the baseline: {odd:?}"
+        );
     }
 
     // ---- TOKEN_DESCRIPTIONS ----
@@ -636,7 +649,10 @@ mod tests {
 
     #[test]
     fn describe_resolves_a_token_and_rejects_an_unknown_one() {
-        assert_eq!(describe("speed_mb_s"), Some("current download speed in MB/s"));
+        assert_eq!(
+            describe("speed_mb_s"),
+            Some("current download speed in MB/s")
+        );
         assert_eq!(describe("not_a_token"), None);
     }
 

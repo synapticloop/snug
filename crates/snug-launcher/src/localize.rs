@@ -336,9 +336,7 @@ static BUILTIN: OnceLock<Option<Localization>> = OnceLock::new();
 
 fn builtin() -> Option<&'static Localization> {
     BUILTIN
-        .get_or_init(|| {
-            Localization::parse(DEFAULT_TAG, DEFAULT_EN_TEXT).ok()
-        })
+        .get_or_init(|| Localization::parse(DEFAULT_TAG, DEFAULT_EN_TEXT).ok())
         .as_ref()
 }
 
@@ -615,8 +613,9 @@ fn preferred_ui_languages(flags: u32, max_len: i32) -> Vec<String> {
     let mut written: u32 = capacity as u32;
     // SAFETY: `buf` holds exactly `capacity` UTF-16 units, the
     // documented worst case for `num_languages` tags.
-    let ok =
-        unsafe { GetUserPreferredUILanguages(flags, &mut num_languages, buf.as_mut_ptr(), &mut written) };
+    let ok = unsafe {
+        GetUserPreferredUILanguages(flags, &mut num_languages, buf.as_mut_ptr(), &mut written)
+    };
     if ok == 0 || written == 0 {
         return Vec::new();
     }
@@ -684,44 +683,47 @@ mod tests {
     }
 
     /// Serialises tests that swap the process-global bundle chain.
-///
-/// `set_bundles_for` installs into `BUNDLES`, which every other
-/// `lookup`-based test reads, and cargo runs tests in threads — so
-/// without this a chain swap lands mid-run and a sibling test asserts
-/// against the wrong language. Same pattern as `appkit`'s test seam.
-static CHAIN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    ///
+    /// `set_bundles_for` installs into `BUNDLES`, which every other
+    /// `lookup`-based test reads, and cargo runs tests in threads — so
+    /// without this a chain swap lands mid-run and a sibling test asserts
+    /// against the wrong language. Same pattern as `appkit`'s test seam.
+    static CHAIN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-#[test]
-fn the_preview_switch_shows_slots_as_authored() {
-    // The switch is process-global, so this needs the same guard the
-    // bundle tests use: without it a parallel test that expects
-    // substitution would see whatever this one last set.
-    let _guard = CHAIN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let previous = replace_tokens();
+    #[test]
+    fn the_preview_switch_shows_slots_as_authored() {
+        // The switch is process-global, so this needs the same guard the
+        // bundle tests use: without it a parallel test that expects
+        // substitution would see whatever this one last set.
+        let _guard = CHAIN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let previous = replace_tokens();
 
-    set_replace_tokens(false);
-    let raw = substitute_slots(r"\{size_mb} {size_mb}", |n| Some(n.to_uppercase()));
-    // The escaped half loses only its backslash. That is the whole
-    // reason the `\{` branch is not gated: the escape is about what the
-    // user sees, so it must be honoured whether or not tokens fill.
-    assert_eq!(raw, "{size_mb} {size_mb}", "escaped slot must still unescape");
+        set_replace_tokens(false);
+        let raw = substitute_slots(r"\{size_mb} {size_mb}", |n| Some(n.to_uppercase()));
+        // The escaped half loses only its backslash. That is the whole
+        // reason the `\{` branch is not gated: the escape is about what the
+        // user sees, so it must be honoured whether or not tokens fill.
+        assert_eq!(
+            raw, "{size_mb} {size_mb}",
+            "escaped slot must still unescape"
+        );
 
-    set_replace_tokens(true);
-    let filled = substitute_slots("{size_mb}", |n| Some(n.to_uppercase()));
-    assert_eq!(filled, "SIZE_MB");
+        set_replace_tokens(true);
+        let filled = substitute_slots("{size_mb}", |n| Some(n.to_uppercase()));
+        assert_eq!(filled, "SIZE_MB");
 
-    set_replace_tokens(previous);
-}
+        set_replace_tokens(previous);
+    }
 
-#[test]
-fn replacing_is_on_by_default() {
-    // A shipped launcher never calls `set_replace_tokens`, so if the
-    // default ever flips, a user's dialogs silently stop interpolating
-    // and `{size_mb}` appears in front of them.
-    assert!(replace_tokens(), "the product default must stay 'replace'");
-}
+    #[test]
+    fn replacing_is_on_by_default() {
+        // A shipped launcher never calls `set_replace_tokens`, so if the
+        // default ever flips, a user's dialogs silently stop interpolating
+        // and `{size_mb}` appears in front of them.
+        assert!(replace_tokens(), "the product default must stay 'replace'");
+    }
 
-#[test]
+    #[test]
     fn set_bundles_for_overrides_the_machine_locale() {
         let _guard = CHAIN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The regression behind `snug_preview`'s language dropdown
@@ -828,7 +830,10 @@ fn replacing_is_on_by_default() {
     #[test]
     fn detect_locales_always_yields_a_usable_tag() {
         let langs = detect_locales();
-        assert!(!langs.is_empty(), "detection must degrade, never to nothing");
+        assert!(
+            !langs.is_empty(),
+            "detection must degrade, never to nothing"
+        );
         for tag in &langs {
             assert!(!tag.trim().is_empty());
             // `_` is the POSIX/`LANG` spelling of the same idea. Neither
@@ -882,7 +887,10 @@ fn replacing_is_on_by_default() {
         let de = bundle("de", &[("k", "deutsch")]);
         let prefs = vec!["de-AT".to_string(), "fr-FR".to_string()];
         let b = Bundles::load_for(&prefs, &[fr, de]);
-        assert_eq!(b.tags(), vec!["de".to_string(), "fr".to_string(), "en".to_string()]);
+        assert_eq!(
+            b.tags(),
+            vec!["de".to_string(), "fr".to_string(), "en".to_string()]
+        );
         assert_eq!(b.raw_lookup("k"), "deutsch");
     }
 
@@ -1081,8 +1089,8 @@ fn replacing_is_on_by_default() {
         // from a rename. Allow it to be opted into explicitly rather
         // than silently drifting.
         const KNOWN_UNREFERENCED: &[&str] = &[];
-        let builtin = Localization::parse(DEFAULT_TAG, DEFAULT_EN_TEXT)
-            .expect("built-in baseline parses");
+        let builtin =
+            Localization::parse(DEFAULT_TAG, DEFAULT_EN_TEXT).expect("built-in baseline parses");
         let unreferenced: Vec<&str> = builtin
             .entries
             .iter()
@@ -1162,10 +1170,12 @@ fn replacing_is_on_by_default() {
                 .to_string();
             let text = std::fs::read_to_string(path)
                 .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
-            let parsed =
-                Localization::parse(&tag, &text).unwrap_or_else(|e| panic!("{name}: {e}"));
-            let copy: BTreeMap<&str, &str> =
-                parsed.entries.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+            let parsed = Localization::parse(&tag, &text).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let copy: BTreeMap<&str, &str> = parsed
+                .entries
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
 
             let missing: Vec<&str> = baseline
                 .keys()

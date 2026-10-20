@@ -12,8 +12,8 @@ use snug_cli::build::{
     build_exe, build_payload, guard_output_collision, output_path, wants_app_bundle,
 };
 use snug_cli::cli::Cli;
-use snug_cli::{init_localizations, init_options};
 use snug_cli::options_file;
+use snug_cli::{init_localizations, init_options};
 use snug_format::SnugEmbedded;
 
 fn main() -> ExitCode {
@@ -68,12 +68,8 @@ fn run() -> Result<()> {
     // file is opt-in, so looking for one and finding nothing must stay
     // silent.
     let cwd = std::env::current_dir().context("reading current working directory")?;
-    let options_paths = options_file::resolve_all(
-        &raw_args,
-        &cwd,
-        std::env::consts::OS,
-    )
-    .context("resolving which options files apply")?;
+    let options_paths = options_file::resolve_all(&raw_args, &cwd, std::env::consts::OS)
+        .context("resolving which options files apply")?;
     let mut file_layers = Vec::with_capacity(options_paths.len());
     for p in &options_paths {
         file_layers.push(
@@ -116,7 +112,8 @@ fn run() -> Result<()> {
         anyhow::bail!(
             "--init-localizations-tag has no effect without --init-localizations\n\
              hint: snug --init-localizations --init-localizations-tag {}",
-            cli.init_localizations_tag.join(" --init-localizations-tag ")
+            cli.init_localizations_tag
+                .join(" --init-localizations-tag ")
         );
     }
 
@@ -207,7 +204,11 @@ fn dry_run(cli: &Cli, embedded: &SnugEmbedded) -> Result<()> {
     println!("  output:      {}", output.display());
     println!(
         "  main-class:  {}",
-        payload.config.main_class.as_deref().unwrap_or("(from manifest)")
+        payload
+            .config
+            .main_class
+            .as_deref()
+            .unwrap_or("(from manifest)")
     );
     println!("  min-java:    {}", payload.config.min_java);
     println!("  jvm args:    {}", payload.config.jvm_args.len());
@@ -225,7 +226,11 @@ fn dry_run(cli: &Cli, embedded: &SnugEmbedded) -> Result<()> {
     );
     println!(
         "  splash:      {}",
-        if payload.config.splash.is_some() { "yes" } else { "no" }
+        if payload.config.splash.is_some() {
+            "yes"
+        } else {
+            "no"
+        }
     );
     println!(
         "  jars:        {} (first sha256: {})",
@@ -567,10 +572,7 @@ mod tests {
 
     #[test]
     fn rejects_build_flag_jvm_arg() {
-        assert_rejected(
-            &["--init-options", "--jvm-arg", "-Xmx2g"],
-            "--jvm-arg",
-        );
+        assert_rejected(&["--init-options", "--jvm-arg", "-Xmx2g"], "--jvm-arg");
     }
 
     #[test]
@@ -583,10 +585,7 @@ mod tests {
 
     #[test]
     fn rejects_build_flag_download_jdk() {
-        assert_rejected(
-            &["--init-options", "--download-jdk=auto"],
-            "--download-jdk",
-        );
+        assert_rejected(&["--init-options", "--download-jdk=auto"], "--download-jdk");
     }
 
     #[test]
