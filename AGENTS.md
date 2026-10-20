@@ -1937,14 +1937,18 @@ wrap it as `const { assert!(...) }` and it becomes a build-time check on
 every compile rather than one that only runs under `cargo test`. The
 layout guards in `snug_preview`'s `windows_impl.rs` are full of these.
 
-**Formatting is reported but not enforced.** `check.ps1` runs
-`cargo fmt --all --check` as an advisory step only: the tree carries
-pre-existing drift in 63 files (measured 2026-10-18; it is a moving
-number) and there is no `rustfmt.toml`, so making
-it a gate would fail on code nobody has touched. `check.ps1 -Format`
-rewrites the tree — a deliberate call about a large diff, not something a
-check script should do behind your back. Note that CI has no fmt step
-either; that gap is still open.
+**Formatting is enforced.** `check.ps1` runs `cargo fmt --all --check` as a
+real gate. It was advisory for as long as the tree carried pre-existing drift
+across 63 files (measured 2026-10-18), because making it a gate then would
+have failed on code nobody had touched. `cargo fmt --all` landed as its own
+commit once the drift was the only thing left, so a failure now means a real
+change went in unformatted. `check.ps1 -Format` rewrites the tree — use it
+*before* committing, and follow it with `refresh-stub.ps1`, because any
+`snug-launcher` file it touches moves `bin/launcher-stub.source`.
+
+**CI has no fmt step.** `windows.yml` runs clippy and the full test run but
+not `cargo fmt --all --check`, so the local gate is currently stricter than
+the pipeline. Worth adding; it is the last gap between the two.
 
 `snug-format` has integration roundtrip tests in
 `crates/snug-format/tests/roundtrip.rs`. `snug-cli` has unit tests for

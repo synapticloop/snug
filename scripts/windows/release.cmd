@@ -3,7 +3,7 @@ REM ===========================================================================
 REM release.cmd - run the gates CI runs, then build the Windows release
 REM artefact.
 REM
-REM Chains scripts\windows\check.ps1 (gates: cargo fmt --check advisory,
+REM Chains scripts\windows\check.ps1 (gates: cargo fmt --all --check,
 REM cargo clippy --workspace --all-targets -- -D warnings, cargo test
 REM --workspace --lib --bins --tests --no-fail-fast) and
 REM scripts\windows\build.cmd (the 10-step release pipeline: launcher stub
@@ -78,7 +78,7 @@ if "!SKIP_CHECK!"=="1" if "!CHECK_ONLY!"=="1" (
 )
 
 REM ---------------------------------------------------------------------------
-REM 1. Gates: fmt advisory, clippy -D warnings, cargo test --no-fail-fast
+REM 1. Gates: fmt, clippy -D warnings, cargo test --no-fail-fast
 REM ---------------------------------------------------------------------------
 
 if "!SKIP_CHECK!"=="1" goto skip_check

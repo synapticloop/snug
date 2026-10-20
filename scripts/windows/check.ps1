@@ -22,20 +22,21 @@ reproducible artefact and a lint step does not belong in "the command that
 produces the committed stub".
 
 .PARAMETER Format
-Actually reformat with `cargo fmt --all` instead of only reporting. See the
-note on formatting below before using it -- it rewrites files this change
-did not touch.
+Actually reformat with `cargo fmt --all` instead of only reporting. Use it
+before committing a change, not after: it rewrites every file that is not
+already clean, and any `snug-launcher` file it touches moves
+`bin/launcher-stub.source`, so follow it with `refresh-stub.ps1`.
 
 .OUTPUTS
 Per-gate pass/fail lines, then a summary. Exit code is 0 when every
 *enforced* gate passed, 1 otherwise.
 
 .NOTES
-Formatting is reported but NOT enforced. The tree carries pre-existing
-`cargo fmt` drift in 58 files and there is no `rustfmt.toml`, so making
-fmt a gate today would fail on code nobody has touched. Formatting it is
-a deliberate decision about a large diff, not something a check script
-should do behind your back.
+Formatting *is* enforced. It was advisory for as long as the tree carried
+pre-existing `cargo fmt` drift across 60 files, because making it a gate
+would have failed on code nobody had touched. That drift is gone: `cargo fmt
+--all` landed as its own commit, so a `cargo fmt --all --check` failure from
+here on means a real change went in unformatted.
 
 `--no-fail-fast` on the test run matches CI: plain `cargo test` stops at
 the first failing binary, which is exactly the failure mode described
@@ -78,24 +79,25 @@ try {
         })
     }
 
-    # --- Gate 1: formatting (advisory) -----------------------------------
+    # --- Gate 1: formatting -----------------------------------------------
     if ($Format) {
         Write-Host '==> cargo fmt --all (rewriting)' -ForegroundColor Cyan
         cargo fmt --all
         Add-Gate -Name 'cargo fmt --all' -Code $LASTEXITCODE -Enforced $true
     } else {
-        Write-Host '==> cargo fmt --all --check (advisory)' -ForegroundColor Cyan
+        Write-Host '==> cargo fmt --all --check' -ForegroundColor Cyan
         cargo fmt --all --check
         $fmt = $LASTEXITCODE
         if ($fmt -ne 0) {
             Write-Host ''
-            Write-Host '    The tree is not rustfmt-clean. This is pre-existing and is not' -ForegroundColor Yellow
-            Write-Host '    enforced, so it will not fail this script. Run' -ForegroundColor Yellow
-            Write-Host '        .\scripts\check.ps1 -Format' -ForegroundColor Yellow
-            Write-Host '    to reformat, but expect it to touch files this change did not.' -ForegroundColor Yellow
+            Write-Host '    The tree is not rustfmt-clean. Run' -ForegroundColor Yellow
+            Write-Host '        .\scripts\windows\check.ps1 -Format' -ForegroundColor Yellow
+            Write-Host '    to reformat, then commit the result alongside whatever changed it.' -ForegroundColor Yellow
+            Write-Host '    Formatting moved the launcher sources, so refresh the stub too:' -ForegroundColor Yellow
+            Write-Host '        .\scripts\windows\refresh-stub.ps1' -ForegroundColor Yellow
             Write-Host ''
         }
-        Add-Gate -Name 'cargo fmt --all --check (advisory)' -Code $fmt -Enforced $false
+        Add-Gate -Name 'cargo fmt --all --check' -Code $fmt -Enforced $true
     }
 
     # --- Gate 2: clippy --------------------------------------------------
