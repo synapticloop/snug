@@ -122,7 +122,7 @@ jdk.err.dialog = Dialogue : {0}
 # Bare-stub diagnostic - emitted to stderr when the EXE was built without
 # a payload.
 launcher.bare_stub.no_payload = Aucun payload SNUGEMBD trouvé dans {path}
-launcher.bare_stub.hint = Il s'agit du binaire stub nu. Construisez-le avec `snug` pour y intégrer un payload :
+launcher.bare_stub.hint = Il s'agit du binaire stub sans payload. Construisez-le avec `snug` pour y intégrer un payload :
 launcher.bare_stub.command = snug your-app.jar -o app.exe
 
 # ----------------------------------------------------------------------------
