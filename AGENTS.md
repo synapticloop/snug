@@ -1946,9 +1946,10 @@ change went in unformatted. `check.ps1 -Format` rewrites the tree — use it
 *before* committing, and follow it with `refresh-stub.ps1`, because any
 `snug-launcher` file it touches moves `bin/launcher-stub.source`.
 
-**CI has no fmt step.** `windows.yml` runs clippy and the full test run but
-not `cargo fmt --all --check`, so the local gate is currently stricter than
-the pipeline. Worth adding; it is the last gap between the two.
+**CI now gates on fmt too.** `windows.yml` runs `cargo fmt --all --check`
+first, before the build, because rustfmt only parses source and fails in
+seconds where the later steps take minutes. That closes the gap where the
+local script enforced formatting and Actions did not.
 
 `snug-format` has integration roundtrip tests in
 `crates/snug-format/tests/roundtrip.rs`. `snug-cli` has unit tests for

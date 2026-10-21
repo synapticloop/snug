@@ -4,6 +4,10 @@
 # developer gets locally. It is catching the class of defect that only
 # shows up once the artefacts are real:
 #
+#   - **A formatting check.** The cheapest gate here, and the one that was
+#     missing longest: check.ps1 enforced it locally while Actions did not,
+#     so unformatted code could reach a pull request. It runs first because
+#     rustfmt only parses source, so it fails in seconds.
 #   - **A full test run, with --no-fail-fast.** `cargo test` stops at the
 #     first failing test *target* by default, so one broken crate hides
 #     every crate after it. Three `snug-launcher` cache tests were failing
@@ -76,6 +80,16 @@ jobs:
             ~/.cargo/git
           key: windows-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: windows-
+
+      # Cheapest gate, so it runs first. rustfmt only parses source, so it
+      # needs no build output and no cache -- it fails in seconds where the
+      # steps below take minutes, which is the whole point of checking it
+      # before anything expensive has run.
+      #
+      # This closes the gap where check.ps1 enforced formatting locally but
+      # Actions did not, so unformatted code could land on a PR.
+      - name: Format check
+        run: cargo fmt --all --check
 
       - name: Build the workspace
         run: cargo build --workspace --all-targets
