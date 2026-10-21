@@ -146,7 +146,7 @@ mod tests {
             config: LauncherConfig {
                 app: AppMetadata {
                     name: "Test".into(),
-                    company: "Acme".into(),
+                    company: "Example Company Pty Ltd".into(),
                     update_check_url: None,
                     version: "1.0.0".into(),
                     description: None,

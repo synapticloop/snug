@@ -242,7 +242,7 @@ mkdir -p /tmp/snug-opts && cd /tmp/snug-opts
 cat > snug.options <<EOF
 # Default metadata
 --name "My App"
---company "Acme"
+--company "Example Company Pty Ltd"
 --min-java 21
 EOF
 # CLI override takes precedence
@@ -287,8 +287,8 @@ If you're picking this up cold, read in this order:
 - **`shell-words` tokenizes each line of `snug.options`.** Quoted
   strings (`"My App"`) and backslash escapes work. Without quotes,
   whitespace splits the value into separate tokens — `--company
-  Acme Corp` becomes three tokens, and clap will reject the third
-  as unexpected. Quote your values.
+  Example Company Pty Ltd` becomes four tokens, and clap will reject the
+  third as unexpected. Quote your values.
 
 - **The stub binary is cross-compiled from this Mac via zigbuild.**
   It compiles and links cleanly for `x86_64-pc-windows-gnu`, but it

@@ -154,7 +154,7 @@ launcher.error.content = {error}
 # than deserialized from a file, so the typed struct and its compile-checked
 # accessors (`dialogs().runtime.prompt.title`) survive the merge - only
 # the source of the strings moved. The practical consequence for you: a
-# localised app can now reword the chrome as well as the errors, e.g. "Acme
+# localised app can now reword the chrome as well as the errors, e.g. "Example Company Pty Ltd
 # requires Java 25" instead of "Eclipse Temurin JDK was not found".
 #
 # Escaping reminder: these are single-line values. Real newlines are literal

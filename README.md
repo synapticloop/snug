@@ -672,7 +672,7 @@ translation keeps its `{0}` in the same position.
 Because the chrome is in the same bundle as the errors, `--localization`
 translates the whole window, not just its contents — a localised build
 gets a translated title *and* a translated "Cancel" button, and an app
-can reword the chrome for itself ("Acme requires Java 25") by shipping
+can reword the chrome for itself ("Example Company Pty Ltd requires Java 25") by shipping
 its own `en` bundle. The only copy that can't be overridden this way is
 the fallback `MessageBoxW` title, which is rendered before the payload
 is decoded.

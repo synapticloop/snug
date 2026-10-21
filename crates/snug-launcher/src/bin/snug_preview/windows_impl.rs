@@ -2772,8 +2772,8 @@ mod tests {
     #[test]
     fn an_icon_path_is_captured() {
         assert_eq!(
-            icon_of(&["--icon", r"C:\tmp\acme.ico"]),
-            Some(r"C:\tmp\acme.ico".to_string())
+            icon_of(&["--icon", r"C:\tmp\example.ico"]),
+            Some(r"C:\tmp\example.ico".to_string())
         );
     }
 

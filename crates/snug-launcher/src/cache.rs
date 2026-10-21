@@ -716,9 +716,16 @@ mod tests {
         // holds whatever the platform's absolute-path form happens to be.
         let env = an_absolute_dir();
         let base = pick_cache_base(Some(env.clone().into_os_string()), None);
-        let root = base.join(SNUG_SUBDIR).join("Acme").join("Demo");
+        let root = base
+            .join(SNUG_SUBDIR)
+            .join("Example Company Pty Ltd")
+            .join("Demo");
         assert!(root.starts_with(&env), "got {}", root.display());
-        assert!(root.ends_with("snug/Acme/Demo"), "got {}", root.display());
+        assert!(
+            root.ends_with("snug/Example Company Pty Ltd/Demo"),
+            "got {}",
+            root.display()
+        );
     }
 
     #[test]
@@ -770,14 +777,20 @@ mod tests {
     #[test]
     fn cache_root_uses_override_when_set() {
         let override_path = PathBuf::from("/tmp/snug-test-override");
-        let root = cache_root(&app("Acme", "Demo"), Some(&override_path));
+        let root = cache_root(
+            &app("Example Company Pty Ltd", "Demo"),
+            Some(&override_path),
+        );
         assert_eq!(root, override_path);
     }
 
     #[test]
     fn cache_root_returns_override_directly() {
         let override_path = PathBuf::from("/tmp/x");
-        let root = cache_root(&app("Acme", "Demo"), Some(&override_path));
+        let root = cache_root(
+            &app("Example Company Pty Ltd", "Demo"),
+            Some(&override_path),
+        );
         assert_eq!(root, override_path);
     }
 
@@ -786,7 +799,7 @@ mod tests {
         // With an explicit override the helper should return the
         // override untouched; without one, the path must contain the
         // top-level `snug` segment before the company / app segments.
-        let app = app("Acme", "Demo");
+        let app = app("Example Company Pty Ltd", "Demo");
         let root = cache_root(&app, None);
         let parts: Vec<_> = root
             .components()
@@ -798,7 +811,7 @@ mod tests {
             .expect("snug namespace segment must be present");
         let company_idx = parts
             .iter()
-            .position(|p| *p == "Acme")
+            .position(|p| *p == "Example Company Pty Ltd")
             .expect("company segment must be present");
         let app_idx = parts
             .iter()
@@ -813,7 +826,10 @@ mod tests {
 
     #[test]
     fn sanitize_strips_unsafe_chars() {
-        assert_eq!(sanitize_component("Acme Co"), "Acme Co");
+        assert_eq!(
+            sanitize_component("Example Company Pty Ltd"),
+            "Example Company Pty Ltd"
+        );
         assert_eq!(sanitize_component("a/b\\c:d*e"), "a_b_c_d_e");
         assert_eq!(sanitize_component("My\u{0001}App"), "My_App");
         assert_eq!(sanitize_component("   "), "");

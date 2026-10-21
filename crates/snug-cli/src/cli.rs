@@ -185,6 +185,14 @@ pub struct Cli {
     /// Company / vendor name (e.g. `"SynapticLoop"`).
     ///
     /// Maps to the `CompanyName` Windows version resource field.
+    ///
+    /// Optional. When omitted it falls back to the resolved application
+    /// name, so a build without it shows `CompanyName` and `ProductName`
+    /// alike rather than a placeholder that reads as an error. It has
+    /// to be non-empty either way: the runtime cache is keyed
+    /// `snug/<company>/<app>`, and an empty company would collapse that
+    /// to `snug/<app>`, putting two companies' identically named apps
+    /// in one directory.
     #[arg(
         long = "company",
         value_name = "COMPANY",

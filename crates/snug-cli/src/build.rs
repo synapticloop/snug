@@ -115,7 +115,24 @@ pub fn build_payload(cli: &Cli) -> Result<SnugPayload> {
         .clone()
         .or_else(|| default_name_from_input(&input_path))
         .context("--name is required when it cannot be inferred from the input path")?;
-    let company = cli.company.clone().unwrap_or_else(|| "Unknown".to_string());
+    // `--company` falls back to the resolved app name, not to a
+    // placeholder word. Two reasons, and the second is the load-bearing
+    // one.
+    //
+    // "Unknown" was the old fallback and it reads as *an error* in the
+    // CompanyName row of Explorer's Details tab, which is the wrong
+    // signal for "nobody told snug this". The app's own name reads as
+    // deliberate, and it is at least true.
+    //
+    // The empty string, the most obviously "no company" answer, is not
+    // available at all. `cache::cache_root` joins
+    // `snug/<company>/<app>` with no emptiness check, and
+    // `sanitize_component("")` returns `""`, so an empty company
+    // collapses the path to `snug/<app>` -- putting `Example Company Pty Ltd/Demo`
+    // and `Another Company/Demo` in the same directory. Two unrelated
+    // apps would then overwrite each other's cached JARs. Whatever
+    // lands here has to be non-empty, which is the whole constraint.
+    let company = cli.company.clone().unwrap_or_else(|| name.clone());
     let version = cli.version.clone().unwrap_or_else(|| "0.0.0".to_string());
 
     let app = AppMetadata {
@@ -1040,6 +1057,78 @@ mod tests {
             argv.push(d);
         }
         Cli::parse_from(argv)
+    }
+
+    /// As [`cli_for`], but with the identity flags under the test's
+    /// control, so how they resolve into `AppMetadata` can be asserted.
+    fn cli_with_identity(name: Option<&str>, company: Option<&str>) -> Cli {
+        use clap::Parser;
+        let jar = tempdir().join("demo.jar");
+        write_fake_jar(&jar, Some("com.example.Main"));
+        let mut argv = vec!["snug", jar.to_str().unwrap()];
+        if let Some(n) = name {
+            argv.push("--name");
+            argv.push(n);
+        }
+        if let Some(c) = company {
+            argv.push("--company");
+            argv.push(c);
+        }
+        Cli::parse_from(argv)
+    }
+
+    // --- --company fallback ------------------------------------------------
+    //
+    // The fallback is the resolved app name, and it has to be non-empty:
+    // an empty company collapses `snug/<company>/<app>` to `snug/<app>`
+    // in the runtime cache, which would let two companies' identically
+    // named apps share one cache directory. That constraint is the
+    // reason this is not simply an empty string.
+
+    #[test]
+    fn company_falls_back_to_the_name_derived_from_the_jar_stem() {
+        let payload = build_payload(&cli_with_identity(None, None)).unwrap();
+        assert_eq!(payload.config.app.name, "demo", "the jar stem");
+        assert_eq!(payload.config.app.company, "demo");
+    }
+
+    #[test]
+    fn company_falls_back_to_an_explicit_name() {
+        let payload = build_payload(&cli_with_identity(Some("My App"), None)).unwrap();
+        assert_eq!(payload.config.app.name, "My App");
+        assert_eq!(payload.config.app.company, "My App");
+    }
+
+    #[test]
+    fn an_explicit_company_beats_the_name_fallback() {
+        let payload = build_payload(&cli_with_identity(
+            Some("My App"),
+            Some("Example Company Pty Ltd"),
+        ))
+        .unwrap();
+        assert_eq!(payload.config.app.name, "My App");
+        assert_eq!(payload.config.app.company, "Example Company Pty Ltd");
+    }
+
+    /// The regression this replaces: `"Unknown"` used to be baked into
+    /// every build that omitted `--company`, and it is the string a user
+    /// sees in Explorer's Details tab.
+    #[test]
+    fn an_implicit_company_is_never_the_word_unknown() {
+        for cli in [
+            cli_with_identity(None, None),
+            cli_with_identity(Some("My App"), None),
+        ] {
+            let payload = build_payload(&cli).unwrap();
+            assert_ne!(
+                payload.config.app.company, "Unknown",
+                "the placeholder was the whole problem"
+            );
+            assert!(
+                !payload.config.app.company.is_empty(),
+                "an empty company would collapse the cache namespace"
+            );
+        }
     }
 
     #[test]

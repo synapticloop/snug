@@ -549,7 +549,10 @@ mod tests {
 
     #[test]
     fn rejects_build_flag_company() {
-        assert_rejected(&["--init-options", "--company", "Acme"], "--company");
+        assert_rejected(
+            &["--init-options", "--company", "Example Company Pty Ltd"],
+            "--company",
+        );
     }
 
     #[test]

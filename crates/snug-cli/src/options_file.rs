@@ -91,7 +91,7 @@
 //! ```text
 //! # Default metadata for this project
 //! --name "My App"
-//! --company "Acme Corp"
+//! --company "Example Company Pty Ltd"
 //! --version "1.2.3"
 //! --min-java 25
 //! --main-class "com.example.Main"
@@ -1150,7 +1150,7 @@ mod tests {
         // byte.
         let dir = tempdir();
         let f = dir.join("snug.options");
-        let body = "--name \"My App\"\n--company Acme\n";
+        let body = "--name \"My App\"\n--company \"Example Company Pty Ltd\"\n";
         std::fs::write(&f, format!("\u{feff}{body}")).unwrap();
 
         let tokens = load(&f).unwrap();
@@ -1160,7 +1160,7 @@ mod tests {
                 "--name".to_string(),
                 "My App".to_string(),
                 "--company".to_string(),
-                "Acme".to_string()
+                "Example Company Pty Ltd".to_string()
             ],
             "a BOM must not survive into the first token"
         );
@@ -1245,7 +1245,7 @@ mod tests {
              \n\
              --name \"My App\"\n\
              # indented comment\n  \n\
-             --company Acme\n",
+             --company \"Example Company Pty Ltd\"\n",
         )
         .unwrap();
         let tokens = load(&f).unwrap();
@@ -1255,7 +1255,7 @@ mod tests {
                 "--name".to_string(),
                 "My App".to_string(),
                 "--company".to_string(),
-                "Acme".to_string()
+                "Example Company Pty Ltd".to_string()
             ]
         );
     }
