@@ -24,7 +24,6 @@
 //!   -h, --help                        print the option list and every
 //!                                     previewable dialog
 //!       --localisation <FILE|DIR>     load localisations to pick from
-//!       --localization <FILE|DIR>     (alias; both spellings accepted)
 //!       --icon <FILE>                 swap the dialog icons for a test
 //! ```
 //!
@@ -60,6 +59,12 @@
 //! `LoadImageW` returns NULL for PNG from file despite documenting
 //! support since Vista. Neither route links a Rust image crate into the
 //! shipped launcher, so its size is untouched.
+//!
+//! `--icon` may be given **once**. It fills a single window-class icon
+//! and a single mascot slot, so a second value has nowhere to go; last
+//! one wins, and the earlier values are reported by name on stderr
+//! rather than dropped in silence. A duplicate is a warning, not an
+//! error — the command still means one unambiguous thing.
 //!
 //! Each dialog is **detached** from the launcher's lifecycle — they
 //! are top-level windows (no parent HWND) and run on their own
@@ -1245,6 +1250,11 @@ enum Cli {
     Run {
         localisations: Vec<std::path::PathBuf>,
         icon: Option<std::path::PathBuf>,
+        /// Non-fatal input problems worth saying out loud — currently
+        /// only a repeated `--icon`. Carried rather than printed so
+        /// [`parse_args`] stays a pure function and the warnings can be
+        /// asserted on without spawning a process.
+        warnings: Vec<String>,
     },
     /// Print [`help_text`] on stdout and exit 0.
     ShowHelp,
@@ -1254,39 +1264,41 @@ enum Cli {
 
 /// Parse the arguments after the executable name.
 ///
-/// `--localisation` and `--localization` are accepted as aliases of
-/// each other. The CLI elsewhere is American-spelled
-/// (`--localization`, `localisations/` for the scaffold directory is
-/// the one British holdout), but this tool is used interactively by
-/// people who type either, and a flag that only answers to one
-/// spelling is a small papercut with no upside.
+/// The flag is `--localisation`, British spelling only, and it used to
+/// answer to `--localization` as well. That alias is gone: the project
+/// is British-spelled, and a dev tool is not the place to hedge. Note
+/// this is *not* the same as the shipped CLI's own flag, which is
+/// still American-spelled — see `cli.rs`.
 fn parse_args<I, S>(args: I) -> Cli
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
     let mut localisations: Vec<std::path::PathBuf> = Vec::new();
-    let mut icon: Option<std::path::PathBuf> = None;
+    // Collected rather than overwritten as each one is seen, so a
+    // duplicate can be *reported* naming both the value in use and the
+    // ones it beat. Overwriting on sight is precisely what made this
+    // worth reporting.
+    let mut icons: Vec<std::path::PathBuf> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
     let mut it = args.into_iter().peekable();
     while let Some(arg) = it.next() {
         match arg.as_ref() {
             "-h" | "--help" => return Cli::ShowHelp,
-            "--localisation" | "--localization" => {
-                // Both spellings of the flag may be repeated; they
-                // accumulate into one list, same as the shipped CLI's
-                // repeatable `--localization`.
+            "--localisation" => {
+                // Repeatable: each occurrence appends to the same list, and
+                // the flag keeps working however many times it is given.
                 match it.next() {
                     Some(value) => localisations.push(std::path::PathBuf::from(value.as_ref())),
                     None => {
-                        return Cli::Error(format!(
-                            "{} requires a <FILE|DIR> argument",
-                            arg.as_ref()
-                        ));
+                        return Cli::Error(
+                            "--localisation requires a <FILE|DIR> argument".to_string(),
+                        );
                     }
                 }
             }
             "--icon" => match it.next() {
-                Some(value) => icon = Some(std::path::PathBuf::from(value.as_ref())),
+                Some(value) => icons.push(std::path::PathBuf::from(value.as_ref())),
                 None => return Cli::Error("--icon requires a <FILE> argument".to_string()),
             },
             other => {
@@ -1296,9 +1308,31 @@ where
             }
         }
     }
+    // `--icon` fills exactly one window-class icon and one mascot slot,
+    // so a second value genuinely has nowhere to go. Last one wins —
+    // matching the shipped CLI's own last-wins convention, so the
+    // behaviour is at least consistent — but dropping the others in
+    // silence is how someone ends up previewing an icon they did not
+    // name and concluding the flag is broken. Name the winner, name
+    // what it beat, and carry on: this is a warning, not an error,
+    // because the command still means something unambiguous.
+    if icons.len() > 1 {
+        let (winner, ignored) = icons.split_last().expect("len is greater than 1");
+        warnings.push(format!(
+            "--icon was given {} times; only the last is used. Using `{}`; ignoring {}",
+            icons.len(),
+            winner.display(),
+            ignored
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
     Cli::Run {
         localisations,
-        icon,
+        icon: icons.pop(),
+        warnings,
     }
 }
 
@@ -1320,14 +1354,14 @@ fn help_text() -> String {
     out.push_str("                  With no options, the launcher window opens with one\n");
     out.push_str("                  button per dialog kind below.\n\n");
     out.push_str("        --localisation <FILE|DIR>    Load localisations to preview, then pick\n");
-    out.push_str("        --localization <FILE|DIR>    from the Language dropdown. Repeatable.\n");
+    out.push_str("                                     from the Language dropdown. Repeatable.\n");
     out.push_str("            <FILE>  snug-localisations.<tag>.txt\n");
     out.push_str("            <DIR>   a directory of them, scanned top-level only\n");
     out.push('\n');
-    out.push_str("            Both spellings of the flag are accepted. The built-in\n");
-    out.push_str("            English baseline is always in the dropdown; supplying\n");
-    out.push_str("            your own snug-localisations.en.txt replaces it, the\n");
-    out.push_str("            same rule the build applies to a shipped launcher.\n\n");
+    out.push_str("            The built-in English baseline is always in the\n");
+    out.push_str("            dropdown; supplying your own\n");
+    out.push_str("            snug-localisations.en.txt replaces it, the same rule\n");
+    out.push_str("            the build applies to a shipped launcher.\n\n");
     out.push_str("        --icon <FILE>            Swap the dialog icons for a test. Overrides\n");
     out.push_str("                                the EXE's MAINICON resource, which the\n");
     out.push_str("                                dialogs read for both the mascot image\n");
@@ -1346,6 +1380,11 @@ fn help_text() -> String {
     out.push_str("                                PNG from file despite being documented\n");
     out.push_str("                                to. Either way no Rust image crate is\n");
     out.push_str("                                linked into the launcher.\n");
+    out.push('\n');
+    out.push_str("                                May be given once. A second --icon wins\n");
+    out.push_str("                                and prints a warning naming the value in\n");
+    out.push_str("                                use and the ones it beat, rather than\n");
+    out.push_str("                                quietly dropping them.\n");
     out.push('\n');
     out.push_str("                                Preview-only: this tool never ships.\n\n");
     out.push_str("DIALOGS:\n");
@@ -1378,7 +1417,7 @@ pub fn run() {
     // Localisation loading is here too, for the same reason — a bad
     // path should fail loudly in the terminal, not behind a window
     // that swallows the message.
-    let (requested, icon) = match parse_args(std::env::args().skip(1)) {
+    let (requested, icon, warnings) = match parse_args(std::env::args().skip(1)) {
         Cli::ShowHelp => {
             print!("{}", help_text());
             return;
@@ -1391,8 +1430,17 @@ pub fn run() {
         Cli::Run {
             localisations,
             icon,
-        } => (localisations, icon),
+            warnings,
+        } => (localisations, icon, warnings),
     };
+
+    // Ahead of the icon override and any Win32 work, for the same
+    // reason the errors print here: a warning that only surfaces once
+    // a window exists is a warning the user reads after the window has
+    // already taken their attention.
+    for w in &warnings {
+        eprintln!("snug_preview: warning: {w}");
+    }
 
     // Icon override first: it must be in place before any window is
     // created, because `register_class` and `CreateWindowExW` both read
@@ -2532,13 +2580,21 @@ mod tests {
         }
     }
 
+    fn warnings_of(args: &[&str]) -> Vec<String> {
+        match parse(args) {
+            Cli::Run { warnings, .. } => warnings,
+            other => panic!("expected Run, got {other:?}"),
+        }
+    }
+
     #[test]
     fn no_args_runs_the_launcher_window() {
         assert_eq!(
             parse(&[]),
             Cli::Run {
                 localisations: vec![],
-                icon: None
+                icon: None,
+                warnings: vec![]
             }
         );
     }
@@ -2647,13 +2703,18 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // --localisation / --localization
+    // --localisation
     // ------------------------------------------------------------------
 
     #[test]
-    fn both_spellings_are_accepted() {
-        assert_eq!(run(&["--localisation", "de.txt"]), vec!["de.txt"]);
-        assert_eq!(run(&["--localization", "de.txt"]), vec!["de.txt"]);
+    fn the_american_spelling_is_rejected() {
+        // The alias was removed deliberately. Without this the flag could
+        // creep back in unnoticed, and a dev tool quietly answering to two
+        // spellings is the papercut the removal was meant to end.
+        assert_eq!(
+            parse(&["--localization", "de.txt"]),
+            Cli::Error("unrecognised argument: --localization".to_string())
+        );
     }
 
     #[test]
@@ -2662,7 +2723,7 @@ mod tests {
             run(&[
                 "--localisation",
                 "a.txt",
-                "--localization",
+                "--localisation",
                 "b.txt",
                 "--localisation",
                 "c.txt"
@@ -2677,10 +2738,6 @@ mod tests {
             parse(&["--localisation"]),
             Cli::Error("--localisation requires a <FILE|DIR> argument".to_string())
         );
-        assert_eq!(
-            parse(&["--localization"]),
-            Cli::Error("--localization requires a <FILE|DIR> argument".to_string())
-        );
     }
 
     #[test]
@@ -2694,10 +2751,13 @@ mod tests {
     }
 
     #[test]
-    fn help_text_documents_both_spellings() {
+    fn help_text_documents_the_british_spelling_only() {
         let h = help_text();
         assert!(h.contains("--localisation <FILE|DIR>"), "{h}");
-        assert!(h.contains("--localization <FILE|DIR>"), "{h}");
+        assert!(
+            !h.contains("--localization"),
+            "--help still advertises the removed alias:\n{h}"
+        );
     }
 
     // ------------------------------------------------------------------
@@ -2736,6 +2796,7 @@ mod tests {
                     std::path::PathBuf::from(r"C:\l2")
                 ],
                 icon: Some(std::path::PathBuf::from(r"C:\i.png")),
+                warnings: vec![],
             }
         );
     }
@@ -2747,6 +2808,47 @@ mod tests {
         assert_eq!(
             icon_of(&["--icon", "a.ico", "--icon", "b.png"]),
             Some("b.png".to_string())
+        );
+    }
+
+    #[test]
+    fn a_repeated_icon_warns_and_names_the_value_in_use() {
+        // The whole point of the warning: last-wins is unavoidable, but
+        // "unavoidable" is not the same as "silent". Naming only the
+        // winner would still leave the user guessing about `a.ico`, so
+        // the ignored values are listed too.
+        let w = warnings_of(&["--icon", "a.ico", "--icon", "b.png"]);
+        assert_eq!(w.len(), 1, "expected one warning, got {w:?}");
+        assert!(w[0].contains("b.png"), "must name the winner: {}", w[0]);
+        assert!(
+            w[0].contains("a.ico"),
+            "must name what was ignored: {}",
+            w[0]
+        );
+        assert!(w[0].contains("2 times"), "must say how many: {}", w[0]);
+    }
+
+    #[test]
+    fn a_repeated_icon_warns_once_however_many_are_given() {
+        // Three values must not produce three warnings, or the terminal
+        // fills with near-identical lines before the window even opens.
+        let w = warnings_of(&["--icon", "a.ico", "--icon", "b.png", "--icon", "c.ico"]);
+        assert_eq!(w.len(), 1, "expected one warning, got {w:?}");
+        assert!(w[0].contains("3 times"), "{}", w[0]);
+        assert!(w[0].contains("c.ico"), "must name the winner: {}", w[0]);
+        assert!(w[0].contains("a.ico"), "{}", w[0]);
+        assert!(w[0].contains("b.png"), "{}", w[0]);
+    }
+
+    #[test]
+    fn a_single_icon_warns_about_nothing() {
+        // The common case must stay silent, or the warning stops being
+        // read and the case it exists for goes unnoticed.
+        assert_eq!(warnings_of(&["--icon", "a.ico"]), Vec::<String>::new());
+        assert_eq!(warnings_of(&[]), Vec::<String>::new());
+        assert_eq!(
+            warnings_of(&["--localisation", "de.txt", "--icon", "a.ico"]),
+            Vec::<String>::new()
         );
     }
 

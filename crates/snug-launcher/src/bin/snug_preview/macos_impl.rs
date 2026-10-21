@@ -36,8 +36,7 @@ fn help_text() -> String {
     let mut h = String::from(
         "snug_preview - preview the snug launcher dialogs\n\n\
          USAGE:\n    \
-         snug_preview [--localisation <FILE|DIR> | --localization <FILE|DIR>] \
-         [--mascot <FILE>]\n\n\
+         snug_preview [--localisation <FILE|DIR>] [--mascot <FILE>]\n\n\
          Renders every macOS launcher dialog (JDK install prompt, Adoptium \
          download progress,\nretry, terminal failure, metadata failure) so \
          localisation copy and layout can be\nreviewed without rebuilding \
@@ -258,7 +257,7 @@ pub fn run() {
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "--localisation" | "--localization" => {
+            "--localisation" => {
                 i += 1;
                 let Some(v) = args.get(i) else {
                     log("--localisation needs a FILE or DIR");

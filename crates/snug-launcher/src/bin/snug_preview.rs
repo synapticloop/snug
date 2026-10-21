@@ -74,7 +74,7 @@ fn main() {
         println!(
             "snug_preview - preview the snug launcher dialogs\n\n\
              USAGE:\n    \
-             snug_preview [--localisation <DIR> | --localization <DIR>] [--mascot <FILE>]\n\n\
+             snug_preview [--localisation <DIR>] [--mascot <FILE>]\n\n\
              This is a development tool for the platforms snug has dialogs on: \
              **Windows** and\n**macOS**. It has no Linux implementation, because \
              there are no dialogs to preview\nthere yet.\n\n\

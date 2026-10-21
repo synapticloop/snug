@@ -1512,8 +1512,8 @@ by accident.
   for byte — `collect_directory_errors_on_empty_directory` asserts on
   the exact "contains no `snug-localisations" substring.
 - **`snug_preview` is the translation playground.** `-h/--help` and
-  `--localisation` / `--localization` (aliases, both spellings
-  accepted) are parsed by a hand-rolled `parse_args` taking an
+  `--localisation` (British spelling only; the `--localization`
+  alias is gone) are parsed by a hand-rolled `parse_args` taking an
   `IntoIterator`, so all its behaviour is unit-tested without
   spawning a process. Its Language dropdown lists every bundle it
   found with the built-in English baseline last, unless the user  supplied their own `en` — same replacement rule as a build. It
