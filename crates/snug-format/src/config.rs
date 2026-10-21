@@ -130,9 +130,9 @@ pub struct LauncherBehavior {
     /// How the launcher should behave when it can't find a compatible
     /// JVM on the host. See [`DownloadJdkMode`] for the three states.
     ///
-    /// Default: [`DownloadJdkMode::Off`]. Enable with the
-    /// `--download-jdk[=<mode>]` builder flag (bare = `auto`,
-    /// `=force` to skip discovery and always show the dialog).
+    /// Default: [`DownloadJdkMode::Auto`]. Set with the
+    /// `--download-jdk <off|auto|force>` builder flag, whose value is
+    /// required — a bare `--download-jdk` is an error.
     #[serde(default)]
     pub download_jdk: DownloadJdkMode,
 }
@@ -153,11 +153,11 @@ impl Default for LauncherBehavior {
 /// Three states, in order of decreasing deference to the user's
 /// environment:
 ///
-/// - [`Off`](Self::Off) — no download flow at all. Default.
+/// - [`Off`](Self::Off) — no download flow at all.
 /// - [`Auto`](Self::Auto) — only when `discover_jvm()` returns `None`.
 ///   The launcher pops up a `TaskDialog` offering Download / Open in
-///   browser / Cancel. Equivalent to the legacy `--download-jdk`
-///   boolean flag.
+///   browser / Cancel. **The default**, on both this type and the
+///   `--download-jdk` CLI flag.
 /// - [`Force`](Self::Force) — skip `discover_jvm()` entirely and go
 ///   straight to the TaskDialog. The user always gets to choose
 ///   whether to download Temurin from `api.adoptium.net`, even if
@@ -175,10 +175,10 @@ impl Default for LauncherBehavior {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum DownloadJdkMode {
-    /// No download flow. (Default.)
-    #[default]
+    /// No download flow at all.
     Off,
     /// Pop the TaskDialog only when JVM discovery fails.
+    #[default]
     Auto,
     /// Always pop the TaskDialog, bypassing JVM discovery.
     Force,

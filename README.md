@@ -158,11 +158,13 @@ snug --input path/to/app.jar  -o App.exe
 snug --input path/to/lib-dir/ -o App.exe --main-class com.example.Main
 
 # Auto-download Eclipse Temurin if the host has no compatible JDK.
-# `--download-jdk` (no value) = `auto`: only on discovery miss.
-# `--download-jdk=force`       = always show the dialog, bypass discovery.
-# `--download-jdk=off`         = never offer a download (the default).
-snug app.jar -o App.exe --download-jdk           # auto
+# The value is required — a bare `--download-jdk` is an error.
+# omitted               = `auto`: only on discovery miss (the default).
+# `--download-jdk=force` = always show the dialog, bypass discovery.
+# `--download-jdk=off`   = never offer a download.
+snug app.jar -o App.exe --download-jdk=auto      # the default, explicit
 snug app.jar -o App.exe --download-jdk=force     # always prompt
+snug app.jar -o App.exe --download-jdk=off       # Java must be pre-installed
 
 # Inspect what would be built without writing anything:
 snug app.jar -o App.exe --dry-run
@@ -390,7 +392,7 @@ snug [<jar>] [-o EXE] [--input JAR|DIR] [--name ...] [--company ...]
            [--icon PNG/ICO] [--manifest XML] [--splash PNG] [--splash-ms MS]
            [--splash-max WxH|off]
            [--jvm-arg ARG]... [--cache-dir DIR]
-           [--download-jdk[=<MODE>]]      # off | auto | force
+           [--download-jdk <MODE>]          # off | auto | force (default: auto)
            [--localization TXT|DIR]...
            [--emit-payload] [--dry-run] [--find-main] [--snug-version]
            [--options PATH]
@@ -417,15 +419,25 @@ Four of these are easy to misread:
   macOS bundle path drops the splash outright, so a `--splash` PNG on a
   `-o App.app` build is silently discarded rather than embedded.
 
-`--download-jdk` accepts an optional value:
+`--download-jdk` takes one **required** value, validated against the three
+modes:
 
-- omitted — `off` (no download flow; default).
-- `--download-jdk` (no value) — `auto`: pop the dialog only when JVM
-  discovery fails. Equivalent to the legacy boolean flag.
-- `--download-jdk=auto` — same as above, explicit.
-- `--download-jdk=force` — always show the dialog, bypassing JVM
-  discovery. Useful when the end user wants to install Temurin
-  regardless of what's on `JAVA_HOME` / `PATH`.
+- omitted — `auto` (the default): pop the dialog only when JVM discovery
+  fails.
+- `--download-jdk auto` / `--download-jdk=auto` — same as above, explicit.
+- `--download-jdk force` / `--download-jdk=force` — always show the
+  dialog, bypassing JVM discovery. Useful when the end user wants to
+  install Temurin regardless of what's on `JAVA_HOME` / `PATH`.
+- `--download-jdk off` / `--download-jdk=off` — no download flow at all.
+- anything else is rejected before the build starts.
+
+A bare `--download-jdk` is an **error**, not a synonym for `auto`. That is
+deliberate: the flag used to be `require_equals`, which meant
+`--download-jdk force` silently became `auto` while `force` fell through
+to the positional `[JAR|DIR]` slot — surfacing as
+`input path does not exist: force`, or `unexpected argument '<jar>'`, or
+a `--input`/`[JAR|DIR]` conflict out of a shared options file. Every one
+of those named something you never typed.
 
 Snug's own version (from `Cargo.toml`) is `--snug-version` (clap's
 auto `--version` is disabled so the brief's `--version <APP-VERSION>`

@@ -668,13 +668,18 @@ impl FlagSpec {
             // flag's value survive as a stray positional.
             let action = arg.get_action();
             // `require_equals` opts an arg out of consuming a following
-            // token: `--download-jdk auto` leaves `auto` as a positional,
-            // and only `--download-jdk=auto` carries a value. So such an
-            // arg must NOT be recorded as value-taking, or the value-skip
-            // below swallows whatever comes next. Without this,
-            // `snug App.jar --download-jdk --name "X"` ate `--name`, the
+            // token: only `--flag=value` carries a value, and
+            // `--flag value` leaves `value` as a positional. Such an
+            // arg must NOT be recorded as value-taking, or the
+            // value-skip below swallows whatever comes next. Without
+            // this, `snug App.jar --flag --name "X"` ate `--name`, the
             // file's own `--name` was then not stripped as overridden,
             // and clap aborted with "cannot be used multiple times".
+            //
+            // No CLI arg sets `require_equals` today. `--download-jdk`
+            // used to, and that is how this guard was written; it stays
+            // because it is the correct handling for the next arg that
+            // opts in, and deleting it would silently re-open the bug.
             let consumes_separate_value = action.takes_values() && !arg.is_require_equals_set();
             if consumes_separate_value {
                 spec.takes_value.insert(canonical.clone());
@@ -1176,23 +1181,41 @@ mod tests {
     }
 
     #[test]
-    fn a_require_equals_flag_does_not_swallow_the_next_token() {
-        // `--download-jdk` is declared `require_equals`, so clap never
-        // consumes a following token: `--download-jdk auto` leaves `auto`
-        // as a positional. The FlagSpec built from the same definition
-        // must agree, or the value-skip in `merge` eats whatever comes
-        // next. Before this, `snug App.jar --download-jdk --name "X"` ate
-        // `--name`, the file's own `--name` was then not stripped as
+    fn a_value_taking_flag_does_not_swallow_the_next_token() {
+        // `--download-jdk` takes exactly one value, so the FlagSpec built
+        // from the same definition must agree that the *next* token
+        // belongs to it. If it were not recorded as value-taking, the
+        // value-skip in `merge` would leave `force` in the stream as a
+        // stray positional — which is precisely the bug that shape had
+        // when the flag was `require_equals`.
+        //
+        // The mirror-image bug is the one this originally guarded: if
+        // the spec claimed a value-taking flag swallows a token it does
+        // not, then `snug App.jar --download-jdk --name "X"` ate
+        // `--name`, the file's own `--name` was not stripped as
         // overridden, and clap aborted with "cannot be used multiple
-        // times".
+        // times". `--download-jdk` can no longer provoke that, because
+        // a missing value is now a hard error; `--jvm-arg` is covered by
+        // the repeatable tests below.
         let dir = tempdir();
         let f = dir.join("snug.options");
         std::fs::write(&f, "--name \"From File\"\n").unwrap();
 
-        let cli_tokens = args(&["snug", "App.jar", "--download-jdk", "--name", "From CLI"]);
+        let cli_tokens = args(&[
+            "snug",
+            "App.jar",
+            "--download-jdk",
+            "force",
+            "--name",
+            "From CLI",
+        ]);
         let file_tokens = load(&f).unwrap();
         let merged = merge(&cli_tokens, vec![file_tokens]);
 
+        assert!(
+            merged.iter().any(|t| t == "force"),
+            "the value of --download-jdk must survive the merge: {merged:?}"
+        );
         // `long_flag_name` returns the bare name, without the `--`.
         let name_count = merged
             .iter()

@@ -181,8 +181,27 @@ pub fn resolve_input_path(cli: &Cli) -> Result<(PathBuf, bool)> {
         }
     };
 
-    let meta = std::fs::metadata(&input_path)
-        .with_context(|| format!("stat-ing input {}", input_path.display()))?;
+    let meta = match std::fs::metadata(&input_path) {
+        Ok(meta) => meta,
+        // Overwhelmingly the common case is a typo in a path the user
+        // typed or put in `snug.options`. `with_context` renders that as
+        // "stat-ing input foo.jar" / "The system cannot find the file
+        // specified. (os error 2)" — accurate, and useless to someone
+        // trying to work out which half of that is the problem. Any
+        // other error kind (permission denied, path too long) keeps the
+        // context chain, where the OS text is the useful part.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => bail!(
+            "input path does not exist: {}\n\
+             hint: a JAR file, or a directory of JARs, that exists on the \
+             machine running snug",
+            input_path.display()
+        ),
+        Err(e) => {
+            return Err(
+                anyhow::Error::new(e).context(format!("stat-ing input {}", input_path.display()))
+            );
+        }
+    };
 
     let is_dir = if meta.is_dir() {
         true

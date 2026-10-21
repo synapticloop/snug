@@ -124,7 +124,9 @@ fn validate_cache_dir(s: &str) -> Result<PathBuf, String> {
     version = env!("CARGO_PKG_VERSION"),
 )]
 pub struct Cli {
-    /// Input fat JAR file or directory of JARs. Omit to print help + version.
+    /// Input fat JAR file or directory of JARs. Optional only when
+    /// `--input` — or an options file — supplies one; snug errors out
+    /// rather than printing help when no input source is present.
     ///
     /// Equivalent to `--input <path>`; the positional form is kept for
     /// shell convenience. `--input` and the positional are mutually
@@ -349,10 +351,7 @@ pub struct Cli {
     ///
     /// Modes:
     ///
-    /// - omitted — no download flow at all.
-    ///
-    /// - `--download-jdk` (no value) — `auto`: pop the dialog only if
-    ///   JVM discovery fails. Equivalent to the legacy boolean flag.
+    /// - omitted — `auto`: pop the dialog only if JVM discovery fails.
     ///
     /// - `--download-jdk=auto` — same as above, explicit.
     ///
@@ -360,16 +359,40 @@ pub struct Cli {
     ///   JVM discovery. Useful when the end user wants to install
     ///   Temurin regardless of what's on `JAVA_HOME` / `PATH`.
     ///
-    /// Off by default — you'd typically build two flavours of your
-    /// EXE: one with the flag (portable, end-user friendly) and one
-    /// without (developer, requires Java pre-installed).
+    /// - `--download-jdk=off` — no download flow at all.
+    ///
+    /// **The value is required.** `--download-jdk` on its own is an
+    /// error, not a synonym for `auto`.
+    ///
+    /// That is a deliberate change from the earlier shape, where a bare
+    /// `--download-jdk` meant `auto` and the value had to be attached
+    /// with `=` (`require_equals = true`). The cost of that arrangement
+    /// was that `--download-jdk force` did not mean what it looked
+    /// like: `require_equals` stops clap consuming the next token, so
+    /// the flag silently became `auto` and `force` fell through to the
+    /// positional `[JAR|DIR]` slot. Depending on what else was on the
+    /// line the user got `input path does not exist: force`, or
+    /// `unexpected argument '<jar>' found`, or — the worst, because
+    /// nobody sees a command line — `the argument '--input <JAR|DIR>'
+    /// cannot be used with '[JAR|DIR]'` out of a shared options file.
+    /// Every one of those names something the user never typed.
+    ///
+    /// Requiring the value trades that for an error that points at the
+    /// flag you actually wrote. `--download-jdk force` now works, and
+    /// `--download-jdk app.jar` (mode forgotten) becomes `invalid
+    /// value 'app.jar' for '--download-jdk <DOWNLOAD_JDK>'` — still a
+    /// mistake, but one the message names the cause of.
+    ///
+    /// `auto` by default, because that is the portable choice: an EXE
+    /// that finds a compatible JVM runs silently, and one that doesn't
+    /// offers to install Temurin rather than dying with an error
+    /// dialog. Pass `--download-jdk=off` to cut a developer-facing
+    /// build down to "Java must already be installed".
     #[arg(
         long = "download-jdk",
         value_enum,
-        default_missing_value = "auto",
-        default_value_t = CliDownloadJdkMode::Off,
-        num_args = 0..=1,
-        require_equals = true,
+        default_value_t = CliDownloadJdkMode::Auto,
+        num_args = 1,
         help_heading = "Build behaviour"
     )]
     pub download_jdk: CliDownloadJdkMode,
@@ -609,4 +632,106 @@ pub struct Cli {
     /// `--init-localizations`.
     #[arg(long = "init-localizations-stdout", help_heading = "CLI tooling")]
     pub init_localizations_stdout: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    /// Parses `snug <args...>`. The missing-input check lives in
+    /// `main.rs`, not here — these tests are about clap's handling of
+    /// `--download-jdk` on its own.
+    fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
+        let mut argv = vec!["snug"];
+        argv.extend_from_slice(args);
+        Cli::try_parse_from(argv)
+    }
+
+    #[test]
+    fn omitting_download_jdk_defaults_to_auto() {
+        assert_eq!(
+            parse(&["App.jar"]).unwrap().download_jdk,
+            CliDownloadJdkMode::Auto,
+            "auto is the portable default: run silently when a compatible \
+             JVM is present, offer Temurin when one is not"
+        );
+    }
+
+    #[test]
+    fn download_jdk_accepts_a_space_separated_value() {
+        // The point of dropping `require_equals`. This used to parse as
+        // `auto`, with `force` falling through to the positional
+        // `[JAR|DIR]` slot.
+        assert_eq!(
+            parse(&["App.jar", "--download-jdk", "force"])
+                .unwrap()
+                .download_jdk,
+            CliDownloadJdkMode::Force
+        );
+    }
+
+    #[test]
+    fn download_jdk_accepts_an_equals_value() {
+        assert_eq!(
+            parse(&["App.jar", "--download-jdk=force"])
+                .unwrap()
+                .download_jdk,
+            CliDownloadJdkMode::Force
+        );
+    }
+
+    #[test]
+    fn download_jdk_parses_every_mode() {
+        for (text, expected) in [
+            ("off", CliDownloadJdkMode::Off),
+            ("auto", CliDownloadJdkMode::Auto),
+            ("force", CliDownloadJdkMode::Force),
+        ] {
+            let arg = format!("--download-jdk={text}");
+            assert_eq!(
+                parse(&["App.jar", &arg]).unwrap().download_jdk,
+                expected,
+                "{arg}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_bare_download_jdk_is_rejected() {
+        let err = parse(&["App.jar", "--download-jdk"]).unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("--download-jdk"),
+            "the error should name the flag: {text}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_download_jdk_mode_is_rejected() {
+        let err = parse(&["App.jar", "--download-jdk", "sometimes"]).unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("--download-jdk"),
+            "the error should name the flag: {text}"
+        );
+        assert!(
+            text.contains("off") && text.contains("auto") && text.contains("force"),
+            "the error should list the accepted modes: {text}"
+        );
+    }
+
+    /// The forgotten-mode case: `--download-jdk App.jar`. `App.jar` is
+    /// read as the mode, and the error names the flag — which is the
+    /// whole improvement over the old shape, where this instead
+    /// reported `unexpected argument`.
+    #[test]
+    fn a_forgotten_mode_is_reported_against_the_flag() {
+        let err = parse(&["--download-jdk", "App.jar"]).unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("--download-jdk"),
+            "the error should name the flag rather than the JAR: {text}"
+        );
+    }
 }

@@ -168,12 +168,11 @@
 # launcher verifies SHA-256, extracts to
 # `%LOCALAPPDATA%\snug\jdk\<version>\`, and retries.
 #
-# Modes:
-#   omitted — no download flow at all (developer build).
-#   --download-jdk       — `auto`: prompt only if discovery fails.
+# Modes. The value is required — a bare `--download-jdk` is an error:
+#   omitted              — `auto`: prompt only if discovery fails.
 #   --download-jdk=auto  — same as above, explicit.
-#   --download-jdk=force — always prompt, bypassing JVM discovery
-#                          (portable end-user build).
+#   --download-jdk=force — always prompt, bypassing JVM discovery.
+#   --download-jdk=off   — no download flow at all (developer build).
 #
 # --download-jdk=auto
 
