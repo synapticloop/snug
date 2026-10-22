@@ -21,6 +21,15 @@
 # clippy step dies with "'cargo-clippy.exe' is not installed for the
 # toolchain '1.98.1-...'". Anyone cloning the repo gets clippy too, rather
 # than discovering the gap the first time they run it.
+#
+# `rustfmt` is listed for exactly the same reason, and its absence was a real
+# CI failure: the Format check step ran `cargo fmt --all --check` and died with
+# "'cargo-fmt.exe' is not installed for the toolchain '1.98.1-...'". It went
+# unnoticed locally because this workstation's 1.98.1 already carries rustfmt,
+# so the only place the omission can surface is a runner's fresh install.
+#
+# Every component a step in .github\workflows\windows.yml shells out to has to
+# be named here. Adding a new one means adding it to this list too.
 [toolchain]
 channel = "1.98.1"
-components = ["clippy"]
+components = ["clippy", "rustfmt"]

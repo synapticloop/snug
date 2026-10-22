@@ -255,7 +255,6 @@ is read from its manifest, so no `--main-class` override is needed.
 snug/
 ├── Cargo.toml                  # workspace root
 ├── AGENTS.md                   # project context for AI agents
-├── HANDOFF.md                  # session-end notes for the next agent
 ├── README.md                   # this file
 ├── assets/
 │   ├── snug-icon.png           # 1254×1254, used by README + --icon examples

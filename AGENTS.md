@@ -388,9 +388,15 @@ lookup. Both docs used to describe the appended layout; neither matched
 
 ## Backlog
 
-Deferred work, deliberately not done. Kept here rather than in
-`HANDOFF.md`, which is a dated session snapshot pinned to a specific
-commit — useful history, not a live list.
+Deferred work, deliberately not done. This section is the live list.
+There used to be a separate `HANDOFF.md` holding dated session
+snapshots, but each one drifted out of date within a month — the JNI
+stub note outlived the stub, the "cross-compile the stub from a Mac"
+recipe contradicted the native-only policy above, and it went on
+claiming three crates when there were five. A snapshot pinned to one
+commit ages into a contradiction rather than a record, so git history
+is where that belongs and there is no `HANDOFF.md` any more. Anything
+still open belongs here.
 
 **Not platform-specific, but it bites both**
 - **`test/localisations/*.txt` are hand-maintained copies of the
@@ -1974,6 +1980,28 @@ real binary (see the `WM_QUIT` note above).
 
 - Code signing / Authenticode — defer until release slice.
 - Windows SmartScreen reputation — out of scope.
+
+**CLI surface** (raised 2026-09-20, still open)
+- **Short-flag aliases.** `-o` is the *only* short flag on the whole
+  surface — all ~30 arguments are long-only. Conventional pairings
+  worth adding: `-n` for `--name`, `-c` for `--company`, `-V` for
+  `--snug-version`. `-V` is free rather than taken: `disable_version_flag
+  = true` (`cli.rs:123`) because clap's auto `--version` clashed with
+  `--version <APP-VER>`, and snug's own version moved to `--snug-version`
+  as `clap::ArgAction::Version`.
+- **`--quiet` / `-q`** to silence success messages in scripts. Lean: add
+  `-q`; skip `--verbose` and `--force` (YAGNI).
+- **Config file format.** `snug.options` (passed via `--options <PATH>`)
+  is one option per line — simple but flat. A `snug.toml` with sections
+  (`[jvm_discovery]`, `[resources]`, `[build]`) would be richer but more
+  code. Defer until someone asks.
+- **Validation strictness.** Currently lenient on format, fails loudly on
+  missing files. Could tighten: semver validation of `--version`, real
+  `.ico` parsing, and so on.
+- **ARM64 Windows.** Only `x86_64-pc-windows-msvc` is built. ARM64
+  Windows (Surface Pro X, Snapdragon X) is increasingly common, and the
+  `release\windows-<arch>` convention already accommodates a second arch
+  without inventing anything new.
 - **A Linux ELF launcher does not exist and is not planned.** An older
   draft of this section claimed "Cross-platform launcher (mac `.app`,
   Linux ELF) — explicitly NOT in scope. Snug is Windows-only by design."
