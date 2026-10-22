@@ -54,7 +54,7 @@ param([switch]$Format)
 # from `$LASTEXITCODE` and never from exception state, so nothing is lost
 # -- and this way the script survives a caller that redirects output.
 #
-# Under 'Stop', a caller doing `.\scripts\check.ps1 *>&1 | Tee-Object`
+# Under 'Stop', a caller doing `.\scripts\windows\check.ps1 *>&1 | Tee-Object`
 # turns cargo's ordinary "Finished ..." progress line on stderr into a
 # NativeCommandError record, which terminates the script at whichever
 # gate happens to emit one. That is not hypothetical: it is exactly how
