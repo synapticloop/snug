@@ -617,17 +617,29 @@ mode, and a nastier one.
 ```console
 $ snug --list-tokens
 snug: localisation inventory for the built-in `en` baseline
-      107 keys, 42 carry placeholders, 25 distinct tokens
+      106 keys, 44 may take placeholders, 27 distinct tokens available
 ...
   runtime.prompt.content  {size_mb}
   runtime.retry.subheading  {attempt, max_attempts}
   launcher.error.content  {error}
+  runtime.prompt.button_download
+      Install the runtime now
+      may also use: {sha256} {size_mb} {version}
 ```
 
 `snug --list-tokens` prints that whole table offline — no JAR, no
 options file, no build. `snug --init-localizations --init-localizations-tag
 de` then scaffolds a bundle whose values already carry the right slots,
 so you translate rather than reconstruct.
+
+The inventory is driven by `INJECTED_BY_KEY` — what each rendering site
+actually supplies — rather than by the braces in the English text, which
+are only one translation's choice among those slots. So the count is the
+number of slots a translation may use, and `{sha256}` and `{major}`
+appear even though no shipped English message carries them; those two
+are flagged `<- not used by the English copy`. Keys whose English copy
+uses no slot at all still get an entry when their site supplies one,
+which is why `runtime.prompt.button_download` is listed above.
 
 `REPLACEMENT_TOKENS.md` at the repo root is the generated per-key
 contract: which slots each key may use, which of them today's English
