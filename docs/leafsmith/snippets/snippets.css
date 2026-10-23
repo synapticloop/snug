@@ -1,0 +1,113 @@
+/* Styling for this project.
+ *
+ * Two kinds of rule live here.
+ *
+ * 1. The sample snippets in snippets/. A fragment is inserted as written and lives in the
+ *    theme's chrome, outside the page content, so the document's own stylesheet (which Leafsmith
+ *    scopes to .leafsmith-content) never reaches it. Style it here, or from site.stylesheet,
+ *    with its own class names.
+ *
+ * 2. The site look and feel, in the "Leafsmith brand" section at the foot of this file.
+ *
+ * Why the override hook is this file: site.stylesheet points here, and Leafsmith links it after
+ * the theme's own leafsmith-style.css, so these rules can restyle the theme without forking it.
+ *
+ * One thing to know before overriding the page content. The theme's stylesheet and this file are
+ * both linked from <head>, but the document's own stylesheet is emitted as a <style> element
+ * inside <body>, which comes later in the document. Where two rules have the same specificity,
+ * the later one wins - so the document's rules beat a plain rule here. To override one, raise the
+ * specificity instead of relying on order. Doubling the scope class is the cheapest way:
+ *
+ *     .leafsmith-content.leafsmith-content h4 { ... }   beats   .leafsmith-content h4 { ... }
+ *
+ * The same applies to the generated .cN class names the export carries; those are matched here
+ * explicitly where they need to be changed.
+ */
+
+.snippet-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  text-decoration: none;
+  opacity: .65;
+}
+
+.snippet-link {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px solid currentColor;
+}
+
+.snippet-link:hover {
+  opacity: .7;
+}
+
+.snippet-note {
+  margin: 0;
+  opacity: .7;
+  line-height: 1.5;
+}
+
+/* A dropdown menu.
+ *
+ * Built from <details>/<summary> rather than a scripted toggle so it opens with no JavaScript
+ * at all, and takes keyboard focus, Enter and Escape without any of that being reimplemented.
+ * The marker is removed and the caret drawn by hand so the control looks the same everywhere.
+ */
+.snippet-menu {
+  position: relative;
+}
+
+.snippet-menu > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 5px 12px;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  opacity: .75;
+}
+
+.snippet-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.snippet-menu[open] > summary,
+.snippet-menu > summary:hover {
+  opacity: 1;
+}
+
+.snippet-menu > ul {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 30;
+  min-width: 210px;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  background: #fff;
+  border: 1px solid #d8d8d8;
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0,0,0,.14);
+  text-align: left;
+}
+
+.snippet-menu > ul li a {
+  display: block;
+  padding: 8px 14px;
+  color: #222;
+  text-decoration: none;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.snippet-menu > ul li a:hover {
+  background: #f2f2f2;
+}

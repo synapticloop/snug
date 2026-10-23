@@ -1,0 +1,27 @@
+{
+  "generator": "Leafsmith 1.0.0",
+  "pages": [
+    {"title": "SayHellotoSnug", "file": "index.html"},
+    {"title": "SECTION 1: ABOUT THIS BOOK", "file": "section-1-about-this-book.html"},
+    {"title": "README.1ST", "file": "readme-1st.html"},
+    {"title": "SECTION 2: BUILDING WITH SNUG", "file": "section-2-building-with-snug.html"},
+    {"title": "Building an Application with Snug", "file": "building-an-application-with-snug.html"},
+    {"title": "SECTION 3: CUSTOMISING THE SNUG USER EXPERIENCE", "file": "section-3-customising-the-snug-user-experience.html"},
+    {"title": "The Snug Experience", "file": "the-snug-experience.html"},
+    {"title": "SECTION 4: CONFIGURATION OPTIONS", "file": "section-4-configuration-options.html"},
+    {"title": "How Snug Configuration Works", "file": "how-snug-configuration-works.html"},
+    {"title": "SECTION 5: CUSTOMISING LAUNCHER MESSAGES", "file": "section-5-customising-launcher-messages.html"},
+    {"title": "SECTION 6: MANAGING YOUR SNUG PROJECT", "file": "section-6-managing-your-snug-project.html"},
+    {"title": "Managing Your Snug Project", "file": "managing-your-snug-project.html"},
+    {"title": "SECTION 7: TECHNICAL DETAILS", "file": "section-7-technical-details.html"},
+    {"title": "Snug Technical Details", "file": "snug-technical-details.html"},
+    {"title": "SECTION 8: APPENDICES", "file": "section-8-appendices.html"},
+    {"title": "Command Line Options Reference", "file": "command-line-options-reference.html"},
+    {"title": "Building Snug from Source", "file": "building-snug-from-source.html"},
+    {"title": "Definitions", "file": "definitions.html"},
+    {"title": "Copyright, Licensing, and Third-Party Notices", "file": "copyright-licensing-and-third-party-notices.html"},
+    {"title": "About Snug", "file": "about-snug.html"},
+    {"title": "End Plate", "file": "end-plate.html"}
+  ],
+  "warnings": 35
+}

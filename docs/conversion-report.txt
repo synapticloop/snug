@@ -1,0 +1,50 @@
+Leafsmith conversion report
+
+Pages: 21
+Copied local assets: 34
+
+Chapter boundaries: 20
+Page titles tidied: 8
+Source CSS rules scoped to content: 1905
+Tables given vertical spacing: 132
+Tables preserved: 131
+Tables with formatting preserved: 131
+
+Warnings: 35
+- SayHellotoSnug.html: image has no alternative text: images/image18.png
+- SayHellotoSnug.html: image has no alternative text: images/image19.png
+- SayHellotoSnug.html: image has no alternative text: images/image24.png
+- SayHellotoSnug.html: image has no alternative text: images/image25.png
+- SayHellotoSnug.html: image has no alternative text: images/image29.png
+- SayHellotoSnug.html: image has no alternative text: images/image16.png
+- SayHellotoSnug.html: image has no alternative text: images/image27.png
+- SayHellotoSnug.html: image has no alternative text: images/image13.png
+- SayHellotoSnug.html: image has no alternative text: images/image4.png
+- SayHellotoSnug.html: image has no alternative text: images/image33.png
+- SayHellotoSnug.html: image has no alternative text: images/image5.png
+- SayHellotoSnug.html: image has no alternative text: images/image9.png
+- SayHellotoSnug.html: image has no alternative text: images/image1.png
+- SayHellotoSnug.html: image has no alternative text: images/image2.png
+- SayHellotoSnug.html: image has no alternative text: images/image23.png
+- SayHellotoSnug.html: image has no alternative text: images/image26.png
+- SayHellotoSnug.html: image has no alternative text: images/image31.png
+- SayHellotoSnug.html: image has no alternative text: images/image14.png
+- SayHellotoSnug.html: image has no alternative text: images/image10.png
+- SayHellotoSnug.html: image has no alternative text: images/image17.png
+- SayHellotoSnug.html: image has no alternative text: images/image22.png
+- SayHellotoSnug.html: image has no alternative text: images/image6.png
+- SayHellotoSnug.html: image has no alternative text: images/image7.png
+- SayHellotoSnug.html: image has no alternative text: images/image12.png
+- SayHellotoSnug.html: image has no alternative text: images/image34.png
+- SayHellotoSnug.html: image has no alternative text: images/image15.png
+- SayHellotoSnug.html: image has no alternative text: images/image21.png
+- SayHellotoSnug.html: image has no alternative text: images/image8.png
+- SayHellotoSnug.html: image has no alternative text: images/image28.png
+- SayHellotoSnug.html: image has no alternative text: images/image3.png
+- SayHellotoSnug.html: image has no alternative text: images/image30.png
+- SayHellotoSnug.html: image has no alternative text: images/image11.png
+- SayHellotoSnug.html: image has no alternative text: images/image32.png
+- SayHellotoSnug.html: image has no alternative text: images/image20.png
+- site.navTopLeft is an empty file: leafsmith/snippets/nav-top-left.html
+
+HTML tables are preserved as tables. Leafsmith does not infer document-specific meaning from table layouts.
