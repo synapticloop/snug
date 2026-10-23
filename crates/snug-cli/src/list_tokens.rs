@@ -257,7 +257,7 @@ pub fn render(inv: &Inventory, out: &mut impl std::io::Write) -> std::io::Result
     writeln!(out, "Next: create a localisation file:")?;
     writeln!(
         out,
-        "  snug --init-localizations --init-localizations-tag <tag>"
+        "  snug --init-localisations --init-localisations-tag <tag>"
     )?;
     Ok(())
 }

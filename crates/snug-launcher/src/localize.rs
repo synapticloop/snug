@@ -125,7 +125,7 @@ pub(crate) fn replace_tokens() -> bool {
     REPLACE_TOKENS.load(Ordering::Relaxed)
 }
 
-/// A complete priority chain of localization bundles, ready for
+/// A complete priority chain of localisation bundles, ready for
 /// lookup. Built by [`Bundles::load`] and stashed in [`BUNDLES`].
 ///
 /// Order of priority (highest first), for a user whose preference list
@@ -405,7 +405,7 @@ pub fn t1(key: &str, name: &str, value: &str) -> String {
 /// of variants like `Err(String)`. We don't read those field names
 /// from the error type at runtime (would need a derive), so the
 /// caller is responsible for passing `(name, value)` pairs that
-/// match the placeholders the localization bundle actually uses.
+/// match the placeholders the localisation bundle actually uses.
 /// For `thiserror`-derived strings, that means the bundle should use
 /// the `{0}` / `{1}` style and the caller should pass
 /// `&[("0", "..."), ("1", "...")]`.
@@ -924,7 +924,7 @@ mod tests {
 
     #[test]
     fn a_single_locale_payload_still_works_on_an_english_machine() {
-        // A `--localization de.txt` build whose only non-English bundle
+        // A `--localisation de.txt` build whose only non-English bundle
         // matches nothing here: English is still in the chain, so every
         // key resolves to real copy rather than a raw key string.
         let de = bundle("de", &[("err.jvm_not_found", "Keine JVM gefunden.")]);
@@ -1110,7 +1110,7 @@ mod tests {
     ///
     /// `test/localisations/*.txt` are hand-maintained copies of the built-in
     /// English, not fixtures anything reads at runtime — they exist so a
-    /// bundle can be dropped into `--localization <path>` and eyeballed.
+    /// bundle can be dropped into `--localisation <path>` and eyeballed.
     /// Nothing compared them, which is how `fr` and `de` drifted a full
     /// release behind (still telling users to visit adoptium.net) without
     /// anything going red. Every bundle in the directory is checked, so

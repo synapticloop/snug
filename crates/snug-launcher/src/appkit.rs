@@ -4,7 +4,7 @@
 //! put the *same localised strings* on screen that Windows shows. Every
 //! piece of copy comes from [`crate::dialogs`], assembled with
 //! [`crate::dialogs::fill`] against the `[runtime.*]` keys — nothing
-//! here formats a string of its own, so a `--localization <tag>` bundle
+//! here formats a string of its own, so a `--localisation <tag>` bundle
 //! translates the macOS windows exactly as it translates the Windows ones.
 //!
 //! # Why a real `NSWindow` and not an `NSAlert`

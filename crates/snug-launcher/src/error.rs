@@ -12,7 +12,7 @@ use crate::localize;
 ///
 /// For user-facing UI (dialog bodies, message boxes), callers should
 /// invoke [`localize_launcher_error`] instead. That helper looks up
-/// the matching `err.*` key in the localization bundle and fills
+/// the matching `err.*` key in the localisation bundle and fills
 /// placeholders from the variant's fields. Missing keys fall back to
 /// the bundle's English baseline (which is the same text as the
 /// `#[error]` literal), so end users always see English at minimum.
@@ -81,7 +81,7 @@ pub enum LauncherError {
     Format(#[from] snug_format::FormatError),
 }
 
-/// Render a [`LauncherError`] using the localization bundle.
+/// Render a [`LauncherError`] using the localisation bundle.
 ///
 /// Each variant delegates to `localize::t(...)` with the matching
 /// `err.*` key, filling the named placeholders from the variant's
@@ -138,9 +138,9 @@ pub fn localize_launcher_error(err: &LauncherError) -> String {
 }
 
 /// Heuristic: returns true when `s` looks like an unresolved
-/// localization key (`err.something`, no whitespace, no embedded
+/// localisation key (`err.something`, no whitespace, no embedded
 /// values). False positives are harmless — the worst case is we
-/// fall back to English when the actual localized message happened
+/// fall back to English when the actual localised message happened
 /// to start with `err.` and contain no spaces (which we author the
 /// baseline to avoid).
 fn looks_like_raw_key(s: &str) -> bool {

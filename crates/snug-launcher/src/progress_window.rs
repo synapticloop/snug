@@ -569,7 +569,7 @@ unsafe extern "system" fn progress_wndproc(
                 std::ptr::null(),
             );
             // The button text was set in CreateWindowExW above
-            // (localized "Cancel" from the install-prompt section).
+            // (localised "Cancel" from the install-prompt section).
             // Size it to that text and park it against the right
             // margin, matching how modal_window packs its button group.
             //

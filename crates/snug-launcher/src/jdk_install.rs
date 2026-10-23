@@ -1814,7 +1814,7 @@ fn publish(
 /// delegates to the hand-painted dialogs that already exist; every other
 /// platform uses **the same `dialogs()` strings** through the launcher log
 /// and stderr. Nothing here formats a string of its own, so a
-/// `--localization <tag>` bundle translates the macOS output exactly as it
+/// `--localisation <tag>` bundle translates the macOS output exactly as it
 /// translates the Windows one — the localisation requirement is satisfied
 /// by construction rather than by a parallel set of strings.
 ///
@@ -2174,7 +2174,7 @@ pub unsafe fn show_metadata_failed_dialog(parent: HWND, min_java: u16, error_det
 pub unsafe fn show_error_dialog(parent: HWND, title: &str, content: &str) {
     // `title` is the title-bar text; the dialog body reads
     // `failure.heading` / `failure.subheading` from
-    // the localization bundle — `error_window::show` substitutes the
+    // the localisation bundle — `error_window::show` substitutes the
     // bundle's value whenever the field is empty, which is why `heading`
     // below is `""` rather than something the caller supplies.
     // `content` is the multi-line error description the launcher already

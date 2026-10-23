@@ -29,7 +29,7 @@ pub struct MetadataFailedDialog<'a> {
     pub subheading: &'a str,
     pub error_content: &'a str,
     /// Optional override for the info-box heading. `None` ⇒
-    /// `[runtime.metadata_failed].info_heading` from the localization
+    /// `[runtime.metadata_failed].info_heading` from the localisation
     /// bundle.
     pub info_heading: Option<&'a str>,
     /// Optional override for the info-box subtext. `None` ⇒ the

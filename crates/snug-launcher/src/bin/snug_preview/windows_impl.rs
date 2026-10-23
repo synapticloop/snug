@@ -1264,11 +1264,10 @@ enum Cli {
 
 /// Parse the arguments after the executable name.
 ///
-/// The flag is `--localisation`, British spelling only, and it used to
-/// answer to `--localization` as well. That alias is gone: the project
-/// is British-spelled, and a dev tool is not the place to hedge. Note
-/// this is *not* the same as the shipped CLI's own flag, which is
-/// still American-spelled — see `cli.rs`.
+/// The flag is `--localisation`, British spelling only. It used to
+/// answer to `--localization` as well; that alias is gone, and `snug`'s
+/// own flag has since been renamed to match. Both binaries now take the
+/// British spelling and neither hedges — see `cli.rs`.
 fn parse_args<I, S>(args: I) -> Cli
 where
     I: IntoIterator<Item = S>,
@@ -2710,7 +2709,9 @@ mod tests {
     fn the_american_spelling_is_rejected() {
         // The alias was removed deliberately. Without this the flag could
         // creep back in unnoticed, and a dev tool quietly answering to two
-        // spellings is the papercut the removal was meant to end.
+        // spellings is the papercut the removal was meant to end. `snug`
+        // itself is held to the same rule by
+        // `american_flag_spelling_is_rejected` in `snug-cli`.
         assert_eq!(
             parse(&["--localization", "de.txt"]),
             Cli::Error("unrecognised argument: --localization".to_string())

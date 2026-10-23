@@ -391,7 +391,7 @@ lookup. Both docs used to describe the appended layout; neither matched
 | 7 | Per-user cache + old-version cleanup           | **done** — cache entries expire. `cache::touch` stamps a cached JAR's mtime on **every** launch that uses it, and `cache::sweep` runs off a detached thread (rate-limited to once per 6h by a `.sweep` stamp file) to delete the ones no longer wanted. Policy: keep the most recently used `KEEP_RECENT` (3) entries — the running build's own entries count toward that depth — up to a per-app byte budget of `clamp(build_bytes * 3, 512 MB, 8 GB)`, and evict anything untouched for `MAX_UNUSED_AGE` (30 days) regardless of rank. The current build is never evicted; everything else is recoverable because a missing entry is re-extracted from the payload on the next launch. Sweeping is *not* triggered by the builder — `snug-cli` never writes to the cache, so the launcher is the sole owner of the policy. |
 | 8 | GitHub Actions CI (windows-latest release)     | planned    |
 | 9 | `Snug Quick Build` beginner drag-and-drop shim   | **done** — separate `crates/snug-dropper` crate. Drop a `.jar` or a folder of JARs on `Snug Quick Build.exe` and it runs `snug.exe --name "Example Application Name" --company "Example Company Pty Ltd" -o "<parent>/Example Application Name.exe" <input>` behind an indeterminate marquee on a worker thread, then reports with a `MessageBoxW`. Double-click opens a command window in the EXE's own folder. Two or more items, or one item that is neither a `.jar` nor a directory, get a dialog and *then* the terminal as a hand-off. A build failure or a missing `snug.exe` gets an error dialog and **no** terminal. Built as `snug-dropper.exe`; renamed to `Snug Quick Build.exe` at packaging time. Must ship in the same folder as `snug.exe`. |
-| 10 | Native macOS / Linux `snug` CLI builds    | **done** — `cargo build --workspace` and `cargo test --workspace --lib --bins --tests` pass on macOS, and the CLI produces a real `PE32+ executable (GUI) x86-64` end-to-end from a Mac. The count is platform-independent — the suite is pure Rust, so a Windows run reports the same **525 passed, 2 ignored** (measured on Windows at 0.16.0). Treat that number as a pinned checkpoint rather than a fact to restate: it moved four times in the week this line was written at 495, and every bump of it is a line edit here rather than a fact someone re-derived. `scripts/macos/build-macos.sh` stages two thin per-arch binaries into `release/macos-arm64/snug` and `release/macos-x86_64/snug` at a macOS 12.0 deployment floor — same binary name on every platform, platform in the directory, so docs never name two binaries. No universal2: macOS 27 is the last release with Rosetta 2, so arm64 is the future-proof slice and x86_64 only serves the four Intel models that top out at macOS 26. Windows-only surfaces are gated: the six Win32 GUI modules in `snug-launcher` use file-level `#![cfg(windows)]` (joining `jdk_install.rs` / `splash.rs`), while the three Windows-only *binaries* use per-item `#[cfg(windows)]` plus a real non-Windows `main`. `editpe` was made unconditional (pure-Rust PE parsing — `snug-cli` needs it to build EXEs anywhere) and `ureq` Windows-only. Homebrew tap / Developer ID notarization is follow-up; see "Build host". |
+| 10 | Native macOS / Linux `snug` CLI builds    | **done** — `cargo build --workspace` and `cargo test --workspace --lib --bins --tests` pass on macOS, and the CLI produces a real `PE32+ executable (GUI) x86-64` end-to-end from a Mac. The count is platform-independent — the suite is pure Rust, so a Windows run reports the same **527 passed, 2 ignored** (measured on Windows at 0.16.0). Treat that number as a pinned checkpoint rather than a fact to restate: it moved four times in the week this line was written at 495, and every bump of it is a line edit here rather than a fact someone re-derived. `scripts/macos/build-macos.sh` stages two thin per-arch binaries into `release/macos-arm64/snug` and `release/macos-x86_64/snug` at a macOS 12.0 deployment floor — same binary name on every platform, platform in the directory, so docs never name two binaries. No universal2: macOS 27 is the last release with Rosetta 2, so arm64 is the future-proof slice and x86_64 only serves the four Intel models that top out at macOS 26. Windows-only surfaces are gated: the six Win32 GUI modules in `snug-launcher` use file-level `#![cfg(windows)]` (joining `jdk_install.rs` / `splash.rs`), while the three Windows-only *binaries* use per-item `#[cfg(windows)]` plus a real non-Windows `main`. `editpe` was made unconditional (pure-Rust PE parsing — `snug-cli` needs it to build EXEs anywhere) and `ureq` Windows-only. Homebrew tap / Developer ID notarization is follow-up; see "Build host". |
 | 11 | macOS launcher runtime (`libjvm.dylib` + JNI) | **done, verified against a real JDK on macOS.** `platform/macos.rs` mirrors `platform/windows.rs` step for step: cache extraction + sweep, log, `Main-Class` resolution, JVM discovery, `libjvm.dylib` load via the same `jni` 0.22 invocation API, and the `main(String[])` / JavaFX `Application.launch` dispatch. `tests/macos_launch_e2e.rs` compiles a real class with `javac`, packages it with `jar`, hands it to the launcher, and asserts the JVM actually runs it — it is skipped rather than failed when no JDK is present. **Not implemented:** splash, the Adoptium download flow, and error dialogs (all Win32); `DownloadJdkMode::Auto`/`Force` degrade to discovery-only and *log* that. |
 | 12 | macOS `.app` bundle emitter | **done, verified by launching a real bundle.** The output extension selects the artefact: `-o MyApp.app` builds a macOS bundle, `-o MyApp.exe` a Windows one, and the *default* is the host's own — `snug app.jar` with no `-o` gives `app.app` on macOS and `app.exe` elsewhere. `macos_bundle.rs` writes `Contents/{Info.plist,MacOS/<App>,Resources/<App>.snugpayload,Resources/App.icns}` and ad-hoc signs it. The launcher is a **byte-copy** — unlike the Windows stub there is nothing to stamp, because a Mach-O has no resource directory and `editpe` is PE-only. `bin/launcher-stub-macos-<arch>` is embedded per `#[cfg(target_arch)]`, so each `snug` binary carries one launcher and can only build a `.app` for its own arch. |
 | 13 | macOS Adoptium JDK download | **the flow works; the dialogs do not exist yet.** `jdk_install.rs` now compiles on macOS. `adoptium_target()` sends this host's `os`/`architecture` in Adoptium's own spelling, macOS assets unpack as `.tar.gz` (via `tar` + `flate2`), `find_java_home` understands the `*.jdk/Contents/Home` bundle and `bin/java`, and `open_in_browser` uses `/usr/bin/open`. Verified live: the query returns the correct `x64_mac_hotspot` asset, and the tarball/extraction path is covered by tests that build a real `.tar.gz` in Adoptium's shape. **Still Win32:** the splash, the download dialogs, and the error dialog — so `Auto` logs that it has nothing to ask with and falls back to discovery, while `Force` downloads and logs its progress. See the Backlog for the AppKit route. |
@@ -414,7 +414,7 @@ still open belongs here.
 - **`test/localisations/*.txt` are hand-maintained copies of the
   canonical baseline.** They are not read by any code — they exist so a
   `de` / `fr` bundle can be dropped in and eyeballed through
-  `--localization <path>` — and `crates/snug-format/assets/` carries only
+  `--localisation <path>` — and `crates/snug-format/assets/` carries only
   the `en` baseline, so the translated text lives *only* in those copies.
   There are four of them: `en`, `de`, `fr`, and `ts`. The `ts` one carries
   English text under a `ts` tag and exists to exercise the tag-parsing
@@ -499,7 +499,7 @@ still open belongs here.
   download-progress windows are done; only the **launcher error window**
   (`error_window`, called from `main.rs`) is not. Reuse the same
   `dialogs()` strings — nothing in the seam formats a string of its own, so
-  a `--localization <tag>` bundle translates the macOS dialogs exactly as
+  a `--localisation <tag>` bundle translates the macOS dialogs exactly as
   it translates the Windows ones.
   - This reversed an earlier decision, and the reason is worth keeping.
     The progress window was an `NSAlert` because an alert gets a real
@@ -1205,7 +1205,7 @@ by accident.
   Windows delegates to the hand-painted dialogs that already exist; every
   other platform uses **the same `dialogs()` strings** via the launcher log
   and stderr. Nothing in the seam formats a string of its own, so a
-  `--localization <tag>` bundle translates the macOS output exactly as it
+  `--localisation <tag>` bundle translates the macOS output exactly as it
   translates the Windows one. The non-Windows behaviour is deliberately
   conservative: it never opens a browser unprompted (a `.app` launched
   from Finder has no terminal to have agreed to anything in), and it says
@@ -1357,7 +1357,7 @@ by accident.
     therefore resolves against the same directory the file was found in.
     This is the `Makefile` / `package.json` / `Cargo.toml` convention —
     ambient project config is read from where you stand — and it is what
-    `--init-options`, `--init-localizations` and `snug_bin()`'s own
+    `--init-options`, `--init-localisations` and `snug_bin()`'s own
     scaffolding already assumed. Candidates are matched with
     `is_file()`, so a directory that happens to share a file's name is
     skipped.
@@ -1398,7 +1398,7 @@ by accident.
     `C:\Users\me\app.jar` as `C:Usersmeapp.jar` and silently corrupted every
     absolute path. `#` opens a comment only at the start of a line, since it
     is legal in a filename. So the rule is: quote for whitespace, never for
-    escaping. Repeatable flags (`--jvm-arg`, `--localization`)
+    escaping. Repeatable flags (`--jvm-arg`, `--localisation`)
     accumulate from *every* source, base file first, so JVM options
     arrive in a defined order.
   - **The layering is stripped high-to-low, not concatenated.** `merge`
@@ -1437,16 +1437,16 @@ by accident.
   `main.rs` accepts *only* `--init-*` flags, so
   `snug App.jar --init-options` is an error, not a build):
   `--init-options` writes the example `snug.options`
-  (`init_options.rs`), and `--init-localizations` writes a
+  (`init_options.rs`), and `--init-localisations` writes a
   `localisations/` directory of `snug-localisations.<tag>.txt` bundles
   (`init_localizations.rs`). Each has `--force` and `--stdout`
   modifiers, and they can be combined in one call to lay down a whole
-  project skeleton. `--init-localizations` defaults to
+  project skeleton. `--init-localisations` defaults to
   `./localisations` relative to the **CWD — the directory snug was
   invoked from** — which matches both `--init-options`' own CWD-relative
   default and the `snug.options` read order above; translations are
   per-project source rather than a shipped artefact, so the project you
-  are standing in is where they belong. `--init-localizations-tag <TAG>`
+  are standing in is where they belong. `--init-localisations-tag <TAG>`
   (repeatable) scaffolds an extra translation template; `en` is always
   written.
 - **A user-supplied `en` bundle replaces the built-in English
@@ -1454,7 +1454,7 @@ by accident.
   puts the first user `en` in the baseline slot (position 0, lowest
   merge priority) instead of appending a second one, which
   `ensure_unique_tags` would reject. Without this, the obvious
-  `--localization localisations` after `snug --init-localizations`
+  `--localisation localisations` after `snug --init-localisations`
   would fail with a duplicate-tag error, since the scaffold always
   contains an `en` file. A *second* `en` in one build is still an
   error. The scaffold directory must contain nothing but
@@ -1496,13 +1496,13 @@ by accident.
     the table from lying to a translator by inventing a slot that will
     never be filled.
 - **All launcher user-facing text lives in ONE file, and it is the
-  localization catalog.** `crates/snug-format/assets/
+  localisation catalog.** `crates/snug-format/assets/
   snug-localisations.en.txt` holds the error messages (`err.*`), the
   splash strings (`splash.*`), the JDK-install errors (`jdk.err.*`)
   *and* the dialog chrome (`runtime.*`, `generic.*`,
   `launcher.error.*`). There is deliberately no second file: a
   `dialogs.toml` existed until 0.4.0 and was merged in, because
-  compile-time-only copy meant a localized app got a translated error
+  compile-time-only copy meant a localised app got a translated error
   body inside an English window. The file lives in `snug-format`
   because the CLI and the launcher both need it and `snug-format` is
   the one crate they both depend on; it is `include_str!`d exactly
@@ -1557,17 +1557,21 @@ by accident.
   `discover_localization_files` / `tag_from_path` / `expected_filename`
   moved there (with a `LocalizationLoadError` instead of `anyhow`) so
   `snug-preview --localisation <dir>` resolves a path exactly the way
-  `snug --localization <dir>` does. `snug-cli` re-exports all three,
+  `snug --localisation <dir>` does. `snug-cli` re-exports all three,
   so its ~20 call sites are unchanged. Directory mode stays strict in
   both: a `README.md` or `.bak` beside the bundles is an error, not a
   skipped file. When moving this code, keep the error *wording* byte
   for byte — `collect_directory_errors_on_empty_directory` asserts on
   the exact "contains no `snug-localisations" substring.
 - **`snug_preview` is the translation playground.** `-h/--help` and
-  `--localisation` (British spelling only; the `--localization`
-  alias is gone) are parsed by a hand-rolled `parse_args` taking an
+  `--localisation` are parsed by a hand-rolled `parse_args` taking an
   `IntoIterator`, so all its behaviour is unit-tested without
-  spawning a process. Its Language dropdown lists every bundle it
+  spawning a process. Both this tool and `snug` itself take the
+  **British spelling only** — `--localization` is rejected by each, and
+  two tests hold that line (`the_american_spelling_is_rejected` here,
+  `american_flag_spelling_is_rejected` in `snug-cli`), because a tool
+  that quietly answers to both spellings is the papercut the single
+  spelling exists to end. Its Language dropdown lists every bundle it
   found with the built-in English baseline last, unless the user  supplied their own `en` — same replacement rule as a build. It
   **opens on the baseline**, resolved by `default_index` and never by
   hardcoding index 0: tags arrive in `discover_localization_files`

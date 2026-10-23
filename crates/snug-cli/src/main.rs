@@ -36,7 +36,7 @@ fn run() -> Result<()> {
     // we don't depend on the full `Cli` validation passing.
     //
     // Both init modes can be combined: `snug --init-options
-    // --init-localizations` lays down a `snug.options` *and* a starter
+    // --init-localisations` lays down a `snug.options` *and* a starter
     // `localisations/` directory in one call, which is the whole
     // "start a new project from nothing" gesture.
     if raw_args.iter().any(|a| is_init_flag(a)) {
@@ -104,16 +104,16 @@ fn run() -> Result<()> {
         return snug_cli::list_tokens::run();
     }
 
-    // `--init-localizations-tag` carries a value, so unlike the
+    // `--init-localisations-tag` carries a value, so unlike the
     // boolean modifiers it can't quietly do nothing: reaching here
     // means the user passed a locale without asking to scaffold one,
     // and a build would swallow the value without a word. Say so.
     if !cli.init_localizations_tag.is_empty() && cli.init_localizations.is_none() {
         anyhow::bail!(
-            "--init-localizations-tag has no effect without --init-localizations\n\
-             hint: snug --init-localizations --init-localizations-tag {}",
+            "--init-localisations-tag has no effect without --init-localisations\n\
+             hint: snug --init-localisations --init-localisations-tag {}",
             cli.init_localizations_tag
-                .join(" --init-localizations-tag ")
+                .join(" --init-localisations-tag ")
         );
     }
 
@@ -302,8 +302,8 @@ fn hex_lower(bytes: &[u8]) -> String {
 fn is_init_flag(arg: &str) -> bool {
     arg == "--init-options"
         || arg.starts_with("--init-options=")
-        || arg == "--init-localizations"
-        || arg.starts_with("--init-localizations=")
+        || arg == "--init-localisations"
+        || arg.starts_with("--init-localisations=")
 }
 
 /// Tiny `clap`-derived parser used to extract just the `--init-*` flags
@@ -353,7 +353,7 @@ struct InitCli {
     /// relative to the *current working directory* (where snug was
     /// invoked from). Created if missing.
     #[arg(
-        long = "init-localizations",
+        long = "init-localisations",
         value_name = "DIR",
         num_args = 0..=1,
         default_missing_value = init_localizations::DEFAULT_DIR,
@@ -363,17 +363,17 @@ struct InitCli {
     /// Scaffold an extra `snug-localisations.<tag>.txt` translation
     /// template in the target directory. Repeatable; the English
     /// baseline is always written regardless.
-    #[arg(long = "init-localizations-tag", value_name = "TAG")]
+    #[arg(long = "init-localisations-tag", value_name = "TAG")]
     init_localizations_tag: Vec<String>,
 
-    /// Overwrite existing bundles in the `--init-localizations`
+    /// Overwrite existing bundles in the `--init-localisations`
     /// target directory.
-    #[arg(long = "init-localizations-force")]
+    #[arg(long = "init-localisations-force")]
     init_localizations_force: bool,
 
-    /// Print the `--init-localizations` templates to stdout instead
+    /// Print the `--init-localisations` templates to stdout instead
     /// of writing them to disk.
-    #[arg(long = "init-localizations-stdout")]
+    #[arg(long = "init-localisations-stdout")]
     init_localizations_stdout: bool,
 }
 
@@ -399,14 +399,14 @@ mod tests {
     fn is_init_flag_matches_modes_but_not_modifiers() {
         assert!(is_init_flag("--init-options"));
         assert!(is_init_flag("--init-options=cfg/build.options"));
-        assert!(is_init_flag("--init-localizations"));
-        assert!(is_init_flag("--init-localizations=i18n"));
+        assert!(is_init_flag("--init-localisations"));
+        assert!(is_init_flag("--init-localisations=i18n"));
         // Modifiers alone don't select the branch — they fall through
         // to the normal parse.
         assert!(!is_init_flag("--init-options-force"));
-        assert!(!is_init_flag("--init-localizations-force"));
-        assert!(!is_init_flag("--init-localizations-stdout"));
-        assert!(!is_init_flag("--init-localizations-tag"));
+        assert!(!is_init_flag("--init-localisations-force"));
+        assert!(!is_init_flag("--init-localisations-stdout"));
+        assert!(!is_init_flag("--init-localisations-tag"));
         assert!(!is_init_flag("--init-options-extra"));
         assert!(!is_init_flag("MyApp.jar"));
     }
@@ -444,11 +444,11 @@ mod tests {
         assert!(p.init_options_stdout);
     }
 
-    // ---- --init-localizations ----
+    // ---- --init-localisations ----
 
     #[test]
     fn accepts_bare_init_localizations() {
-        let p = parse_or_reject(&["--init-localizations"]).unwrap();
+        let p = parse_or_reject(&["--init-localisations"]).unwrap();
         assert_eq!(
             p.init_localizations.as_deref(),
             Some(init_localizations::DEFAULT_DIR)
@@ -460,19 +460,19 @@ mod tests {
 
     #[test]
     fn accepts_init_localizations_with_equals_and_space_forms() {
-        let p = parse_or_reject(&["--init-localizations=i18n"]).unwrap();
+        let p = parse_or_reject(&["--init-localisations=i18n"]).unwrap();
         assert_eq!(p.init_localizations.as_deref(), Some("i18n"));
-        let p = parse_or_reject(&["--init-localizations", "cfg/i18n"]).unwrap();
+        let p = parse_or_reject(&["--init-localisations", "cfg/i18n"]).unwrap();
         assert_eq!(p.init_localizations.as_deref(), Some("cfg/i18n"));
     }
 
     #[test]
     fn accepts_repeated_init_localizations_tags() {
         let p = parse_or_reject(&[
-            "--init-localizations",
-            "--init-localizations-tag",
+            "--init-localisations",
+            "--init-localisations-tag",
             "de",
-            "--init-localizations-tag",
+            "--init-localisations-tag",
             "pt-BR",
         ])
         .unwrap();
@@ -482,9 +482,9 @@ mod tests {
     #[test]
     fn accepts_init_localizations_with_force_and_stdout() {
         let p = parse_or_reject(&[
-            "--init-localizations",
-            "--init-localizations-force",
-            "--init-localizations-stdout",
+            "--init-localisations",
+            "--init-localisations-force",
+            "--init-localisations-stdout",
         ])
         .unwrap();
         assert!(p.init_localizations_force);
@@ -497,8 +497,8 @@ mod tests {
         // plus translation scaffolds, each with its own modifiers.
         let p = parse_or_reject(&[
             "--init-options",
-            "--init-localizations",
-            "--init-localizations-tag",
+            "--init-localisations",
+            "--init-localisations-tag",
             "de",
         ])
         .unwrap();
@@ -517,11 +517,11 @@ mod tests {
         // purposes. A build must not silently swallow the value, so
         // `main` bails with a hint instead. Parsing alone still
         // succeeds; the check is a runtime guard, not a clap rule.
-        let p = parse_or_reject(&["--init-localizations-tag", "de"]);
+        let p = parse_or_reject(&["--init-localisations-tag", "de"]);
         // The mini-parser accepts it (it declares the flag), so this
         // assertion documents that the *branch* is what excludes it.
         assert_eq!(p.unwrap().init_localizations_tag, vec!["de"]);
-        assert!(!is_init_flag("--init-localizations-tag"));
+        assert!(!is_init_flag("--init-localisations-tag"));
     }
 
     // ---- strict-mode: any non-init-options flag is rejected ----
@@ -581,8 +581,8 @@ mod tests {
     #[test]
     fn rejects_build_flag_localization() {
         assert_rejected(
-            &["--init-options", "--localization", "de.txt"],
-            "--localization",
+            &["--init-options", "--localisation", "de.txt"],
+            "--localisation",
         );
     }
 

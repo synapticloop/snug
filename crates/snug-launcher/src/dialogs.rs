@@ -1,16 +1,16 @@
 //! User-facing dialog strings.
 //!
-//! Sourced from the localization bundle — the same chain the error
+//! Sourced from the localisation bundle — the same chain the error
 //! strings use — rather than a dedicated file. The strings live in
 //! `snug-format/assets/snug-localisations.en.txt` under
 //! `runtime.*`, `generic.*` and `launcher.error.*` keys, which
-//! means a `--localization <tag>` bundle translates the whole window
+//! means a `--localisation <tag>` bundle translates the whole window
 //! rather than just the error text inside it.
 //!
 //! The [`Dialogs`] struct itself is unchanged and still what every
 //! caller reads: [`dialogs`] *assembles* it out of
 //! [`crate::localize::lookup`] calls instead of deserializing it.
-//! That is deliberate. Flat localization keys are bare string
+//! That is deliberate. Flat localisation keys are bare string
 //! literals, and a typo in one resolves to the key itself at runtime
 //! — loud in the UI, but late. Keeping the struct preserves
 //! compile-checked field access at every call site
@@ -27,7 +27,7 @@
 use std::sync::RwLock;
 
 /// Top-level container. Field names mirror the key prefixes in the
-/// localization catalog one-for-one — `dialogs.runtime.prompt`
+/// localisation catalog one-for-one — `dialogs.runtime.prompt`
 /// is `runtime.prompt.*`, and so on.
 #[derive(Debug, Clone)]
 pub struct Dialogs {
@@ -217,7 +217,7 @@ pub struct GenericDialogs {
 }
 
 /// The six fields every launcher dialog reads out of the
-/// localization catalog.
+/// localisation catalog.
 ///
 /// All six catalog structs -- `InstallPromptDialog`,
 /// `MetadataFailedDialog`, `ProgressDialog`, `FailureDialog`,
@@ -320,7 +320,7 @@ static DIALOGS: RwLock<Option<(u64, &'static Dialogs)>> = RwLock::new(None);
 ///
 /// Each field is one `localize::lookup` against the bundle chain, so
 /// the first call after `crate::localize::init` picks up the user's
-/// `--localization` bundles and the built-in English baseline backs
+/// `--localisation` bundles and the built-in English baseline backs
 /// every key they don't cover.
 ///
 /// A key that resolves nowhere comes back as the key string itself
@@ -330,7 +330,7 @@ static DIALOGS: RwLock<Option<(u64, &'static Dialogs)>> = RwLock::new(None);
 /// [`crate::localize`] is what keeps that from shipping.
 ///
 /// Every dialog is shown from [`crate::platform::run`] or later, which
-/// runs *after* `localize::init` — so a `--localization` build resolves
+/// runs *after* `localize::init` — so a `--localisation` build resolves
 /// translated chrome. Even if something reached this earlier, the
 /// `OnceLock` would cache whatever it saw, which is why the
 /// pre-`init` path in [`crate::localize::lookup`] falls back to the
@@ -450,8 +450,8 @@ fn assemble() -> Dialogs {
                 heading: lookup("launcher.error.heading"),
                 subheading: lookup("launcher.error.subheading"),
                 // `{error}` — the launcher fills this from the
-                // matching `err.*` key, which is how a localized
-                // error body lands in a localized frame.
+                // matching `err.*` key, which is how a localised
+                // error body lands in a localised frame.
                 content: lookup("launcher.error.content"),
                 info_heading: lookup("launcher.error.info_heading"),
                 info_subtext: lookup("launcher.error.info_subtext"),
@@ -574,7 +574,7 @@ mod tests {
     fn no_field_fell_back_to_a_bare_key() {
         // A key that resolves nowhere comes back from `localize::lookup`
         // as the key literal itself, so "this field is some known
-        // localization key" is an exact test for "this field is
+        // localisation key" is an exact test for "this field is
         // missing" — not a heuristic about dots and spaces.
         let baseline = snug_format::Localization::parse(
             snug_format::DEFAULT_EN_TAG,
@@ -672,7 +672,7 @@ mod tests {
         // the missing-key guard had nothing to report.
         //
         // The text lives here rather than as a hard-coded fallback in
-        // `error_window` so that a `--localization` bundle can translate it
+        // `error_window` so that a `--localisation` bundle can translate it
         // by default, the same as every other key in the dialog.
         let content = crate::dialogs::fill(
             dialogs().runtime.failure.content.as_str(),

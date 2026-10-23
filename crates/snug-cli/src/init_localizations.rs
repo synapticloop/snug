@@ -1,13 +1,13 @@
-//! `snug --init-localizations` — write a starter `localisations/`
+//! `snug --init-localisations` — write a starter `localisations/`
 //! directory of `snug-localisations.<tag>.txt` bundles to disk (or
 //! stdout).
 //!
 //! Sibling of [`crate::init_options`]: that one bootstraps the
 //! `snug.options` config file, this one bootstraps the translation
-//! bundles a build embeds via `--localization`. Both are
+//! bundles a build embeds via `--localisation`. Both are
 //! "write-a-starter-and-exit" modes with the same three knobs — a
 //! target path, `--force`, and `--stdout` — so the two can be passed
-//! together (`snug --init-options --init-localizations`) to lay down a
+//! together (`snug --init-options --init-localisations`) to lay down a
 //! whole project skeleton in one go.
 //!
 //! ## Default target
@@ -15,7 +15,7 @@
 //! `./localisations`, relative to the **current working directory** —
 //! the directory `snug` was invoked from, not the directory the
 //! `snug.exe` binary lives in. `cd ~/work/myapp && snug/snug.exe
-//! --init-localizations` writes `~/work/myapp/localisations/`.
+//! --init-localisations` writes `~/work/myapp/localisations/`.
 //!
 //! This matches how `snug.options` is read (see
 //! [`crate::options_file::resolve_all`]) and where `--init-options`
@@ -31,18 +31,18 @@
 //!
 //! - `en` (always, first) is the built-in baseline verbatim — the
 //!   canonical key inventory, already self-documenting.
-//! - Any extra `--init-localizations-tag` gets a *translation
+//! - Any extra `--init-localisations-tag` gets a *translation
 //!   template*: the same key set with a translator-facing header
 //!   prepended and the English header block stripped. Pre-filling the
 //!   English values (rather than commenting every line out) is what
-//!   makes the file loadable as-is, so `--localization localisations`
+//!   makes the file loadable as-is, so `--localisation localisations`
 //!   works immediately and the build-time missing-key warning stays
 //!   quiet; the header is loud that every value still needs
 //!   translating.
 //!
 //! Nothing else is written into the directory. That's a hard
 //! constraint, not a style choice: `localization::collect` scans a
-//! `--localization <dir>` top-level and *fails the build* on any file
+//! `--localisation <dir>` top-level and *fails the build* on any file
 //! that doesn't match `snug-localisations.<tag>.txt`, so a `README.md`
 //! or a `.bak` sitting next to the bundles would break the build that
 //! consumes them. The header inside each generated file says so too.
@@ -59,12 +59,12 @@ use anyhow::{Context, Result, bail};
 
 use crate::localization::{DEFAULT_EN_TAG, DEFAULT_EN_TEXT, expected_filename};
 
-/// Path snug uses when `--init-localizations` is given with no explicit
+/// Path snug uses when `--init-localisations` is given with no explicit
 /// value. Relative, so it resolves against the current working
 /// directory — the directory `snug` was invoked from.
 pub const DEFAULT_DIR: &str = "localisations";
 
-/// Write / print starter localization bundles. The single entry point
+/// Write / print starter localisation bundles. The single entry point
 /// used by `main.rs` after the CLI parses.
 ///
 /// Arguments:
@@ -160,7 +160,7 @@ fn baseline_body() -> &'static str {
     // (line without its terminator, byte offset just past that line).
     // Byte offsets, not line numbers — indexing the string with a line
     // index would cut mid-line, leaving a bare `====` run that the
-    // localization parser then reads as an empty key.
+    // localisation parser then reads as an empty key.
     let mut lines: Vec<(&str, usize)> = Vec::new();
     let mut offset = 0usize;
     for chunk in DEFAULT_EN_TEXT.split_inclusive('\n') {
@@ -198,7 +198,7 @@ fn tag_header(tag: &str, dir: &Path) -> String {
          #  {filename} — translation template for `{tag}`\n\
          # ============================================================================\n\
          #\n\
-         #  Scaffolded by `snug --init-localizations --init-localizations-tag {tag}`.\n\
+         #  Scaffolded by `snug --init-localisations --init-localisations-tag {tag}`.\n\
          #\n\
          #  EVERY VALUE BELOW IS STILL THE BUILT-IN ENGLISH BASELINE. Replace each\n\
          #  `value` with its `{tag}` translation, keeping the keys byte-identical — the\n\
@@ -211,16 +211,16 @@ fn tag_header(tag: &str, dir: &Path) -> String {
          #\n\
          #  Building with it\n\
          #  ----------------\n\
-         #    snug app.jar --localization {dir} -o App.exe\n\
+         #    snug app.jar --localisation {dir} -o App.exe\n\
          #\n\
-         #  The whole directory can be passed in one go — `--localization {dir}`\n\
+         #  The whole directory can be passed in one go — `--localisation {dir}`\n\
          #  scans it top-level for `snug-localisations.<tag>.txt` files. Nothing else\n\
          #  may live in there: a stray README, `.bak`, or note file fails the build,\n\
          #  because every entry has to match that pattern.\n\
          #\n\
          #  Every key in the English baseline is present below, so the build-time\n\
          #  missing-key warning stays quiet. Add a key later by re-running\n\
-         #  `snug --init-localizations --init-localizations-force` and re-applying your\n\
+         #  `snug --init-localisations --init-localisations-force` and re-applying your\n\
          #  translations to the new lines.\n\
          # ============================================================================\n"
     )
@@ -254,7 +254,7 @@ fn write_to_disk(dir: &Path, tags: &[String], force: bool) -> Result<()> {
             if path.exists() {
                 bail!(
                     "refusing to overwrite existing file at `{}`\n\
-                     hint: pass --init-localizations-force to overwrite, or move the existing file aside",
+                     hint: pass --init-localisations-force to overwrite, or move the existing file aside",
                     path.display()
                 );
             }
@@ -273,7 +273,7 @@ fn write_to_disk(dir: &Path, tags: &[String], force: bool) -> Result<()> {
     }
 
     eprintln!(
-        "snug: translate every value in each file, then build with `--localization {}`.",
+        "snug: translate every value in each file, then build with `--localisation {}`.",
         dir.display()
     );
     Ok(())
@@ -437,7 +437,7 @@ mod tests {
         );
         // The suggested build line points at the actual target dir,
         // not a hardcoded `localisations`.
-        assert!(text.contains("--localization custom/i18n"));
+        assert!(text.contains("--localisation custom/i18n"));
     }
 
     #[test]
@@ -487,7 +487,7 @@ mod tests {
         let err = run(dir.to_str().unwrap(), &["de".to_string()], false, false).unwrap_err();
         let msg = format!("{err:#}");
         assert!(
-            msg.contains("refusing to overwrite") && msg.contains("--init-localizations-force"),
+            msg.contains("refusing to overwrite") && msg.contains("--init-localisations-force"),
             "unexpected error: {msg}"
         );
         // The refusal happened before any new file was written.
@@ -536,7 +536,7 @@ mod tests {
     #[test]
     fn written_directory_is_directly_consumable_by_localization_collect() {
         // The whole point of the default layout: the generated
-        // directory can be handed straight to `--localization` without
+        // directory can be handed straight to `--localisation` without
         // the build tripping over a non-matching file.
         let dir = tmpdir();
         run(dir.to_str().unwrap(), &["de".to_string()], false, false).unwrap();

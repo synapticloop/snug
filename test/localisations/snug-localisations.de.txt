@@ -4,7 +4,7 @@
 #
 #  This file is the German translation of every runtime string the Windows
 #  launcher emits. It is not embedded by default -- pass it on the build
-#  line with `--localization` -- and a machine whose UI language resolves
+#  line with `--localisation` -- and a machine whose UI language resolves
 #  to `de` picks it up automatically, falling back to the built-in
 #  English baseline for any key this file does not define.
 #
@@ -44,8 +44,8 @@
 #       `snug-localisations.de.txt`, `snug-localisations.fr.txt`).
 #    2. Translate every `value` field. Keep the keys identical - the
 #       launcher matches on key, not on line order.
-#    3. Pass it on the build line:  `snug app.jar --localization de.txt -o App.exe`
-#       (repeat `--localization` for multiple languages).
+#    3. Pass it on the build line:  `snug app.jar --localisation de.txt -o App.exe`
+#       (repeat `--localisation` for multiple languages).
 #    4. The CLI warns at build time about any keys you missed compared
 #       to this English baseline - keep the list in sync.
 #
@@ -130,7 +130,7 @@ launcher.bare_stub.command = snug your-app.jar -o app.exe
 # ----------------------------------------------------------------------------
 # The `[launcher.error]` frame the Java-launch failure dialog paints. The
 # body is `{error}` - the launcher fills it from the matching `err.*` key
-# above, so a localized error text flows into a localized frame.
+# above, so a localised error text flows into a localised frame.
 launcher.error.content = {error}
 
 
@@ -139,7 +139,7 @@ launcher.error.content = {error}
 # ----------------------------------------------------------------------------
 # Titles, headings, subheadings, info-box copy and button labels for every
 # custom-painted window the launcher shows. These live here rather than in a
-# separate `dialogs.toml` so a `--localization <tag>` bundle translates the
+# separate `dialogs.toml` so a `--localisation <tag>` bundle translates the
 # whole window, not just the error text inside it.
 #
 # `snug_launcher::dialogs::Dialogs` is hand-assembled from these keys rather

@@ -8,7 +8,7 @@
 //! both `main.rs` (when a `LauncherError` bubbles out of the platform
 //! runtime) and the external `snug_preview` binary (one-click dialog
 //! testing). It composes the `[launcher.error]` copy from
-//! the localization bundle with a caller-supplied localized error string, then
+//! the localisation bundle with a caller-supplied localised error string, then
 //! delegates to [`show`].
 //!
 //! All layout / paint / WndProc logic now lives in
@@ -36,19 +36,19 @@ pub struct ErrorDialog<'a> {
     pub error_content: &'a str,
     pub info_icon: InfoIcon,
     /// Optional override for the info-box heading. `None` ⇒
-    /// `[runtime.failure].info_heading` from the localization bundle,
+    /// `[runtime.failure].info_heading` from the localisation bundle,
     /// falling back to the module default.
     pub info_heading: Option<&'a str>,
     /// Optional override for the info-box subtext. `None` ⇒
-    /// `[runtime.failure].info_subtext` from the localization bundle,
+    /// `[runtime.failure].info_subtext` from the localisation bundle,
     /// falling back to the module default.
     pub info_subtext: Option<&'a str>,
     /// Optional third info-box line. None or empty ⇒ no third
-    /// line is painted. Defaults to the localization bundle's
+    /// line is painted. Defaults to the localisation bundle's
     /// info_subtext_2 when this dialog is built from a group.
     pub info_subtext_2: Option<&'a str>,
     /// Optional override for the button label. `None` ⇒
-    /// `[runtime.failure].button_label` from the localization bundle,
+    /// `[runtime.failure].button_label` from the localisation bundle,
     /// falling back to the module default.
     pub button_label: Option<&'a str>,
     /// Optional HBITMAP (cast to `isize`) for the mascot slot. `0` ⇒
@@ -135,10 +135,10 @@ pub unsafe fn show(parent: HWND, dlg: ErrorDialog<'_>) -> i32 {
 
 /// Ergonomic public entry point for the launcher-runtime error dialog.
 ///
-/// Composes the `[launcher.error]` copy from the localization bundle with a
+/// Composes the `[launcher.error]` copy from the localisation bundle with a
 /// caller-supplied `localized_error` string (which `main.rs` builds via
 /// `error::localize_launcher_error`, but external callers — e.g. the
-/// `snug_preview` bin — can pass any already-localized string) and
+/// `snug_preview` bin — can pass any already-localised string) and
 /// delegates to [`show`].
 ///
 /// `update_check_url`, when `Some` and non-empty, renders the

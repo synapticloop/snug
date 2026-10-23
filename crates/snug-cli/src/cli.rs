@@ -73,12 +73,12 @@ fn validate_cache_dir(s: &str) -> Result<PathBuf, String> {
     about = "Wrap a Java fat JAR into a native Windows .exe launcher",
     long_about = "\n\
                   \n\
-                  #       .-----.-----.--.--.-----.\n\
-                  #       |__ --|     |  |  |  _  |\n\
-                  #       |_____|__|__|_____|___  |\n\
-                  #             ... .-..    |_____|\n\
+                          .-----.-----.--.--.-----.\n\
+                          |__ --|     |  |  |  _  |\n\
+                          |_____|__|__|_____|___  |\n\
+                                ... .-..    |_____|\n\
                   \n\
-                  #            ~ ~ ~ * ~ ~ ~\n\
+                               ~ ~ ~ * ~ ~ ~\n\
                   \n\
                   ~ ~ Wrap a Java JARs into a native Windows .exe launcher. ~ ~\n\
                   \n    \
@@ -107,14 +107,14 @@ fn validate_cache_dir(s: &str) -> Result<PathBuf, String> {
                   \n  \
                   snug App.jar --dry-run                      # validate, don't build\n  \
                   snug App.jar --emit-payload > payload.bin   # write encoded payload\n  \
-                  snug --init-options                         # write a starter snug.options\n  \n                  snug --init-localizations --init-localizations-tag de  # starter localisations/\n\
+                  snug --init-options                         # write a starter snug.options\n  \n                  snug --init-localisations --init-localisations-tag de  # starter localisations/\n\
                   \n\
-                  Each `--localization your-locale.txt` you pass is embedded in the\n\
+                  Each `--localisation your-locale.txt` you pass is embedded in the\n\
                   launcher alongside the built-in English baseline; the user's Windows\n\
                   UI language picks the right bundle at runtime. Bundles must match the\n\
                   baseline in both keys and `{placeholders}`; snug warns at build time\n\
                   when they disagree. Run `snug --list-tokens` for the full placeholder\n\
-                  contract, or scaffold a starter bundle with `snug --init-localizations`.\n",
+                  contract, or scaffold a starter bundle with `snug --init-localisations`.\n",
     // The brief uses `--version <VER>` to set the application version,
     // which clashes with clap's auto-generated `--version` flag. We
     // disable the auto-version and treat our `--version` as the app
@@ -462,9 +462,9 @@ pub struct Cli {
     /// bundles (full BCP 47 tag → primary subtag → built-in English
     /// baseline) and walks them on every lookup. The built-in English
     /// baseline is always embedded by the CLI, so a build with no
-    /// `--localization` flag still produces a working launcher.
+    /// `--localisation` flag still produces a working launcher.
     ///
-    /// Pass a single `--localization your-locale.txt` for a
+    /// Pass a single `--localisation your-locale.txt` for a
     /// full-translation build, many (one per locale) to ship a
     /// multilingual launcher, or a directory containing
     /// `snug-localisations.<tag>.txt` files. A directory entry is
@@ -478,9 +478,9 @@ pub struct Cli {
     /// The CLI warns at build time about any keys the bundle is
     /// missing relative to the built-in English baseline — keep the
     /// keys in sync so end users never see raw key text instead of a
-    /// localized message.
+    /// localised message.
     #[arg(
-        long = "localization",
+        long = "localisation",
         value_name = "TXT|DIR",
         value_parser = crate::localization::validate_localization_path,
         help_heading = "Build behaviour"
@@ -533,7 +533,7 @@ pub struct Cli {
     /// at all — `snug --list-tokens` is the whole invocation.
     ///
     /// The build-time counterpart is the placeholder warning snug emits
-    /// for `--localization` bundles that disagree with the baseline.
+    /// for `--localisation` bundles that disagree with the baseline.
     #[arg(long = "list-tokens", help_heading = "CLI tooling")]
     pub list_tokens: bool,
 
@@ -612,9 +612,9 @@ pub struct Cli {
     /// performing a build.
     ///
     /// The English baseline is always written; add more languages with
-    /// `--init-localizations-tag de` (repeatable). The directory
+    /// `--init-localisations-tag de` (repeatable). The directory
     /// contains only files matching `snug-localisations.<tag>.txt`,
-    /// so it can be handed straight to `--localization
+    /// so it can be handed straight to `--localisation
     /// localisations` on a later build.
     ///
     /// The directory defaults to `./localisations` — the directory
@@ -622,14 +622,14 @@ pub struct Cli {
     /// Pass a path to write elsewhere.
     ///
     /// By default refuses to overwrite existing bundles; pass
-    /// `--init-localizations-force` to overwrite silently. Pass
-    /// `--init-localizations-stdout` to print to stdout instead of
+    /// `--init-localisations-force` to overwrite silently. Pass
+    /// `--init-localisations-stdout` to print to stdout instead of
     /// writing (useful for piping or version control).
     ///
     /// Can be combined with `--init-options` to lay down a whole
     /// project skeleton in one call.
     #[arg(
-        long = "init-localizations",
+        long = "init-localisations",
         value_name = "DIR",
         num_args = 0..=1,
         default_missing_value = "localisations",
@@ -640,27 +640,27 @@ pub struct Cli {
     pub init_localizations: Option<String>,
 
     /// Scaffold an extra `snug-localisations.<tag>.txt` translation
-    /// template in the `--init-localizations` directory. Repeatable.
+    /// template in the `--init-localisations` directory. Repeatable.
     /// The template carries every baseline key with the English value
     /// in place, ready to translate. Has no effect without
-    /// `--init-localizations`.
+    /// `--init-localisations`.
     #[arg(
-        long = "init-localizations-tag",
+        long = "init-localisations-tag",
         value_name = "TAG",
         help_heading = "CLI tooling"
     )]
     pub init_localizations_tag: Vec<String>,
 
-    /// Overwrite existing bundles in the `--init-localizations`
+    /// Overwrite existing bundles in the `--init-localisations`
     /// directory instead of refusing. Has no effect without
-    /// `--init-localizations`.
-    #[arg(long = "init-localizations-force", help_heading = "CLI tooling")]
+    /// `--init-localisations`.
+    #[arg(long = "init-localisations-force", help_heading = "CLI tooling")]
     pub init_localizations_force: bool,
 
-    /// Print the `--init-localizations` templates to stdout instead
+    /// Print the `--init-localisations` templates to stdout instead
     /// of writing them to disk. Has no effect without
-    /// `--init-localizations`.
-    #[arg(long = "init-localizations-stdout", help_heading = "CLI tooling")]
+    /// `--init-localisations`.
+    #[arg(long = "init-localisations-stdout", help_heading = "CLI tooling")]
     pub init_localizations_stdout: bool,
 }
 
@@ -686,6 +686,50 @@ mod tests {
             "auto is the portable default: run silently when a compatible \
              JVM is present, offer Temurin when one is not"
         );
+    }
+
+    #[test]
+    fn american_flag_spelling_is_rejected() {
+        // `--localization` is gone, not an alias, and `snug-preview` is
+        // held to the same rule (`the_american_spelling_is_rejected` in
+        // `snug_preview`). Renaming the flag is exactly the kind of change
+        // that gets "helpfully" re-aliased later for compatibility, which
+        // is the papercut the single British spelling exists to end. This
+        // fails if an alias is ever added back.
+        for flag in [
+            "--localization",
+            "--init-localizations",
+            "--init-localizations-tag",
+            "--init-localizations-force",
+            "--init-localizations-stdout",
+        ] {
+            let err = parse(&["App.jar", flag]).expect_err(&format!(
+                "`{flag}` was accepted, but only the British spelling exists"
+            ));
+            assert!(
+                err.to_string().contains("unexpected argument"),
+                "`{flag}` should be rejected as unknown, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn british_flag_spelling_is_accepted() {
+        // The other half of the pair above: the rename has to actually
+        // work, not just reject the old name. `ValueParser` runs on the
+        // value, so a real, correctly-named file has to exist for this to
+        // get past argument parsing.
+        let bundle = crate::localization::expected_filename("de");
+        let dir = std::env::temp_dir().join("snug-flag-spelling-test");
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join(bundle);
+        std::fs::write(&path, "err.io = io\n").expect("write bundle");
+        let path = path.to_string_lossy().to_string();
+
+        let cli = parse(&["App.jar", "--localisation", &path]).unwrap();
+        assert_eq!(cli.localizations, vec![std::path::PathBuf::from(&path)]);
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

@@ -165,12 +165,12 @@ pub fn build_payload(cli: &Cli) -> Result<SnugPayload> {
     })
 }
 
-/// Load, parse, and bundle every user-supplied localization file plus
+/// Load, parse, and bundle every user-supplied localisation file plus
 /// the always-embedded built-in English baseline. Two CLI builds of
 /// the same inputs must produce byte-identical `localizations`
 /// vectors, so we sort by canonicalised path before insertion — this
-/// matters because `snug.options` accumulates `--localization` lines
-/// in arbitrary order, and a `--localization X` on the CLI vs. one
+/// matters because `snug.options` accumulates `--localisation` lines
+/// in arbitrary order, and a `--localisation X` on the CLI vs. one
 /// in the file shouldn't reorder the rest of the chain.
 fn collect_localizations(cli: &Cli) -> Result<Vec<snug_format::Localization>> {
     let mut paths: Vec<std::path::PathBuf> = cli.localizations.clone();

@@ -40,7 +40,7 @@ pub const MAGIC: &[u8; 8] = b"SNUGEMBD";
 /// together in the workspace.
 ///
 /// v6 (2026-09): Added `SnugPayload.localizations: Vec<Localization>`
-/// for embedding runtime-string localization bundles (see
+/// for embedding runtime-string localisation bundles (see
 /// [`crate::Localization`]). The vector is `#[serde(default)]`-empty
 /// for backwards compatibility, so v5 payloads still decode cleanly.
 /// New builds always populate at least the English baseline.

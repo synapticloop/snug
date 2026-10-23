@@ -31,7 +31,7 @@
 //!
 //! The TOML `[runtime.prompt.show_details]` /
 //! `[runtime.prompt.hide_details]` fields are dropped (see
-//! the localization bundle): this dialog does not have an expand/collapse
+//! the localisation bundle): this dialog does not have an expand/collapse
 //! toggle — both `content` and `expanded` are always rendered.
 
 #![cfg(windows)]
@@ -59,7 +59,7 @@ pub enum PromptChoice {
 ///   upper-left of the dialog. `0` falls back to the EXE main
 ///   icon. See [`crate::modal_window::ModalDialog::mascot_hbitmap`].
 /// * `prompt` — strings from `[runtime.prompt]` in
-///   the localization bundle.
+///   the localisation bundle.
 /// * `version` — replaces `{version}` placeholders in `content`
 ///   / `expanded` / `button_download`.
 /// * `size_mb` — replaces `{size_mb}` in `content` / `expanded`.

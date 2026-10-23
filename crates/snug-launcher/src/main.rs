@@ -104,8 +104,8 @@ static UPDATE_CHECK_URL: std::sync::OnceLock<Option<String>> = std::sync::OnceLo
 /// The dialog body uses [`error::localize_launcher_error`] so the
 /// error text is in the user's locale. The rest of the chrome (title,
 /// heading, info-box copy, button label) comes from the same bundle
-/// via [`crate::dialogs::dialogs`], so a `--localization <tag>` build
-/// localizes the whole window rather than just its contents.
+/// via [`crate::dialogs::dialogs`], so a `--localisation <tag>` build
+/// localises the whole window rather than just its contents.
 ///
 /// Two narrow cases have no update-check URL to offer, because the payload
 /// never decoded: the error happened *before* `locate_payload` succeeded

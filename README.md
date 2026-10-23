@@ -128,7 +128,7 @@ path on a Mac, including the JavaFX system menu bar.
 
 The macOS launcher builds and runs natively too — macOS is where snug is
 developed — and its dialogs carry the *same* localised strings as the
-Windows ones, so a `--localization` bundle translates both. See
+Windows ones, so a `--localisation` bundle translates both. See
 `AGENTS.md` for the platform notes, including the one genuinely
 surprising constraint: the launcher must never create an `NSApplication`
 before JavaFX does, or JavaFX concludes it is embedded in another toolkit
@@ -392,11 +392,11 @@ snug [<jar>] [-o EXE] [--input JAR|DIR] [--name ...] [--company ...]
            [--splash-max WxH|off]
            [--jvm-arg ARG]... [--cache-dir DIR]
            [--download-jdk <MODE>]          # off | auto | force (default: auto)
-           [--localization TXT|DIR]...
+           [--localisation TXT|DIR]...
            [--emit-payload] [--dry-run] [--find-main] [--snug-version]
            [--options PATH]
            [--list-tokens]
-           [--init-options] [--init-localizations[=DIR]] [--init-localizations-tag TAG]...
+           [--init-options] [--init-localisations[=DIR]] [--init-localisations-tag TAG]...
 ```
 
 Four of these are easy to misread:
@@ -411,7 +411,7 @@ Four of these are easy to misread:
   (default `640x360`, `off` silences it). The PNG is converted to raw
   `BGRA` and embedded uncompressed, so an oversized splash inflates
   every produced binary — snug warns and carries on regardless.
-- `--list-tokens`, `--init-options` and `--init-localizations` are
+- `--list-tokens`, `--init-options` and `--init-localisations` are
   read-only or scaffolding modes: they short-circuit before the JAR is
   required, and they cannot be combined with a build.
 - `--splash` / `--splash-ms` / `--splash-max` are **Windows-only**. The
@@ -628,7 +628,7 @@ snug: localisation inventory for the built-in `en` baseline
 ```
 
 `snug --list-tokens` prints that whole table offline — no JAR, no
-options file, no build. `snug --init-localizations --init-localizations-tag
+options file, no build. `snug --init-localisations --init-localisations-tag
 de` then scaffolds a bundle whose values already carry the right slots,
 so you translate rather than reconstruct.
 
@@ -657,7 +657,7 @@ stops passing `version` — and *then* the end user sees `{version}` in a
 dialog. Nothing goes red in between. So `snug` warns at build time:
 
 ```console
-$ snug App.jar --localization localisations/
+$ snug App.jar --localisation localisations/
 snug: warning: localization file `fr` (tag `fr`) uses different placeholders
 than the built-in English baseline on 2 key(s):
 snug:   - runtime.progress.pct_label: baseline {pct}, bundle (none)
@@ -680,7 +680,7 @@ The `err.*` and several `jdk.err.*` keys use positional `{0}` rather
 than a named slot; those are substituted by index, not name, and a
 translation keeps its `{0}` in the same position.
 
-Because the chrome is in the same bundle as the errors, `--localization`
+Because the chrome is in the same bundle as the errors, `--localisation`
 translates the whole window, not just its contents — a localised build
 gets a translated title *and* a translated "Cancel" button, and an app
 can reword the chrome for itself ("Example Company Pty Ltd requires Java 25") by shipping

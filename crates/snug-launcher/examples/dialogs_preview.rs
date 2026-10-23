@@ -39,7 +39,7 @@
 //! - `java-error` — `error_window::show` invoked from `main.rs` when a
 //!   [`LauncherError`] (Java stacktrace, `MainClassNotFound`, `JniCreate`,
 //!   etc.) surfaces. Same window as `error`, but with copy from
-//!   `[launcher.error]` in the localization bundle and the optional
+//!   `[launcher.error]` in the localisation bundle and the optional
 //!   update-check link visible.
 //!
 //! `--icon normal|warning|error|info` overrides the icon-kind for the
@@ -363,7 +363,7 @@ fn run_error(_opts: Options) -> Option<i32> {
     // Mirrors `error_window::show` invocation from
     // `show_error_dialog`. The heading / subheading /
     // info-heading / info-subtext / button-label come from
-    // `[runtime.failure]` in the localization bundle — the caller
+    // `[runtime.failure]` in the localisation bundle — the caller
     // only supplies the title and the multi-line error content.
     //
     // The mascot slot is left to the EXE-icon fallback: `build.rs`
@@ -407,7 +407,7 @@ fn run_java_error() -> Option<i32> {
     // when a `LauncherError` (Java stacktrace, `MainClassNotFound`,
     // `JniCreate` failure, etc.) bubbles out of the platform
     // launcher. Copy comes from `[launcher.error]` in
-    // the localization bundle and the optional `update_check_url` paints a
+    // the localisation bundle and the optional `update_check_url` paints a
     // clickable link below the info box. `ShellExecuteW` opens
     // the URL in the user's default browser on click.
     let dlg = snug_launcher::dialogs::dialogs();

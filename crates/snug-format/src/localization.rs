@@ -3,7 +3,7 @@
 //! Snug's launcher is a Windows GUI that pops up error dialogs when
 //! the JVM can't be located, the embedded JAR can't be read, the
 //! Java `main` throws, and so on. The strings for those dialogs come
-//! from one or more *localization bundles* embedded in the payload;
+//! from one or more *localisation bundles* embedded in the payload;
 //! at runtime the launcher picks the bundle matching the user's
 //! Windows UI language and falls back to a built-in English baseline
 //! for any key the bundle doesn't cover.
@@ -56,11 +56,11 @@ pub const DEFAULT_EN_TAG: &str = "en";
 ///
 /// The file's *name* is not consulted when parsing it — the tag is
 /// supplied explicitly as [`DEFAULT_EN_TAG`]. The name is kept
-/// identical to the bundles `snug --init-localizations` writes so it
+/// identical to the bundles `snug --init-localisations` writes so it
 /// reads the same as a user-supplied English bundle.
 pub const DEFAULT_EN_TEXT: &str = include_str!("../assets/snug-localisations.en.txt");
 
-/// A single localization bundle.
+/// A single localisation bundle.
 ///
 /// `tag` is the BCP 47 locale tag the bundle covers (`en`, `en-US`,
 /// `pt-BR`, ...). `entries` is the flat `key -> value` map; the
@@ -131,7 +131,7 @@ impl Localization {
     }
 }
 
-/// Errors that can arise while parsing a localization file.
+/// Errors that can arise while parsing a localisation file.
 #[derive(Debug, thiserror::Error)]
 pub enum LocalizationParseError {
     #[error("localization file for `{tag}` line {lineno}: missing `=` separator")]
@@ -289,7 +289,7 @@ pub fn expected_filename(tag: &str) -> String {
     format!("snug-localisations.{tag}.txt")
 }
 
-/// Extract the BCP 47 tag from a localization filename.
+/// Extract the BCP 47 tag from a localisation filename.
 ///
 /// The expected pattern is `snug-localisations.<tag>.txt`. We strip
 /// the `snug-localisations.` prefix and `.txt` suffix; whatever's left

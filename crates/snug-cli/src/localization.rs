@@ -1,7 +1,7 @@
 //! Build-time handling of user-supplied `snug-localisations.<tag>.txt` files.
 //!
 //! Each file is a flat `key = value` text file in Java-`.properties`
-//! style. The CLI parses every file the user passes via `--localization`
+//! style. The CLI parses every file the user passes via `--localisation`
 //! (or via `snug.options`), bundles them with the always-embedded built-in
 //! English baseline, and writes the result into [`snug_format::SnugPayload`].
 //!
@@ -18,7 +18,7 @@
 //!
 //! Every build embeds at least the built-in English baseline
 //! (`DEFAULT_EN_TAG`, parsed at startup from the constant string below).
-//! If the user passes `--localization foo.txt` but never passes one for
+//! If the user passes `--localisation foo.txt` but never passes one for
 //! `en`, the built-in baseline is still embedded — so the launcher has
 //! a working fallback even when every locale-specific bundle is absent.
 //!
@@ -65,7 +65,7 @@ pub use snug_format::DEFAULT_EN_TEXT;
 /// `"en-US"` → `"snug-localisations.en-US.txt"`.
 pub use snug_format::expected_filename;
 
-/// Extract the BCP 47 tag from a localization filename.
+/// Extract the BCP 47 tag from a localisation filename.
 ///
 /// The expected pattern is `snug-localisations.<tag>.txt`. We strip
 /// the `snug-localisations.` prefix and `.txt` suffix; whatever's left
@@ -74,7 +74,7 @@ pub use snug_format::expected_filename;
 /// `my-translations.txt` (no recognised prefix).
 pub use snug_format::tag_from_path;
 
-/// clap value-parser for the `--localization` flag.
+/// clap value-parser for the `--localisation` flag.
 ///
 /// Validates that the file exists, is named `snug-localisations.<tag>.txt`,
 /// and parses cleanly (a malformed file is rejected up front so the user
@@ -109,7 +109,7 @@ pub fn validate_localization_path(s: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-/// Load, parse, and bundle every user-supplied localization file plus
+/// Load, parse, and bundle every user-supplied localisation file plus
 /// the always-present English baseline.
 ///
 /// The returned vector is in **insertion order** with the English
@@ -142,7 +142,7 @@ pub fn collect(user_paths: &[PathBuf]) -> Result<Vec<Localization>> {
     //    sorted list of `snug-localisations.<tag>.txt` files directly
     //    inside it (subdirectories are skipped — top-level scan only).
     //    Explicit-file entries pass through unchanged, so callers can
-    //    freely mix `--localization <dir>` and `--localization <file>`.
+    //    freely mix `--localisation <dir>` and `--localisation <file>`.
     //    Every file inside a passed directory MUST match the pattern;
     //    a stray file is almost always a typo (e.g. `.bak`, wrong case)
     //    so we fail the build rather than silently skip it.
@@ -164,9 +164,9 @@ pub fn collect(user_paths: &[PathBuf]) -> Result<Vec<Localization>> {
         // baseline instead of colliding with it. Shipping your own
         // English copy is a legitimate thing to want — you may reword
         // the launcher chrome for your product — and the scaffolded
-        // `localisations/` directory (`snug --init-localizations`)
+        // `localisations/` directory (`snug --init-localisations`)
         // always contains one, so the naive append would make the
-        // obvious `--localization localisations` fail with a
+        // obvious `--localisation localisations` fail with a
         // duplicate-tag error. A *second* `en` is still pushed and
         // still rejected by `ensure_unique_tags`: that's a genuine
         // ambiguity, not a baseline override.
@@ -202,7 +202,7 @@ pub fn collect(user_paths: &[PathBuf]) -> Result<Vec<Localization>> {
 ///
 /// The walking itself lives in `snug_format::discover_localization_files`
 /// so `snug-preview` resolves `--localisation` the same way this CLI
-/// resolves `--localization`; this wrapper only adds the `anyhow`
+/// resolves `--localisation`; this wrapper only adds the `anyhow`
 /// context the build path wants.
 fn expand_user_paths(user_paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
     snug_format::discover_localization_files(user_paths).map_err(anyhow::Error::from)
@@ -610,7 +610,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Directory expansion (--localization <dir>)
+    // Directory expansion (--localisation <dir>)
     // ------------------------------------------------------------------
 
     /// Helper: write a minimal-but-valid `snug-localisations.<tag>.txt`

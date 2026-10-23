@@ -402,7 +402,7 @@ const INPUT_FLAG: &str = "input";
 /// `snug.<os>.options`. With the layers in that order the output is also
 /// in that order, so each non-repeatable flag appears exactly once,
 /// carrying the highest-priority source's value, and repeatable flags
-/// (`--jvm-arg`, `--localization`) accumulate base-first.
+/// (`--jvm-arg`, `--localisation`) accumulate base-first.
 ///
 /// ## Why the walk is high-to-low
 ///
@@ -446,7 +446,7 @@ const INPUT_FLAG: &str = "input";
 /// them in the merged argv just handed clap a flag whose meaning had already
 /// been decided elsewhere — at best a no-op, at worst a silent no-op that
 /// reported success.
-const META_FLAGS: &[&str] = &["options", "init-options", "init-localizations"];
+const META_FLAGS: &[&str] = &["options", "init-options", "init-localisations"];
 
 /// Drop meta-flags (and an attached value) from one file layer.
 ///
@@ -811,7 +811,7 @@ impl FlagSpec {
     /// either way, so the caller passes whichever set of canonical names
     /// it has accumulated so far. See [`merge`].
     ///
-    /// Repeatable flags survive: `--jvm-arg` and `--localization` are
+    /// Repeatable flags survive: `--jvm-arg` and `--localisation` are
     /// `Vec<T>` fields, so occurrences from every layer are meant to
     /// accumulate. Stripping any of them would silently discard part of
     /// the JVM options.
@@ -1018,7 +1018,7 @@ mod tests {
             vec!["--options", "other.options"],
             vec!["--options=other.options"],
             vec!["--init-options"],
-            vec!["--init-localizations"],
+            vec!["--init-localisations"],
         ] {
             let mut layer: Vec<String> = meta.iter().map(|s| s.to_string()).collect();
             layer.push("--name".into());
@@ -1700,7 +1700,7 @@ mod tests {
         // Repeatable flags come from ArgAction::Append, not a hand-written
         // list, so a new `Vec<T>` field is classified correctly on arrival.
         assert!(spec.repeatable.contains("jvm-arg"));
-        assert!(spec.repeatable.contains("localization"));
+        assert!(spec.repeatable.contains("localisation"));
         // `--output` takes a value, so `--output App.exe` must not be
         // mistaken for the positional JAR.
         assert!(spec.takes_value.contains("output"));

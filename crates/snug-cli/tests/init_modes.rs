@@ -1,8 +1,8 @@
 //! End-to-end tests for the `--init-*` modes: `snug --init-options`
-//! and `snug --init-localizations`.
+//! and `snug --init-localisations`.
 //!
 //! These drive the real binary rather than the library functions,
-//! because the interesting part of `--init-localizations` is *where*
+//! because the interesting part of `--init-localisations` is *where*
 //! it writes: the directory snug was invoked from, not the directory
 //! the binary lives in. A unit test can't observe that without
 //! mutating process-global CWD state, so each test sets the child's
@@ -52,7 +52,7 @@ fn stdout_of(out: &std::process::Output) -> String {
 #[test]
 fn init_localizations_creates_directory_in_cwd() {
     let dir = tmpdir("cwd");
-    let out = run_in(&dir, &["--init-localizations"]);
+    let out = run_in(&dir, &["--init-localisations"]);
     assert!(
         out.status.success(),
         "exit 0 expected, got {:?}\n{}",
@@ -61,7 +61,7 @@ fn init_localizations_creates_directory_in_cwd() {
     );
 
     // The whole point of the default: relative to the invocation
-    // directory. `snug/snug.exe --init-localizations` run from a
+    // directory. `snug/snug.exe --init-localisations` run from a
     // project root must land in that project root, not next to the
     // executable.
     let bundle = dir.join("localisations").join("snug-localisations.en.txt");
@@ -94,10 +94,10 @@ fn init_localizations_scaffolds_requested_tags() {
     let out = run_in(
         &dir,
         &[
-            "--init-localizations",
-            "--init-localizations-tag",
+            "--init-localisations",
+            "--init-localisations-tag",
             "de",
-            "--init-localizations-tag",
+            "--init-localisations-tag",
             "pt-BR",
         ],
     );
@@ -116,7 +116,7 @@ fn init_localizations_scaffolds_requested_tags() {
             "snug-localisations.en.txt",
             "snug-localisations.pt-BR.txt",
         ],
-        "every file must match the canonical pattern so `--localization <dir>` accepts it"
+        "every file must match the canonical pattern so `--localisation <dir>` accepts it"
     );
 
     let de = std::fs::read_to_string(loc.join("snug-localisations.de.txt")).unwrap();
@@ -133,7 +133,7 @@ fn init_localizations_scaffolds_requested_tags() {
 #[test]
 fn init_localizations_honours_custom_directory() {
     let dir = tmpdir("custom");
-    let out = run_in(&dir, &["--init-localizations", "i18n/translations"]);
+    let out = run_in(&dir, &["--init-localisations", "i18n/translations"]);
     assert!(out.status.success(), "{}", stderr_of(&out));
     assert!(
         dir.join("i18n/translations/snug-localisations.en.txt")
@@ -144,19 +144,19 @@ fn init_localizations_honours_custom_directory() {
 #[test]
 fn init_localizations_refuses_to_overwrite_without_force() {
     let dir = tmpdir("force");
-    assert!(run_in(&dir, &["--init-localizations"]).status.success());
+    assert!(run_in(&dir, &["--init-localisations"]).status.success());
 
-    let out = run_in(&dir, &["--init-localizations"]);
+    let out = run_in(&dir, &["--init-localisations"]);
     assert!(!out.status.success(), "second run should fail");
     let err = stderr_of(&out);
     assert!(
-        err.contains("refusing to overwrite") && err.contains("--init-localizations-force"),
+        err.contains("refusing to overwrite") && err.contains("--init-localisations-force"),
         "error should name the escape hatch, got: {err}"
     );
 
     let out = run_in(
         &dir,
-        &["--init-localizations", "--init-localizations-force"],
+        &["--init-localisations", "--init-localisations-force"],
     );
     assert!(
         out.status.success(),
@@ -171,8 +171,8 @@ fn init_localizations_rejects_a_traversal_tag() {
     let out = run_in(
         &dir,
         &[
-            "--init-localizations",
-            "--init-localizations-tag",
+            "--init-localisations",
+            "--init-localisations-tag",
             "../escape",
         ],
     );
@@ -193,7 +193,7 @@ fn init_localizations_stdout_writes_nothing_to_disk() {
     let dir = tmpdir("stdout");
     let out = run_in(
         &dir,
-        &["--init-localizations", "--init-localizations-stdout"],
+        &["--init-localisations", "--init-localisations-stdout"],
     );
     assert!(out.status.success(), "{}", stderr_of(&out));
     assert!(
@@ -208,7 +208,7 @@ fn init_localizations_stdout_writes_nothing_to_disk() {
 #[test]
 fn both_init_modes_run_in_one_call() {
     let dir = tmpdir("both");
-    let out = run_in(&dir, &["--init-options", "--init-localizations"]);
+    let out = run_in(&dir, &["--init-options", "--init-localisations"]);
     assert!(out.status.success(), "{}", stderr_of(&out));
     assert!(dir.join("snug.options").is_file());
     assert!(
@@ -223,11 +223,11 @@ fn init_localizations_tag_without_mode_fails_loudly() {
     // A build must never silently swallow a locale the user asked to
     // scaffold.
     let dir = tmpdir("stray-tag");
-    let out = run_in(&dir, &["--init-localizations-tag", "de"]);
+    let out = run_in(&dir, &["--init-localisations-tag", "de"]);
     assert!(!out.status.success(), "stray tag should fail");
     let err = stderr_of(&out);
     assert!(
-        err.contains("--init-localizations-tag has no effect without --init-localizations"),
+        err.contains("--init-localisations-tag has no effect without --init-localisations"),
         "error should explain the missing mode flag, got: {err}"
     );
     assert!(!dir.join("localisations").exists());
@@ -238,7 +238,7 @@ fn init_localizations_rejects_other_build_flags() {
     // The init branch is strict: it must not silently swallow a
     // mis-typed build command.
     let dir = tmpdir("strict");
-    let out = run_in(&dir, &["--init-localizations", "--name", "My App"]);
+    let out = run_in(&dir, &["--init-localisations", "--name", "My App"]);
     assert!(!out.status.success(), "mixed modes should fail");
     assert!(stderr_of(&out).contains("--name"));
 }
@@ -250,12 +250,12 @@ fn init_localizations_directory_is_a_usable_localization_input() {
     let dir = tmpdir("usable");
     let out = run_in(
         &dir,
-        &["--init-localizations", "--init-localizations-tag", "de"],
+        &["--init-localisations", "--init-localisations-tag", "de"],
     );
     assert!(out.status.success(), "{}", stderr_of(&out));
 
     let bundles = snug_cli::localization::collect(&[dir.join("localisations")])
-        .expect("scaffolded directory is a valid --localization input");
+        .expect("scaffolded directory is a valid --localisation input");
     snug_cli::localization::ensure_unique_tags(&bundles).expect("tags are unique");
     let tags: Vec<&str> = bundles.iter().map(|b| b.tag.as_str()).collect();
     assert_eq!(tags, vec!["en", "de"]);
@@ -274,10 +274,10 @@ fn init_modes_are_documented_in_help() {
         "--init-options",
         "--init-options-force",
         "--init-options-stdout",
-        "--init-localizations",
-        "--init-localizations-tag",
-        "--init-localizations-force",
-        "--init-localizations-stdout",
+        "--init-localisations",
+        "--init-localisations-tag",
+        "--init-localisations-force",
+        "--init-localisations-stdout",
     ] {
         assert!(
             stdout.contains(needle),

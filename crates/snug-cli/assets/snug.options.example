@@ -27,7 +27,7 @@
 #    (A shell-style tokenizer would read that as `C:Usersmeapp.jar`.)
 #  - Lines starting with `#` are comments. `#` elsewhere on a line is an
 #    ordinary character, because it is legal in a filename.
-#  - Repeatable flags (`--jvm-arg`, `--localization`) accumulate from
+#  - Repeatable flags (`--jvm-arg`, `--localisation`) accumulate from
 #    every source rather than overriding.
 #
 #  Per-platform files
@@ -209,7 +209,7 @@
 # Repeatable. Each `snug-localisations.<tag>.txt` file is embedded in
 # the launcher; the user's Windows UI language picks the matching
 # bundle. The built-in English baseline is always embedded, so a build
-# with no `--localization` still ships a fully localized (English)
+# with no `--localisation` still ships a fully localised (English)
 # launcher.
 #
 # Filename convention: `snug-localisations.<tag>.txt`, where `<tag>`
@@ -218,25 +218,25 @@
 # covers `en-US`, `en-GB`, etc.; `snug-localisations.en-US.txt` adds
 # region-specific overrides on top.
 #
-# --localization i18n/snug-localisations.de.txt
-# --localization i18n/snug-localisations.fr.txt
+# --localisation i18n/snug-localisations.de.txt
+# --localisation i18n/snug-localisations.fr.txt
 #
 # Scaffolding a translations directory from scratch:
 #
-#   snug --init-localizations                     # writes ./localisations/
+#   snug --init-localisations                     # writes ./localisations/
 #                                                #   containing the full
 #                                                #   snug-localisations.en.txt
 #                                                #   key inventory
-#   snug --init-localizations --init-localizations-tag de
-#   snug --init-localizations --init-localizations-tag de \
-#                                   --init-localizations-tag pt-BR
-#   snug --init-localizations i18n                # custom directory
-#   snug --init-localizations-force               # overwrite existing bundles
-#   snug --init-localizations-stdout              # print to stdout
+#   snug --init-localisations --init-localisations-tag de
+#   snug --init-localisations --init-localisations-tag de \
+#                                   --init-localisations-tag pt-BR
+#   snug --init-localisations i18n                # custom directory
+#   snug --init-localisations-force               # overwrite existing bundles
+#   snug --init-localisations-stdout              # print to stdout
 #
 # The default target is `./localisations` relative to the directory you
 # ran snug from. Only `snug-localisations.<tag>.txt` files may live in
-# it — a stray README or `.bak` makes `--localization <dir>` fail the
+# it — a stray README or `.bak` makes `--localisation <dir>` fail the
 # build.
 
 
