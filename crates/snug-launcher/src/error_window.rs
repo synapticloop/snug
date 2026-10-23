@@ -209,11 +209,10 @@ pub unsafe fn show_launcher_error(
     // button and the lone button reports `IDCANCEL`, so this is
     // unreachable — but it is guarded anyway, because "open a
     // browser" is not a thing to trigger on a guess.
-    if result == modal_window::IDYES_I32 {
-        if let Some(url) = update_check_url.map(str::trim).filter(|s| !s.is_empty()) {
-            if let Err(e) = crate::jdk_install::open_in_browser(url) {
-                crate::log::log(&format!("error_window: opening update URL failed: {e}"));
-            }
-        }
+    if result == modal_window::IDYES_I32
+        && let Some(url) = update_check_url.map(str::trim).filter(|s| !s.is_empty())
+        && let Err(e) = crate::jdk_install::open_in_browser(url)
+    {
+        crate::log::log(&format!("error_window: opening update URL failed: {e}"));
     }
 }

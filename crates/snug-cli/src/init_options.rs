@@ -83,14 +83,15 @@ fn write_to_disk(path: &Path, force: bool) -> Result<()> {
         );
     }
 
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() && !parent.exists() {
-            bail!(
-                "parent directory `{}` does not exist\n\
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+        && !parent.exists()
+    {
+        bail!(
+            "parent directory `{}` does not exist\n\
                  hint: create it first (mkdir -p) or pass --init-options-stdout to print instead",
-                parent.display()
-            );
-        }
+            parent.display()
+        );
     }
 
     std::fs::write(path, EXAMPLE.as_bytes())

@@ -78,7 +78,7 @@ const GRPICONDIRENTRY: usize = 14;
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
-    if args.is_empty() || args.len() % 2 != 0 {
+    if args.is_empty() || !args.len().is_multiple_of(2) {
         eprintln!("usage: verify_icons <exe> <png> [<exe> <png> ...]");
         eprintln!("  checks that each EXE's MAINICON is the given source PNG,");
         eprintln!("  that every icon resolution is present, and that RT_ICON");
@@ -174,20 +174,20 @@ fn check(exe: &Path, png: &Path) -> Result<String, String> {
     // Both stamp helpers clear RT_ICON wholesale before adding, precisely
     // because `remove_main_icon` cannot see icons that no group points at.
     // A count above the group's own is that bug reappearing.
-    if let Some(total) = icon_entry_count(resources) {
-        if total > widths.len() {
-            return Err(format!(
-                "{} orphan RT_ICON entr{} left from an earlier stamp \
+    if let Some(total) = icon_entry_count(resources)
+        && total > widths.len()
+    {
+        return Err(format!(
+            "{} orphan RT_ICON entr{} left from an earlier stamp \
                  ({} referenced by MAINICON) — this file is carrying dead icon bytes",
-                total - widths.len(),
-                if total - widths.len() == 1 {
-                    "y"
-                } else {
-                    "ies"
-                },
-                widths.len(),
-            ));
-        }
+            total - widths.len(),
+            if total - widths.len() == 1 {
+                "y"
+            } else {
+                "ies"
+            },
+            widths.len(),
+        ));
     }
 
     Ok(format!(

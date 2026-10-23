@@ -1446,11 +1446,11 @@ pub fn run() {
     // created, because `register_class` and `CreateWindowExW` both read
     // it. Errors exit here, in the terminal, rather than behind a
     // window that would swallow the message.
-    if let Some(path) = &icon {
-        if let Err(msg) = install_icon_override(path) {
-            eprintln!("snug_preview: {msg}");
-            std::process::exit(2);
-        }
+    if let Some(path) = &icon
+        && let Err(msg) = install_icon_override(path)
+    {
+        eprintln!("snug_preview: {msg}");
+        std::process::exit(2);
     }
 
     // Seed the registry before the window exists, so `WM_CREATE` can

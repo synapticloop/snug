@@ -227,10 +227,10 @@ impl Bundles {
 
         // 3. Built-in English baseline at the END so it's the lowest
         //    priority in the lookup chain.
-        if let Ok(builtin) = Localization::parse(DEFAULT_TAG, DEFAULT_EN_TEXT) {
-            if !chain.iter().any(|b| b.tag == DEFAULT_TAG) {
-                chain.push(builtin);
-            }
+        if let Ok(builtin) = Localization::parse(DEFAULT_TAG, DEFAULT_EN_TEXT)
+            && !chain.iter().any(|b| b.tag == DEFAULT_TAG)
+        {
+            chain.push(builtin);
         }
 
         Self { chain }
@@ -455,14 +455,15 @@ pub(crate) fn substitute_slots(
             i += 2;
             continue;
         }
-        if bytes[i] == b'{' && replace_tokens() {
-            if let Some(close) = template[i + 1..].find('}') {
-                let name = &template[i + 1..i + 1 + close];
-                if let Some(value) = resolve(name) {
-                    out.push_str(&value);
-                    i = i + close + 2;
-                    continue;
-                }
+        if bytes[i] == b'{'
+            && replace_tokens()
+            && let Some(close) = template[i + 1..].find('}')
+        {
+            let name = &template[i + 1..i + 1 + close];
+            if let Some(value) = resolve(name) {
+                out.push_str(&value);
+                i = i + close + 2;
+                continue;
             }
         }
         // Copy one whole char, so a multi-byte sequence is never split.

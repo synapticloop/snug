@@ -178,12 +178,12 @@ impl Options {
                     i += 1;
                 }
                 _ => {
-                    if let Ok(n) = arg.parse::<u64>() {
-                        if size_mb == 150 {
-                            size_mb = n;
-                            i += 1;
-                            continue;
-                        }
+                    if let Ok(n) = arg.parse::<u64>()
+                        && size_mb == 150
+                    {
+                        size_mb = n;
+                        i += 1;
+                        continue;
                     }
                     if let Ok(n) = arg.parse::<f64>() {
                         speed_mb_s = n;

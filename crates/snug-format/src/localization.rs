@@ -254,15 +254,15 @@ pub fn placeholders(value: &str) -> BTreeSet<&str> {
             i += 2; // escaped literal `{`, not a slot
             continue;
         }
-        if bytes[i] == b'{' {
-            if let Some(close) = value[i + 1..].find('}') {
-                let name = &value[i + 1..i + 1 + close];
-                if !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-                    out.insert(name);
-                }
-                i = i + close + 2;
-                continue;
+        if bytes[i] == b'{'
+            && let Some(close) = value[i + 1..].find('}')
+        {
+            let name = &value[i + 1..i + 1 + close];
+            if !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                out.insert(name);
             }
+            i = i + close + 2;
+            continue;
         }
         // Step one whole char so a multi-byte sequence is never split.
         let c = value[i..].chars().next().unwrap_or('\u{fffd}');

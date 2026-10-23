@@ -832,13 +832,14 @@ impl FlagSpec {
                 out.push(token.clone());
                 continue;
             }
-            if let Some((canonical, attached)) = self.token_flag(token) {
-                if cli_flags.contains(&canonical) && !self.repeatable.contains(&canonical) {
-                    if !attached && self.takes_value.contains(&canonical) {
-                        skip_next = true;
-                    }
-                    continue;
+            if let Some((canonical, attached)) = self.token_flag(token)
+                && cli_flags.contains(&canonical)
+                && !self.repeatable.contains(&canonical)
+            {
+                if !attached && self.takes_value.contains(&canonical) {
+                    skip_next = true;
                 }
+                continue;
             }
             out.push(token.clone());
         }

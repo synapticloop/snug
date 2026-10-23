@@ -119,11 +119,11 @@ pub fn debug(msg: &str) {
     }
     let line = format!("[{}] DEBUG {msg}\n", elapsed_ms());
     let _ = std::io::stderr().write_all(line.as_bytes());
-    if let Ok(mut guard) = FILE.lock() {
-        if let Some(file) = guard.as_mut() {
-            let _ = file.write_all(line.as_bytes());
-            let _ = file.flush();
-        }
+    if let Ok(mut guard) = FILE.lock()
+        && let Some(file) = guard.as_mut()
+    {
+        let _ = file.write_all(line.as_bytes());
+        let _ = file.flush();
     }
 }
 
@@ -135,10 +135,10 @@ pub fn debug(msg: &str) {
 /// braces — but the one line that explains why the process exited is the
 /// one you will not want to lose.
 pub fn flush() {
-    if let Ok(mut guard) = FILE.lock() {
-        if let Some(file) = guard.as_mut() {
-            let _ = file.flush();
-        }
+    if let Ok(mut guard) = FILE.lock()
+        && let Some(file) = guard.as_mut()
+    {
+        let _ = file.flush();
     }
 }
 
@@ -154,11 +154,11 @@ pub fn log(msg: &str) {
     let _ = std::io::stderr().write_all(line.as_bytes());
 
     // File is the canonical record.
-    if let Ok(mut guard) = FILE.lock() {
-        if let Some(file) = guard.as_mut() {
-            let _ = file.write_all(line.as_bytes());
-            let _ = file.flush();
-        }
+    if let Ok(mut guard) = FILE.lock()
+        && let Some(file) = guard.as_mut()
+    {
+        let _ = file.write_all(line.as_bytes());
+        let _ = file.flush();
     }
 }
 
@@ -166,11 +166,11 @@ pub fn log(msg: &str) {
 /// trailing newline (caller must add it).
 pub fn log_raw(line: &[u8]) {
     let _ = std::io::stderr().write_all(line);
-    if let Ok(mut guard) = FILE.lock() {
-        if let Some(file) = guard.as_mut() {
-            let _ = file.write_all(line);
-            let _ = file.flush();
-        }
+    if let Ok(mut guard) = FILE.lock()
+        && let Some(file) = guard.as_mut()
+    {
+        let _ = file.write_all(line);
+        let _ = file.flush();
     }
 }
 

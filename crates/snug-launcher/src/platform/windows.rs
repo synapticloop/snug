@@ -665,41 +665,39 @@ pub fn discover_jvm(
     strategy: &JvmDiscovery,
     min_java: u16,
 ) -> Result<Option<PathBuf>, LauncherError> {
-    if let Some(p) = &strategy.explicit {
-        if let Some(ok) = check_candidate(p, min_java)? {
-            return Ok(Some(ok));
-        }
+    if let Some(p) = &strategy.explicit
+        && let Some(ok) = check_candidate(p, min_java)?
+    {
+        return Ok(Some(ok));
     }
-    if strategy.try_java_home {
-        if let Some(p) = read_env_var("JAVA_HOME") {
-            if let Some(ok) = check_candidate(&p, min_java)? {
-                return Ok(Some(ok));
-            }
-        }
+    if strategy.try_java_home
+        && let Some(p) = read_env_var("JAVA_HOME")
+        && let Some(ok) = check_candidate(&p, min_java)?
+    {
+        return Ok(Some(ok));
     }
-    if strategy.try_jdk_home {
-        if let Some(p) = read_env_var("JDK_HOME") {
-            if let Some(ok) = check_candidate(&p, min_java)? {
-                return Ok(Some(ok));
-            }
-        }
+    if strategy.try_jdk_home
+        && let Some(p) = read_env_var("JDK_HOME")
+        && let Some(ok) = check_candidate(&p, min_java)?
+    {
+        return Ok(Some(ok));
     }
     // Remembered across the scan; reported only if nothing qualifies.
     let mut too_old: Option<(PathBuf, u16)> = None;
 
-    if strategy.try_path {
-        if let Some(p) = read_env_var("PATH") {
-            let p_str = p.to_string_lossy();
-            for dir in p_str.split(';') {
-                let dir = dir.trim();
-                if dir.is_empty() {
-                    continue;
-                }
-                let dir_path = PathBuf::from(dir);
-                let candidate = dir_path.parent().unwrap_or(&dir_path);
-                if let Some(ok) = scan_candidate(&mut too_old, candidate, min_java)? {
-                    return Ok(Some(ok));
-                }
+    if strategy.try_path
+        && let Some(p) = read_env_var("PATH")
+    {
+        let p_str = p.to_string_lossy();
+        for dir in p_str.split(';') {
+            let dir = dir.trim();
+            if dir.is_empty() {
+                continue;
+            }
+            let dir_path = PathBuf::from(dir);
+            let candidate = dir_path.parent().unwrap_or(&dir_path);
+            if let Some(ok) = scan_candidate(&mut too_old, candidate, min_java)? {
+                return Ok(Some(ok));
             }
         }
     }
@@ -711,10 +709,10 @@ pub fn discover_jvm(
             "SOFTWARE\\Eclipse Foundation\\JDK",
             "SOFTWARE\\Microsoft\\JDK",
         ] {
-            if let Ok(Some(path)) = read_registry_jdk_path(HKEY_LOCAL_MACHINE, root) {
-                if let Some(ok) = scan_candidate(&mut too_old, &path, min_java)? {
-                    return Ok(Some(ok));
-                }
+            if let Ok(Some(path)) = read_registry_jdk_path(HKEY_LOCAL_MACHINE, root)
+                && let Some(ok) = scan_candidate(&mut too_old, &path, min_java)?
+            {
+                return Ok(Some(ok));
             }
         }
     }
@@ -769,17 +767,17 @@ fn check_candidate(dir: &Path, min_java: u16) -> Result<Option<PathBuf>, Launche
 
 fn read_java_major(java_home: &Path) -> Result<Option<u16>, LauncherError> {
     let release_path = java_home.join("release");
-    if release_path.is_file() {
-        if let Ok(mut file) = fs::File::open(&release_path) {
-            let mut buf = String::new();
-            file.read_to_string(&mut buf)?;
-            for line in buf.lines() {
-                let line = line.trim();
-                if let Some(rest) = line.strip_prefix("JAVA_VERSION=") {
-                    let v = rest.trim().trim_matches('"');
-                    if let Some(major) = parse_major_version(v) {
-                        return Ok(Some(major));
-                    }
+    if release_path.is_file()
+        && let Ok(mut file) = fs::File::open(&release_path)
+    {
+        let mut buf = String::new();
+        file.read_to_string(&mut buf)?;
+        for line in buf.lines() {
+            let line = line.trim();
+            if let Some(rest) = line.strip_prefix("JAVA_VERSION=") {
+                let v = rest.trim().trim_matches('"');
+                if let Some(major) = parse_major_version(v) {
+                    return Ok(Some(major));
                 }
             }
         }

@@ -890,10 +890,10 @@ fn find_java_home(root: &Path) -> Option<PathBuf> {
         let entries = std::fs::read_dir(dir).ok()?;
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() {
-                if let Some(home) = recurse(&path, depth + 1) {
-                    return Some(home);
-                }
+            if path.is_dir()
+                && let Some(home) = recurse(&path, depth + 1)
+            {
+                return Some(home);
             }
         }
         None
@@ -969,10 +969,10 @@ fn find_cached_jdk(min_java_major: u16, install_root: &Path) -> Option<PathBuf> 
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         );
-        if let Some(major) = parse_java_version(&combined) {
-            if major >= min_java_major {
-                return Some(home);
-            }
+        if let Some(major) = parse_java_version(&combined)
+            && major >= min_java_major
+        {
+            return Some(home);
         }
     }
     None
@@ -1726,23 +1726,22 @@ fn run_one_install_attempt(
     let _ = worker.join();
 
     let done = shared.done.load(Ordering::SeqCst);
-    if done == 1 {
-        if let Ok(g) = shared.home.lock() {
-            if let Some(home) = g.clone() {
-                // The worker resolved JAVA_HOME *inside* staging, so rebase it
-                // onto the published path rather than re-walking the tree.
-                match publish(&staging, install_dir, &home) {
-                    Ok(published) => {
-                        let _ = std::fs::remove_file(tmp_zip);
-                        return AttemptOutcome::Success(published);
-                    }
-                    Err(e) => {
-                        log::log(&format!("publish failed: {e}"));
-                        let _ = std::fs::remove_dir_all(&staging);
-                        let _ = std::fs::remove_file(tmp_zip);
-                        return AttemptOutcome::Failed(format!("installing the JDK: {e}"));
-                    }
-                }
+    if done == 1
+        && let Ok(g) = shared.home.lock()
+        && let Some(home) = g.clone()
+    {
+        // The worker resolved JAVA_HOME *inside* staging, so rebase it
+        // onto the published path rather than re-walking the tree.
+        match publish(&staging, install_dir, &home) {
+            Ok(published) => {
+                let _ = std::fs::remove_file(tmp_zip);
+                return AttemptOutcome::Success(published);
+            }
+            Err(e) => {
+                log::log(&format!("publish failed: {e}"));
+                let _ = std::fs::remove_dir_all(&staging);
+                let _ = std::fs::remove_file(tmp_zip);
+                return AttemptOutcome::Failed(format!("installing the JDK: {e}"));
             }
         }
     }

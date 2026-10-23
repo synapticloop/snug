@@ -384,13 +384,12 @@ pub fn should_sweep(root: &Path, now: SystemTime) -> bool {
         .and_then(|s| s.trim().parse::<u64>().ok())
         .map(|secs| SystemTime::UNIX_EPOCH + Duration::from_secs(secs));
 
-    if let Some(last) = last {
-        if now
+    if let Some(last) = last
+        && now
             .duration_since(last)
             .is_ok_and(|gap| gap < SWEEP_INTERVAL)
-        {
-            return false;
-        }
+    {
+        return false;
     }
 
     let _ = std::fs::create_dir_all(root);

@@ -343,20 +343,20 @@ pub fn dialogs() -> &'static Dialogs {
     // Fast path: generation unchanged, so the cached copy is current.
     {
         let guard = DIALOGS.read().unwrap_or_else(|e| e.into_inner());
-        if let Some((cached_gen, dialogs)) = *guard {
-            if cached_gen == gen_id {
-                return dialogs;
-            }
+        if let Some((cached_gen, dialogs)) = *guard
+            && cached_gen == gen_id
+        {
+            return dialogs;
         }
     }
 
     // Slow path: reassemble. Re-check under the write lock so two
     // threads racing the first call don't both build.
     let mut guard = DIALOGS.write().unwrap_or_else(|e| e.into_inner());
-    if let Some((cached_gen, dialogs)) = *guard {
-        if cached_gen == gen_id {
-            return dialogs;
-        }
+    if let Some((cached_gen, dialogs)) = *guard
+        && cached_gen == gen_id
+    {
+        return dialogs;
     }
     // Leaked deliberately: the signature is `&'static Dialogs`, which
     // keeps all ~16 call sites compiling untouched, and a rebuild only

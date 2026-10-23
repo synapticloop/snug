@@ -87,7 +87,7 @@ pub fn build_payload(cli: &Cli) -> Result<SnugPayload> {
             // with `BLENDFUNCTION { ..., AC_SRC_ALPHA }` requires a
             // premultiplied 32-bit BGRA DIB. For fully-opaque pixels
             // (alpha = 255) the multiply is a no-op on the channels.
-            for chunk in pixels.chunks_exact_mut(4) {
+            for chunk in pixels.as_chunks_mut::<4>().0 {
                 let r = chunk[0] as u32;
                 let g = chunk[1] as u32;
                 let b = chunk[2] as u32;
@@ -629,11 +629,11 @@ pub fn build_exe(cli: &Cli, embedded: &SnugEmbedded) -> Result<PathBuf> {
     // at the end wants the length. Cheaper than cloning it back.
     let payload_len = encoded.len();
 
-    if let Some(parent) = output.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating output directory {}", parent.display()))?;
-        }
+    if let Some(parent) = output.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating output directory {}", parent.display()))?;
     }
 
     // Open the stub as a PE image so we can mutate its resource
@@ -705,10 +705,10 @@ pub fn write_blob(cli: &Cli, payload: &SnugPayload) -> Result<PathBuf> {
     let embedded = SnugEmbedded::new(payload.clone());
     let encoded = encode(&embedded).context("encoding snug payload")?;
     let target = jar_path.with_extension("snug-blob");
-    if let Some(parent) = target.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
+    if let Some(parent) = target.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&target, &encoded)
         .with_context(|| format!("writing blob to {}", target.display()))?;

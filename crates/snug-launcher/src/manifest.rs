@@ -38,12 +38,12 @@ pub fn read_main_class(jar_path: &Path) -> Result<Option<String>, LauncherError>
 
 fn parse_main_class(manifest: &str) -> Option<String> {
     for line in manifest.lines() {
-        if let Some((key, value)) = line.split_once(':') {
-            if key.trim() == "Main-Class" {
-                let v = value.trim();
-                if !v.is_empty() {
-                    return Some(v.to_owned());
-                }
+        if let Some((key, value)) = line.split_once(':')
+            && key.trim() == "Main-Class"
+        {
+            let v = value.trim();
+            if !v.is_empty() {
+                return Some(v.to_owned());
             }
         }
     }
