@@ -72,32 +72,60 @@ fn validate_cache_dir(s: &str) -> Result<PathBuf, String> {
     name = "snug",
     about = "Wrap a Java fat JAR into a native Windows .exe launcher",
     long_about = "\n\
+                  \n        \
+                  .-----.-----.--.--.-----.\n        \
+                  |__ --|     |  |  |  _  |\n        \
+                  |_____|__|__|_____|___  |\n              \
+                  ... .-..    |_____|\n\
+                  \n             \
+                  ~ ~ ~ * ~ ~ ~\n\
+                  \n  \
+                  Wrap Java applications into native Windows executables.\n\
+                  \n  \
+                  Snug turns a Java JAR, or a directory of JARs, into a\n  \
+                  standalone Windows .exe file that you can share with others.\n\
+                  \n  \
+                  The launcher runs your application directly through the Java\n  \
+                  Virtual Machine (JVM), appearing under your application's\n  \
+                  name in Windows Task Manager instead of javaw.exe.\n\
+                  \n  \
+                  If a compatible Java runtime is not installed, Snug can\n  \
+                  offer to download one automatically.\n\
                   \n\
-                          .-----.-----.--.--.-----.\n\
-                          |__ --|     |  |  |  _  |\n\
-                          |_____|__|__|_____|___  |\n\
-                                ... .-..    |_____|\n\
-                  \n\
-                               ~ ~ ~ * ~ ~ ~\n\
-                  \n\
-                  ~ ~ Wrap a Java JARs into a native Windows .exe launcher. ~ ~\n\
+                  GETTING STARTED\n\
+                  \n  \
+                  The simplest way to build an application is:\n\
                   \n    \
-                  The produced EXE loads `jvm.dll` directly via JNI so it appears as `<App>.exe` \n    \
-                  (not `javaw.exe`) in Task Manager, and the launcher locates a compatible JDK on \n    \
-                  the target machine before falling back to an optional JDK download.\n\
+                  snug.exe MyApp.jar\n\
+                  \n  \
+                  This creates MyApp.exe alongside your JAR file.\n\
+                  \n  \
+                  You can also specify an input directory containing JARs:\n\
+                  \n    \
+                  snug.exe --input my-jars\n\
+                  \n  \
+                  Snug automatically determines the application name from\n  \
+                  the input file or directory.\n\
+                  \n  \
+                  For an application you intend to distribute, consider adding:\n\
+                  \n    \
+                  --name         Your application's display name\n    \
+                  --company      Your company or organisation\n    \
+                  --version      Your application's version number\n    \
+                  --description  A short description of your application\n    \
+                  --icon         An application icon (PNG or ICO)\n    \
                   \n\
-                  # Minimum required for a normal build:\n\n  \
-                  Input:\n    \
-                  --input <JAR|DIR>\n  \
+                  USAGE:\n\
+                  \n  \
+                  snug.exe [OPTIONS] [JAR|DIR]:
+                  \n    \
+                  snug.exe MyApp.jar\n\
+                  \n  \
+                  Run\n    \
+                  snug.exe --help\n  \
                   or\n    \
-                  [JAR]\n\n  \
-                  Application identity:\n    \
-                  --name <NAME>\n    \
-                  --company <COMPANY>\n\
-                  # Recommended before distribution:\n\n    \
-                  --version <VERSION>\n    \
-                  --description <TEXT>\n    \
-                  --icon <PNG/ICO>\n    \
+                  snug.exe -h\n  \
+                  for this complete reference.\n\
                   ",
     // Footer printed after the options list. Keeps the common
     // workflows in front of the user without re-listing every flag;
@@ -124,231 +152,295 @@ fn validate_cache_dir(s: &str) -> Result<PathBuf, String> {
     version = env!("CARGO_PKG_VERSION"),
 )]
 pub struct Cli {
-    /// Input fat JAR file or directory of JARs. Optional only when
-    /// `--input` — or an options file — supplies one; snug errors out
-    /// rather than printing help when no input source is present.
+    /// Input JAR file or directory containing JAR files.
     ///
-    /// Equivalent to `--input <path>`; the positional form is kept for
-    /// shell convenience. `--input` and the positional are mutually
-    /// exclusive — supply one or the other.
-    #[arg(value_name = "JAR|DIR", help_heading = "Input / output")]
-    pub jar: Option<PathBuf>,
-
-    /// Input source — either a single fat-JAR file or a directory
-    /// containing one or more JARs.
+    /// A single JAR should be a runnable fat JAR containing
+    /// the application and its required dependencies.
     ///
-    /// When the path is a file, it is wrapped as a single-JAR launcher
-    /// (identical to the positional `[JAR|DIR]` argument). When the path is
-    /// a directory, every `*.jar` directly inside it is scanned, sorted
-    /// by name, and embedded into the launcher as a multi-JAR classpath;
-    /// the runtime launcher extracts them all to its per-user cache and
-    /// concatenates them into `-classpath`. Use `--main-class` to
-    /// override the manifest's `Main-Class` for multi-JAR builds.
+    /// For a directory, Snug includes all .jar files directly
+    /// inside it, sorted by filename. Subdirectories are
+    /// not searched.
     ///
-    /// `--input` and the positional `[JAR|DIR]` argument are mutually
-    /// exclusive *on one command line* — supplying both is an error.
-    /// Across sources it is a precedence question instead, and it
-    /// resolves like every other option: a JAR given on the command line
-    /// overrides an `--input` from an options file. So an options file
-    /// can carry a default input for a bare `snug`, while
-    /// `snug some-other.jar` still builds that one.
+    /// You can also supply the input as a positional argument:
+    ///
+    ///   snug.exe MyApp.jar
+    ///
+    /// Do not use --input and a positional input together on
+    /// the same command line.
     #[arg(
         long = "input",
         value_name = "JAR|DIR",
         conflicts_with = "jar",
-        help_heading = "Input / output"
+        help_heading = "INPUT / OUTPUT"
     )]
     pub input: Option<PathBuf>,
 
-    /// Output Windows executable path.
+    /// Path and filename of the generated executable.
     ///
-    /// Defaults to `<jar-stem>.exe` in the current directory.
+    /// By default, the output is created alongside the input,
+    /// using the input filename or directory name.
+    ///
+    /// Example:
+    ///
+    ///   snug.exe MyApp.jar -o MyProgram.exe
     #[arg(
         short = 'o',
         long = "output",
         value_name = "EXE",
-        help_heading = "Input / output"
+        help_heading = "INPUT / OUTPUT"
     )]
     pub output: Option<PathBuf>,
 
-    /// Application display name (e.g. `"My App"`).
+    /// Input JAR file or directory containing JAR files.
     ///
-    /// Maps to the `ProductName` / `FileDescription` Windows version
-    /// resource fields and to the per-user cache directory.
+    /// A single JAR should be a runnable fat JAR containing
+    /// the application and its required dependencies.
+    ///
+    /// For a directory, Snug includes all .jar files directly
+    /// inside it, sorted by filename. Subdirectories are
+    /// not searched.
+    ///
+    /// You can also supply the input as a positional argument:
+    ///
+    ///   snug.exe MyApp.jar
+    ///
+    /// Do not use --input and a positional input together on
+    /// the same command line.
+    #[arg(value_name = "JAR|DIR", help_heading = "INPUT / OUTPUT")]
+    pub jar: Option<PathBuf>,
+
+    /// Display name of your application.
+    ///
+    /// Used in Windows application information and the
+    /// runtime cache directory.
+    ///
+    /// Defaults to the input JAR filename without .jar,
+    /// or the input directory name.
+    ///
+    /// Example:
+    ///   --name "My Application"
     #[arg(
         long = "name",
         value_name = "NAME",
-        help_heading = "Application metadata"
+        help_heading = "APPLICATION DETAILS"
     )]
     pub name: Option<String>,
 
-    /// Company / vendor name (e.g. `"SynapticLoop"`).
+    /// Company or organisation responsible for the application.
     ///
-    /// Maps to the `CompanyName` Windows version resource field.
+    /// Appears in the Windows executable's Details information
+    /// and helps keep application cache files separate.
     ///
-    /// Optional. When omitted it falls back to the resolved application
-    /// name, so a build without it shows `CompanyName` and `ProductName`
-    /// alike rather than a placeholder that reads as an error. It has
-    /// to be non-empty either way: the runtime cache is keyed
-    /// `snug/<company>/<app>`, and an empty company would collapse that
-    /// to `snug/<app>`, putting two companies' identically named apps
-    /// in one directory.
+    /// Defaults to the resolved application name.
+    ///
+    /// Example:
+    ///   --company "My Company"
     #[arg(
         long = "company",
         value_name = "COMPANY",
-        help_heading = "Application metadata"
+        help_heading = "APPLICATION DETAILS"
     )]
     pub company: Option<String>,
 
-    /// Application version (e.g. `1.2.3`).
+    /// Version number of your application.
     ///
-    /// Maps to `ProductVersion` / `FileVersion` in the Windows version
-    /// resource. The Windows quad holds four 16-bit components, so pass
-    /// 1–4 dot-separated numbers with no quotes — a bare `1.2.3.4`.
-    /// Trailing components may be omitted and default to zero
-    /// (`1.2.3` → `1.2.3.0`); each component must be 0–65535.
+    /// Appears in Windows executable properties.
     ///
-    /// Anything else is rejected before the build starts rather than
-    /// being silently zero-filled into the version resource.
+    /// Accepts one to four dot-separated numbers, with each
+    /// number between 0 and 65535.
+    ///
+    /// Missing components default to zero.
+    ///
+    /// Examples:
+    ///   --version 1
+    ///   --version 1.2.3
+    ///   --version 1.2.3.4
+    ///
+    /// Default: 0.0.0.0
     #[arg(
         long = "version",
         value_name = "VERSION",
         value_parser = crate::resources::validate_app_version,
-        help_heading = "Application metadata"
+        help_heading = "APPLICATION DETAILS"
     )]
     pub version: Option<String>,
 
-    /// Short description (Windows `FileDescription`).
+    /// Short description of your application.
     ///
-    /// Shown by File Explorer on the EXE's "Details" tab.
+    /// Appears in the Windows executable's Details information.
+    ///
+    /// Example:
+    ///   --description "Customer management application"
     #[arg(
         long = "description",
         value_name = "TEXT",
-        help_heading = "Application metadata"
+        help_heading = "APPLICATION DETAILS"
     )]
     pub description: Option<String>,
 
-    /// Copyright string (Windows `LegalCopyright`).
+    /// Copyright information embedded in the executable.
     ///
-    /// Shown by File Explorer on the EXE's "Details" tab alongside
-    /// `--version` and `--description`.
+    /// Appears in the Windows executable's Details information.
+    ///
+    /// Example:
+    ///   --copyright "Copyright 2026 My Company"
     #[arg(
         long = "copyright",
         value_name = "TEXT",
-        help_heading = "Application metadata"
+        help_heading = "APPLICATION DETAILS"
     )]
     pub copyright: Option<String>,
 
-    /// URL surfaced as a clickable "Check for a newer version" link
-    /// on the launcher's error dialog (e.g. the project's GitHub
-    /// releases page). When `None` or empty, the link row is hidden.
+    /// Website where users can check for a newer version.
     ///
-    /// Clicking the link invokes the user's default browser via
-    /// `ShellExecuteW(..., "open", url, ...)`. Whitelisted only in
-    /// that it's your own EXE pointing at your own URL — no URL
-    /// validation is performed at build time, so be careful what you
-    /// bake in.
+    /// When supplied, the launcher displays a clickable
+    /// "Check for a newer version" link in its error dialog.
+    ///
+    /// The link opens in the user's default browser.
+    /// Snug does not automatically check for updates.
+    ///
+    /// Example:
+    ///   --update-url https://example.com/downloads
+    ///
+    /// Default: no update link
     #[arg(
         long = "update-url",
         value_name = "URL",
-        help_heading = "Application metadata"
+        help_heading = "APPLICATION DETAILS"
     )]
     pub update_url: Option<String>,
 
-    /// Minimum required Java major version.
+    /// Minimum Java major version required by your application.
     ///
-    /// Defaults to `25` (the project's development target).
+    /// The launcher searches for a compatible Java runtime
+    /// when the application starts.
+    ///
+    /// Example:
+    ///   --min-java 21
+    ///
+    /// Default: 25
     #[arg(
         long = "min-java",
         value_name = "N",
         default_value_t = 25,
-        help_heading = "Java runtime"
+        help_heading = "JAVA RUNTIME"
     )]
     pub min_java: u16,
 
-    /// Override the `Main-Class` read from the JAR manifest.
+    /// Java class to start when the application launches.
+    ///
+    /// Overrides the Main-Class declared in the JAR manifest.
+    ///
+    /// Useful when a JAR contains several possible entry
+    /// points, or when packaging multiple JARs.
+    ///
+    /// Example:
+    ///   --main-class com.example.Main
     #[arg(
         long = "main-class",
         value_name = "CLASS",
-        help_heading = "Java runtime"
+        help_heading = "JAVA RUNTIME"
     )]
     pub main_class: Option<String>,
 
-    /// Extra JVM option forwarded to `JNI_CreateJavaVM`.
+    /// Additional option passed to the Java Virtual Machine.
     ///
-    /// Repeatable. Examples:
-    /// `--jvm-arg=-Xms256m --jvm-arg=-Xmx2g --jvm-arg=-Dfile.encoding=UTF-8`
+    /// Can be repeated to supply multiple options.
+    ///
+    /// Examples:
+    ///   --jvm-arg=-Xms256m
+    ///   --jvm-arg=-Xmx2g
+    ///   --jvm-arg=-Dfile.encoding=UTF-8
     #[arg(
         long = "jvm-arg",
         value_name = "OPTION",
         allow_hyphen_values = true,
-        help_heading = "Java runtime"
+        help_heading = "JAVA RUNTIME"
     )]
     pub jvm_args: Vec<String>,
 
-    /// `.ico` or `.png` file used as the Windows Explorer icon for the EXE.
+    /// Icon to embed in the Windows executable.
+    ///
+    /// Accepts PNG or ICO files.
+    ///
+    /// The icon appears in File Explorer and wherever
+    /// Windows displays the application's executable icon.
+    ///
+    /// Example:
+    ///   --icon app.png
     #[arg(
         long = "icon",
         value_name = "PNG/ICO",
-        help_heading = "Windows resources"
+        help_heading = "WINDOWS APPEARANCE"
     )]
     pub icon: Option<PathBuf>,
 
-    /// Optional Windows application manifest (XML) embedded as
-    /// `RT_MANIFEST`. Use this to declare DPI-awareness, side-by-side
-    /// assembly identity, or `requestedExecutionLevel` for UAC.
+    /// Custom Windows application manifest.
+    ///
+    /// Use this for advanced Windows settings, including
+    /// DPI awareness and administrator permissions.
+    ///
+    /// Example:
+    ///   --manifest app.manifest
     #[arg(
         long = "manifest",
         value_name = "XML",
-        help_heading = "Windows resources"
+        help_heading = "WINDOWS APPEARANCE"
     )]
     pub manifest: Option<PathBuf>,
 
-    /// PNG splash image shown by the native launcher before the JVM starts.
+    /// PNG image displayed while the application starts.
     ///
-    /// The PNG is embedded verbatim into the EXE and rendered at its
-    /// native pixel size, centred on the primary monitor. Recommended
-    /// for a branded splash: somewhere between `480x270` and
-    /// `640x360`. Anything bigger triggers a build-time warning
-    /// (see `--splash-max`); anything smaller renders fine but may
-    /// look lost on high-DPI displays.
+    /// Displayed at its original size, centred on the
+    /// primary monitor. The image is not resized.
+    ///
+    /// Recommended size: 480x270 to 640x360 pixels.
+    ///
+    /// Example:
+    ///   --splash splash.png
     #[arg(
         long = "splash",
         value_name = "PNG",
-        help_heading = "Windows resources"
+        help_heading = "WINDOWS APPEARANCE"
     )]
     pub splash: Option<PathBuf>,
 
-    /// Minimum splash duration in milliseconds.
+    /// Minimum time to display the splash screen,
+    /// in milliseconds.
     ///
-    /// The splash is dismissed once the JVM signals readiness *or* this
-    /// duration elapses, whichever is later. Defaults to `1500`.
+    /// The splash closes after both the minimum duration
+    /// has elapsed and the JVM has signalled readiness.
+    ///
+    /// Example:
+    ///   --splash-ms 2000
+    ///
+    /// Default: 1500
     #[arg(
         long = "splash-ms",
         value_name = "MS",
         default_value_t = 1_500,
-        help_heading = "Windows resources"
+        help_heading = "WINDOWS APPEARANCE"
     )]
     pub splash_ms: u32,
 
-    /// Maximum recommended splash dimensions, or `off` to silence the
-    /// size warning at build time.
+    /// Recommended maximum dimensions for the splash image.
     ///
-    /// Format: `<W>x<H>` (e.g. `640x360`, `800x600`). When the supplied
-    /// `--splash` PNG is wider or taller than this, snug emits a
-    /// build-time warning telling you the launcher will render at
-    /// native size (which usually looks oversized). The launcher does
-    /// not rescale the image — this is purely advisory.
+    /// Snug warns during the build if the image exceeds
+    /// these dimensions. The image is still embedded
+    /// and displayed at its original size.
     ///
-    /// Set to `off`, `none`, or `unlimited` (case-insensitive) to
-    /// disable the warning without changing dimensions. Use a custom
-    /// `WxH` to raise the threshold; e.g. `--splash-max 1920x1080`
-    /// for a full-screen splash.
+    /// Use off, none, or unlimited to disable the warning.
+    ///
+    /// Examples:
+    ///   --splash-max 800x600
+    ///   --splash-max off
+    ///
+    /// Default: 640x360
     #[arg(
         long = "splash-max",
         value_name = "WxH|off",
         default_value = "640x360",
-        help_heading = "Windows resources"
+        help_heading = "WINDOWS APPEARANCE"
     )]
     pub splash_max: String,
 
