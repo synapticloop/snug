@@ -32,11 +32,9 @@ Per-gate pass/fail lines, then a summary. Exit code is 0 when every
 *enforced* gate passed, 1 otherwise.
 
 .NOTES
-Formatting *is* enforced. It was advisory for as long as the tree carried
-pre-existing `cargo fmt` drift across 60 files, because making it a gate
-would have failed on code nobody had touched. That drift is gone: `cargo fmt
---all` landed as its own commit, so a `cargo fmt --all --check` failure from
-here on means a real change went in unformatted.
+Formatting *is* enforced. The tree is clean, so a `cargo fmt --all
+--check` failure from here on means a real change went in unformatted --
+there is no inherited state for it to be confused with.
 
 `--no-fail-fast` on the test run matches CI: plain `cargo test` stops at
 the first failing binary, which is exactly the failure mode described
