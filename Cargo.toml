@@ -36,7 +36,7 @@ crc32fast = { version = "1" }
 clap = { version = "4", features = ["derive", "wrap_help"] }
 anyhow = { version = "1" }
 zip = { version = "2", default-features = false, features = ["deflate"] }
-windows-sys = { version = "0.59", features = [
+windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     # `GetUserPreferredUILanguages` / `GetUserDefaultLocaleName`, which are how
     # `localize::detect_locales` asks Windows what language the user reads.

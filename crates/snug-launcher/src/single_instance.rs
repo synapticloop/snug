@@ -285,8 +285,12 @@ fn normalize_str(raw: &str) -> String {
         .to_ascii_lowercase()
 }
 
+// `BOOL` is *not* in `Win32::Foundation` any more. It moved to `core` in
+// windows-sys 0.60, when the crate picked up a new Windows SDK metadata
+// set. It is imported from `core` alongside `PWSTR`, at the bottom of
+// this group.
 #[cfg(windows)]
-use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, TRUE};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, TRUE};
 #[cfg(windows)]
 use windows_sys::Win32::System::Threading::{
     AttachThreadInput, GetCurrentThreadId, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -299,7 +303,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     ShowWindow, WS_EX_TOOLWINDOW,
 };
 #[cfg(windows)]
-use windows_sys::{Win32::Foundation::CloseHandle, core::PWSTR};
+use windows_sys::{
+    Win32::Foundation::CloseHandle,
+    core::{BOOL, PWSTR},
+};
 
 /// Windows search state, threaded through `EnumWindows` as a raw
 /// pointer because that is the only way the Win32 callback can carry
