@@ -15,15 +15,14 @@ members = [
 # pre-1.0 ceiling): micro for fixes, copy and refactors; minor for a new
 # CLI flag, a new dialog, or a launcher-runtime feature; and the major
 # stays 0 until the maintainer declares snug finished.
-version = "0.15.6"
+version = "0.16.0"
 edition = "2024"
-# Raised from 1.85 by the clippy gate. `cargo clippy --fix` replaced a
-# `chunks_exact_mut` loop with `as_chunks` (stable 1.88) and a modulo
-# test with `is_multiple_of` (stable 1.87); with the floor at 1.85 both
-# read as MSRV violations, which `clippy::incompatible_msrv` reports and
-# `-D warnings` then rejects. The lints are correct — the old spellings
-# are what clippy flags — so the floor moves rather than the code.
-rust-version = "1.88"
+# 1.89 is set by `single_instance`: `std::fs::File::try_lock` is how the
+# launcher takes a cross-process advisory lock, and it is the only
+# version of that primitive that is portable, needs no dependency, and
+# is released by the OS when the process dies. The previous floor was
+# 1.85, which is the edition-2024 minimum and nothing more.
+rust-version = "1.89"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/synapticloop/snug"
 publish = false

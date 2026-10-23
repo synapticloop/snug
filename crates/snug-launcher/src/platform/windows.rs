@@ -32,6 +32,7 @@ use crate::cache;
 use crate::jdk_install;
 use crate::log;
 use crate::manifest;
+use crate::single_instance;
 use crate::splash;
 
 /// Locate this launcher's embedded payload.
@@ -59,6 +60,42 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
         return Err(LauncherError::NoMainClass);
     }
 
+    let cache_root = cache::cache_root(&config.app, config.behavior.cache_dir.as_deref());
+
+    // 0. Single-instance gate.
+    //
+    //    Deliberately the *first* thing, before extraction, before the
+    //    log file exists, and long before any JVM work. A second
+    //    launch is a user gesture that deserves an instant response —
+    //    if the running instance is to come forward, the worst it
+    //    should cost is a window-enumeration pass. Copying a 300 MB
+    //    fat JAR to the cache first would make the double-click feel
+    //    like a hang, and would do all that work for a process that is
+    //    about to exit.
+    //
+    //    The guard is bound here and stays alive until `run` returns,
+    //    which is the whole contract: drop it early and a third launch
+    //    would start a second JVM next to this one.
+    let _instance =
+        match single_instance::claim(&cache_root, config.behavior.allow_multiple_instances) {
+            single_instance::Claim::Primary(guard) => Some(guard),
+            single_instance::Claim::AlreadyRunning => {
+                single_instance::activate_existing(_self_path);
+                // Exit 0: the user's launch *did* something — the app they
+                // asked for is now on screen. A non-zero code would make a
+                // script that checks the exit status report a failure for
+                // what is a successful hand-off.
+                return Ok(0);
+            }
+            single_instance::Claim::Disabled => None,
+            single_instance::Claim::Unavailable(why) => {
+                // Already logged by `claim`. Launching normally is the
+                // documented fail-open behaviour.
+                let _ = why;
+                None
+            }
+        };
+
     // 1. Extract every JAR to the per-user cache. Each JAR gets its
     //    own sha256-keyed subdirectory so multi-JAR builds can have
     //    collisions-free filenames and the launcher can reuse cached
@@ -69,7 +106,6 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
     //    the periodic sweep evicts anything stale — so touching only
     //    `jars[0]` would let a shared library JAR age out despite
     //    constant use, and every launch would re-copy it in full.
-    let cache_root = cache::cache_root(&config.app, config.behavior.cache_dir.as_deref());
     let mut cached_paths: Vec<PathBuf> = Vec::with_capacity(jars.len());
     for jar in jars {
         let dest = cache::cached_jar_path(&cache_root, &jar.sha256);

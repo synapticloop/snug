@@ -592,6 +592,14 @@ mod tests {
     }
 
     #[test]
+    fn rejects_build_flag_allow_multiple_instances() {
+        assert_rejected(
+            &["--init-options", "--allow-multiple-instances"],
+            "--allow-multiple-instances",
+        );
+    }
+
+    #[test]
     fn rejects_build_flag_dry_run() {
         assert_rejected(&["--init-options", "--dry-run"], "--dry-run");
     }

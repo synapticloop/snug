@@ -178,6 +178,31 @@
 
 
 # ----------------------------------------------------------------------------
+# Multiple instances
+# ----------------------------------------------------------------------------
+#
+# By default snug runs ONE instance per application. Launching the built
+# EXE (or `.app`) again while it is already running brings the running
+# instance's window to the front and exits, instead of starting a second
+# JVM. That is what a second click on a desktop icon nearly always means.
+#
+# Uncomment this for a server, a command-line tool, or anything that
+# genuinely wants a second copy running beside the first.
+#
+# The setting is baked into the payload at build time and applies to every
+# launch of that file; the end user cannot override it. Instances are
+# identified by --company and --name, so two builds with different
+# metadata are independent of each other.
+#
+# Note on headless apps: an application with no window cannot be brought
+# forward. A second launch still declines to start a second JVM, so on a
+# console-only build this flag is the difference between "the command
+# silently did nothing" and "it ran". Prefer it there.
+#
+# --allow-multiple-instances
+
+
+# ----------------------------------------------------------------------------
 # Localization
 # ----------------------------------------------------------------------------
 #

@@ -12,7 +12,7 @@ use snug_format::{AppMetadata, LauncherBehavior, LauncherConfig, embedded_file};
 use snug_payload::find_in_file;
 use zip::write::SimpleFileOptions;
 
-use snug_cli::build::{build_exe, output_path};
+use snug_cli::build::{build_exe, build_payload, output_path};
 use snug_cli::cli::Cli;
 
 #[test]
@@ -129,6 +129,41 @@ fn output_path_defaults_to_the_jar_stem() {
     assert_eq!(p.extension().and_then(|e| e.to_str()), Some("app"));
     #[cfg(not(target_os = "macos"))]
     assert_eq!(p.extension().and_then(|e| e.to_str()), Some("exe"));
+}
+
+#[test]
+fn single_instance_is_the_default_and_the_flag_overrides_it() {
+    let tmp = tempdir();
+    let jar = tmp.join("Demo.jar");
+    write_fake_jar(&jar, Some("com.example.Main"));
+    let exe_path = tmp.join("Demo.exe");
+
+    // Through `build_payload`, not the hand-rolled helper above: that
+    // helper reconstructs the config field by field, so it would keep
+    // passing even if the real builder stopped reading the flag. The
+    // wiring under test is the one a user actually gets.
+    let default_cli = construct_cli(&jar, &exe_path);
+    let default_payload = build_payload(&default_cli).expect("build_payload default");
+    assert!(
+        !default_payload.config.behavior.allow_multiple_instances,
+        "a build with no flag must stay single-instance"
+    );
+
+    let mut multi_cli = construct_cli(&jar, &exe_path);
+    multi_cli.allow_multiple_instances = true;
+    let multi_payload = build_payload(&multi_cli).expect("build_payload multi");
+    assert!(
+        multi_payload.config.behavior.allow_multiple_instances,
+        "--allow-multiple-instances must reach the payload"
+    );
+
+    // And it must survive the wire, not just the struct: a field the
+    // builder sets but the codec drops would look correct in every
+    // test that stops short of a decode.
+    let embedded = snug_format::SnugEmbedded::new(multi_payload);
+    let bytes = snug_format::encode_payload(&embedded.payload).expect("encode");
+    let decoded = snug_format::decode_payload(&bytes).expect("decode");
+    assert!(decoded.config.behavior.allow_multiple_instances);
 }
 
 fn write_fake_jar(path: &std::path::Path, main_class: Option<&str>) {

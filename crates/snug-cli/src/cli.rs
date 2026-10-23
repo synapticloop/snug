@@ -73,12 +73,12 @@ fn validate_cache_dir(s: &str) -> Result<PathBuf, String> {
     about = "Wrap a Java fat JAR into a native Windows .exe launcher",
     long_about = "\n\
                   \n\
-                  # .-----.-----.--.--.-----.\n\
-                  # |__ --|     |  |  |  _  |\n\
-                  # |_____|__|__|_____|___  |\n\
-                  #       ... .-..    |_____|\n\
+                  #       .-----.-----.--.--.-----.\n\
+                  #       |__ --|     |  |  |  _  |\n\
+                  #       |_____|__|__|_____|___  |\n\
+                  #             ... .-..    |_____|\n\
                   \n\
-                  #      ~ ~ ~ * ~ ~ ~\n\
+                  #            ~ ~ ~ * ~ ~ ~\n\
                   \n\
                   ~ ~ Wrap a Java JARs into a native Windows .exe launcher. ~ ~\n\
                   \n    \
@@ -404,6 +404,28 @@ pub struct Cli {
         help_heading = "Build behaviour"
     )]
     pub download_jdk: CliDownloadJdkMode,
+
+    /// Allow more than one instance of the application to run at once.
+    ///
+    /// By default snug runs **one** instance per application. Launching
+    /// the produced EXE (or `.app`) again while it is already running
+    /// brings the running instance's window to the front and exits,
+    /// rather than starting a second JVM — which is what almost every
+    /// desktop application means by a second click on its icon, and
+    /// what stops the user ending up with two copies writing to the
+    /// same files.
+    ///
+    /// Pass this flag when a second copy is genuinely wanted: a server,
+    /// a command-line tool, or an app that is happy to be launched
+    /// twice.
+    ///
+    /// The choice is stamped into the payload at build time and applies
+    /// to every launch of that EXE — the end user cannot override it.
+    /// Instances are identified by `--company` and `--name`, so two
+    /// builds with different metadata are independent of each other and
+    /// can run side by side.
+    #[arg(long = "allow-multiple-instances", help_heading = "Build behaviour")]
+    pub allow_multiple_instances: bool,
 
     /// Override the per-user cache root the launcher extracts JARs into.
     ///

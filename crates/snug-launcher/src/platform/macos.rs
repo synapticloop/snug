@@ -50,6 +50,7 @@ use crate::cache;
 use crate::jdk_install;
 use crate::log;
 use crate::manifest;
+use crate::single_instance;
 
 /// Suffix of the payload file snug writes into a `.app` bundle.
 ///
@@ -135,6 +136,37 @@ pub fn run(self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherErr
     //    `jars[0]` would let a shared library JAR age out under constant
     //    use and be re-copied in full every launch.
     let cache_root = cache::cache_root(&config.app, config.behavior.cache_dir.as_deref());
+
+    // 0. Single-instance gate. Identical shape to the Windows one, and
+    //    for the same reason: it runs before extraction and before any
+    //    JVM work, so a second launch answers immediately instead of
+    //    making the user wait through a fat-JAR copy for a process
+    //    that exits a moment later.
+    //
+    //    The guard stays bound to `_instance` for the rest of `run`;
+    //    dropping it early would let a third launch start a second
+    //    JVM beside this one.
+    let _instance =
+        match single_instance::claim(&cache_root, config.behavior.allow_multiple_instances) {
+            single_instance::Claim::Primary(guard) => Some(guard),
+            single_instance::Claim::AlreadyRunning => {
+                // Detection works here; raising the window does not
+                // yet (see `single_instance::activate_existing`). The
+                // second launch still declines to start a JVM, which is
+                // the safety-relevant half.
+                single_instance::activate_existing(self_path);
+                return Ok(0);
+            }
+            single_instance::Claim::Disabled => None,
+            single_instance::Claim::Unavailable(_) => None,
+        };
+
+    // 1. Extract every JAR to the per-user cache. Each JAR gets its own
+    //    sha256-keyed subdirectory, and every one is *touched* — the mtime
+    //    is the launcher's only record of when an entry was last needed,
+    //    and the periodic sweep evicts anything stale, so touching only
+    //    `jars[0]` would let a shared library JAR age out under constant
+    //    use and be re-copied in full every launch.
     let mut cached_paths: Vec<PathBuf> = Vec::with_capacity(jars.len());
     for jar in jars {
         let dest = cache::cached_jar_path(&cache_root, &jar.sha256);

@@ -44,7 +44,24 @@ pub const MAGIC: &[u8; 8] = b"SNUGEMBD";
 /// [`crate::Localization`]). The vector is `#[serde(default)]`-empty
 /// for backwards compatibility, so v5 payloads still decode cleanly.
 /// New builds always populate at least the English baseline.
-pub const FORMAT_VERSION: u16 = 6;
+///
+/// v7 (2026-10): Added
+/// [`LauncherBehavior::allow_multiple_instances`](crate::LauncherBehavior::allow_multiple_instances),
+/// making single-instance behaviour the default. `false` (the default)
+/// means a second launch of a running application activates that
+/// instance's window and exits instead of starting a second JVM.
+///
+/// This one is a **hard** bump, unlike v6's additive vector. Postcard
+/// encodes a struct as a positional sequence with no field names, so a
+/// field added anywhere changes the total byte length and a v6 payload
+/// decoded by a v7 reader runs off the end of the payload while
+/// consuming what it believes is the next field. The decoder rejects
+/// any version *higher* than [`FORMAT_VERSION`], which is what keeps a
+/// v7 payload from being misread by an older launcher; the reverse
+/// direction is what this bump is for. The committed
+/// `bin/launcher-stub-windows-x86_64.exe` must be rebuilt, because the
+/// stub it stamps carries this constant.
+pub const FORMAT_VERSION: u16 = 7;
 
 /// A snug payload wrapped with the metadata needed to locate, validate, and
 /// version-check it at runtime.

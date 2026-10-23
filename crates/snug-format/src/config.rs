@@ -135,6 +135,27 @@ pub struct LauncherBehavior {
     /// required — a bare `--download-jdk` is an error.
     #[serde(default)]
     pub download_jdk: DownloadJdkMode,
+
+    /// Permit more than one running instance of this application.
+    ///
+    /// Default: `false`, which is single-instance. Launching an
+    /// already-running application then does **not** start a second
+    /// JVM: it brings the running instance's window to the front and
+    /// exits `0`, leaving the first instance — and its arguments —
+    /// untouched.
+    ///
+    /// Set to `true` with `--allow-multiple-instances` for a server, a
+    /// command-line tool, or anything that genuinely wants a second
+    /// copy. Note that this is a *build-time* choice stamped into the
+    /// payload; the end user cannot change it at runtime.
+    ///
+    /// Appended last on purpose. Postcard encodes structs as a
+    /// positional sequence with no field names, so a new field changes
+    /// the layout wherever it lands — but keeping it at the end means
+    /// the bytes of every pre-existing field are unchanged, which is
+    /// the only thing that makes a wire bump reviewable.
+    #[serde(default)]
+    pub allow_multiple_instances: bool,
 }
 
 impl Default for LauncherBehavior {
@@ -144,6 +165,12 @@ impl Default for LauncherBehavior {
             cache_dir: None,
             jvm_discovery: JvmDiscovery::default(),
             download_jdk: DownloadJdkMode::default(),
+            // Single-instance is the default on purpose: a second
+            // launch of a running desktop app almost never means "give
+            // me another copy", it means the user clicked the icon
+            // again because the window went behind something. Opting
+            // *out* is a deliberate build decision.
+            allow_multiple_instances: false,
         }
     }
 }

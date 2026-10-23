@@ -36,6 +36,7 @@ pub mod modal_window;
 pub mod progress_window;
 pub mod prompt_window;
 pub mod retry_window;
+pub mod single_instance;
 pub mod splash;
 
 pub mod platform;

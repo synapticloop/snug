@@ -149,6 +149,7 @@ mod tests {
             "--splash-max",
             "--jvm-arg",
             "--download-jdk",
+            "--allow-multiple-instances",
             "--localization",
             "--emit-payload",
             "--dry-run",

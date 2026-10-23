@@ -153,6 +153,7 @@ pub fn build_payload(cli: &Cli) -> Result<SnugPayload> {
         behavior: LauncherBehavior {
             download_jdk: cli.download_jdk.into(),
             cache_dir: cli.cache_dir.clone(),
+            allow_multiple_instances: cli.allow_multiple_instances,
             ..LauncherBehavior::default()
         },
     };

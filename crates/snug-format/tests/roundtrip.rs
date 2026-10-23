@@ -47,6 +47,12 @@ fn sample_config() -> LauncherConfig {
                 try_common: true,
             },
             download_jdk: DownloadJdkMode::Auto,
+            // Deliberately `true`, not the `false` default: a
+            // round-trip test that only ever encodes one value cannot
+            // tell "the field was written" from "the field defaulted",
+            // and a single flipped bit in a bool is invisible either
+            // way.
+            allow_multiple_instances: true,
         },
     }
 }

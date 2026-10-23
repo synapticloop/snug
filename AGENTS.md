@@ -340,12 +340,22 @@ The launcher locates its data by scanning for the 8-byte magic
 +--------+----------------+--------------+--------------+----------------------+
 ```
 
-- `format_version` is currently `6`. Bump on incompatible wire changes.
+- `format_version` is currently `7`. Bump on incompatible wire changes.
   v4 added `auto_download_jdk: bool`, v5 replaced it with
   `download_jdk: DownloadJdkMode`, v6 added
-  `SnugPayload.localizations`. The decoder rejects a version *higher*
+  `SnugPayload.localizations`, v7 added
+  `LauncherBehavior.allow_multiple_instances`. The decoder rejects a version *higher*
   than the build understands, and the committed stub must be rebuilt
   whenever it moves.
+- v7 is a **hard** bump, unlike v6's additive `#[serde(default)]`
+  vector. Postcard encodes a struct as a positional sequence with no
+  field names, so a field added *anywhere* changes the payload length
+  and a v6 payload read by a v7 decoder runs past the end of the
+  buffer. Every new `LauncherBehavior` field therefore goes **last** in
+  the declaration: the byte layout of the existing fields stays
+  identical, which is what makes a wire bump reviewable. The flip side
+  is that `#[serde(default)]` buys no backwards compatibility here —
+  it only helps if a field is ever decoded by name.
 - `payload_crc32` is CRC32/IEEE of the postcard bytes; the launcher
   validates before decoding.
 - Payload is postcard-encoded
@@ -381,10 +391,12 @@ lookup. Both docs used to describe the appended layout; neither matched
 | 7 | Per-user cache + old-version cleanup           | **done** — cache entries expire. `cache::touch` stamps a cached JAR's mtime on **every** launch that uses it, and `cache::sweep` runs off a detached thread (rate-limited to once per 6h by a `.sweep` stamp file) to delete the ones no longer wanted. Policy: keep the most recently used `KEEP_RECENT` (3) entries — the running build's own entries count toward that depth — up to a per-app byte budget of `clamp(build_bytes * 3, 512 MB, 8 GB)`, and evict anything untouched for `MAX_UNUSED_AGE` (30 days) regardless of rank. The current build is never evicted; everything else is recoverable because a missing entry is re-extracted from the payload on the next launch. Sweeping is *not* triggered by the builder — `snug-cli` never writes to the cache, so the launcher is the sole owner of the policy. |
 | 8 | GitHub Actions CI (windows-latest release)     | planned    |
 | 9 | `Snug Quick Build` beginner drag-and-drop shim   | **done** — separate `crates/snug-dropper` crate. Drop a `.jar` or a folder of JARs on `Snug Quick Build.exe` and it runs `snug.exe --name "Example Application Name" --company "Example Company Pty Ltd" -o "<parent>/Example Application Name.exe" <input>` behind an indeterminate marquee on a worker thread, then reports with a `MessageBoxW`. Double-click opens a command window in the EXE's own folder. Two or more items, or one item that is neither a `.jar` nor a directory, get a dialog and *then* the terminal as a hand-off. A build failure or a missing `snug.exe` gets an error dialog and **no** terminal. Built as `snug-dropper.exe`; renamed to `Snug Quick Build.exe` at packaging time. Must ship in the same folder as `snug.exe`. |
-| 10 | Native macOS / Linux `snug` CLI builds    | **done** — `cargo build --workspace` and `cargo test --workspace --lib --bins --tests` pass on macOS, and the CLI produces a real `PE32+ executable (GUI) x86-64` end-to-end from a Mac. The count is platform-independent — the suite is pure Rust, so a Windows run reports the same **517 passed, 2 ignored** (measured on Windows at 0.15.4). Treat that number as a pinned checkpoint rather than a fact to restate: it moved four times in the week this line was written at 495, and every bump of it is a line edit here rather than a fact someone re-derived. `scripts/macos/build-macos.sh` stages two thin per-arch binaries into `release/macos-arm64/snug` and `release/macos-x86_64/snug` at a macOS 12.0 deployment floor — same binary name on every platform, platform in the directory, so docs never name two binaries. No universal2: macOS 27 is the last release with Rosetta 2, so arm64 is the future-proof slice and x86_64 only serves the four Intel models that top out at macOS 26. Windows-only surfaces are gated: the six Win32 GUI modules in `snug-launcher` use file-level `#![cfg(windows)]` (joining `jdk_install.rs` / `splash.rs`), while the three Windows-only *binaries* use per-item `#[cfg(windows)]` plus a real non-Windows `main`. `editpe` was made unconditional (pure-Rust PE parsing — `snug-cli` needs it to build EXEs anywhere) and `ureq` Windows-only. Homebrew tap / Developer ID notarization is follow-up; see "Build host". |
+| 10 | Native macOS / Linux `snug` CLI builds    | **done** — `cargo build --workspace` and `cargo test --workspace --lib --bins --tests` pass on macOS, and the CLI produces a real `PE32+ executable (GUI) x86-64` end-to-end from a Mac. The count is platform-independent — the suite is pure Rust, so a Windows run reports the same **525 passed, 2 ignored** (measured on Windows at 0.16.0). Treat that number as a pinned checkpoint rather than a fact to restate: it moved four times in the week this line was written at 495, and every bump of it is a line edit here rather than a fact someone re-derived. `scripts/macos/build-macos.sh` stages two thin per-arch binaries into `release/macos-arm64/snug` and `release/macos-x86_64/snug` at a macOS 12.0 deployment floor — same binary name on every platform, platform in the directory, so docs never name two binaries. No universal2: macOS 27 is the last release with Rosetta 2, so arm64 is the future-proof slice and x86_64 only serves the four Intel models that top out at macOS 26. Windows-only surfaces are gated: the six Win32 GUI modules in `snug-launcher` use file-level `#![cfg(windows)]` (joining `jdk_install.rs` / `splash.rs`), while the three Windows-only *binaries* use per-item `#[cfg(windows)]` plus a real non-Windows `main`. `editpe` was made unconditional (pure-Rust PE parsing — `snug-cli` needs it to build EXEs anywhere) and `ureq` Windows-only. Homebrew tap / Developer ID notarization is follow-up; see "Build host". |
 | 11 | macOS launcher runtime (`libjvm.dylib` + JNI) | **done, verified against a real JDK on macOS.** `platform/macos.rs` mirrors `platform/windows.rs` step for step: cache extraction + sweep, log, `Main-Class` resolution, JVM discovery, `libjvm.dylib` load via the same `jni` 0.22 invocation API, and the `main(String[])` / JavaFX `Application.launch` dispatch. `tests/macos_launch_e2e.rs` compiles a real class with `javac`, packages it with `jar`, hands it to the launcher, and asserts the JVM actually runs it — it is skipped rather than failed when no JDK is present. **Not implemented:** splash, the Adoptium download flow, and error dialogs (all Win32); `DownloadJdkMode::Auto`/`Force` degrade to discovery-only and *log* that. |
 | 12 | macOS `.app` bundle emitter | **done, verified by launching a real bundle.** The output extension selects the artefact: `-o MyApp.app` builds a macOS bundle, `-o MyApp.exe` a Windows one, and the *default* is the host's own — `snug app.jar` with no `-o` gives `app.app` on macOS and `app.exe` elsewhere. `macos_bundle.rs` writes `Contents/{Info.plist,MacOS/<App>,Resources/<App>.snugpayload,Resources/App.icns}` and ad-hoc signs it. The launcher is a **byte-copy** — unlike the Windows stub there is nothing to stamp, because a Mach-O has no resource directory and `editpe` is PE-only. `bin/launcher-stub-macos-<arch>` is embedded per `#[cfg(target_arch)]`, so each `snug` binary carries one launcher and can only build a `.app` for its own arch. |
 | 13 | macOS Adoptium JDK download | **the flow works; the dialogs do not exist yet.** `jdk_install.rs` now compiles on macOS. `adoptium_target()` sends this host's `os`/`architecture` in Adoptium's own spelling, macOS assets unpack as `.tar.gz` (via `tar` + `flate2`), `find_java_home` understands the `*.jdk/Contents/Home` bundle and `bin/java`, and `open_in_browser` uses `/usr/bin/open`. Verified live: the query returns the correct `x64_mac_hotspot` asset, and the tarball/extraction path is covered by tests that build a real `.tar.gz` in Adoptium's shape. **Still Win32:** the splash, the download dialogs, and the error dialog — so `Auto` logs that it has nothing to ask with and falls back to discovery, while `Force` downloads and logs its progress. See the Backlog for the AppKit route. |
+
+| 14 | Single-instance enforcement (`--allow-multiple-instances`) | **done on Windows; detection-only on macOS.** Single-instance is the **default** (`allow_multiple_instances: false`): a second launch brings the running instance's window to the front and exits `0`. `--allow-multiple-instances` opts out, and then `claim` short-circuits before touching the filesystem. `single_instance.rs` is two halves that may disagree on purpose: `claim` (detection — a `File::try_lock` on `<cache_root>/instance.lock`) and `activate_existing` (raising the other window). The gate runs **first** in both `platform/windows.rs` and `platform/macos.rs`, before extraction and before the log file exists, because a double-click deserves an instant answer and must not pay for a 300 MB copy first. **Identity is `--company` + `--name`**, i.e. the cache root — *not* the executable path — so two builds with different metadata run side by side. The lock file is deliberately invisible to `cache::sweep`, which only considers hash-named directories. Enforcement **fails open**: an unwritable cache directory returns `Claim::Unavailable` and the app launches anyway. Verified end-to-end on Windows with a real Swing demo against GraalVM 25: the second launch logged `activated window of the running instance (ok=true)`, exited `0`, and the demo's log recorded exactly **one** `jvm-start`; the `--allow-multiple-instances` build recorded **two**. |
 
 ## Backlog
 
@@ -447,6 +459,40 @@ still open belongs here.
   is a Windows build product.
 
 **macOS**
+- **The committed `bin/launcher-stub-macos-<arch>` binaries are stale
+  after the v7 wire bump.** `FORMAT_VERSION` is compiled *into* the
+  launcher, so a v6 stub rejects a v7 payload outright — and nothing
+  warns until the `.app` fails to start. `scripts/macos/build-macos.sh`
+  rebuilds and re-stages both stubs before compiling `snug-cli`, so the
+  release path self-heals; a Mac developer who reaches for a bare
+  `cargo build -p snug-cli` instead will not. Regenerate them on a Mac
+  the next time one is available. The Windows stub has no such hazard:
+  `scripts\windows\refresh-stub.ps1` is runnable here and was run.
+- **`single_instance::activate_existing` is a logged no-op on macOS.**
+  Detection works there — `claim` is pure std, so a second launch
+  correctly refuses to start a second JVM — but nothing raises the
+  first instance's window, so a double-click currently looks like a
+  no-op. The Windows version is `EnumWindows` + path match +
+  `SetForegroundWindow`; the macOS equivalent is
+  `NSRunningApplication::activateWithOptions:`.
+  - It was **not** written blind on purpose. `NSRunningApplication`
+    needs the `NSRunningApplication` feature on `objc2-app-kit`,
+    which is not currently enabled, and macOS code cannot be
+    `cargo check`ed from a Windows box — the whole macOS story in
+    this repo is "built on macOS". Shipping uncompiled Objective-C
+    interop would be a silent breakage dressed as a finished feature,
+    which is the exact failure this file keeps warning about. So the
+    gap is *documented and logged* instead.
+  - The route, for whoever has a Mac: add
+    `features = ["NSRunningApplication", "NSApplication"]` to the
+    `objc2-app-kit` dependency in `crates/snug-launcher/Cargo.toml`,
+    then find the peer by `bundleURL` matching our own `.app` (which
+    avoids parsing `CFBundleIdentifier` out of `Info.plist`), skip
+    `processIdentifier == getpid()`, and call
+    `activateWithOptions:` with `NSApplicationActivateAllWindows |
+    NSApplicationActivateIgnoringOtherApps`. macOS restores a
+    minimised app on its own, so there is no `SW_RESTORE` analogue
+    to hand-roll.
 - **The macOS dialogs are real `NSWindow`s — deliberately not `NSAlert`s.**
   `appkit.rs` is the macOS half of the `jdk_install::ui` seam. The
   metadata-failed, retry, terminal-failure, **install-consent** and
@@ -1950,18 +1996,11 @@ every compile rather than one that only runs under `cargo test`. The
 layout guards in `snug_preview`'s `windows_impl.rs` are full of these.
 
 **Formatting is enforced.** `check.ps1` runs `cargo fmt --all --check` as a
-real gate. It was advisory for as long as the tree carried pre-existing drift
-across 63 files (measured 2026-10-18), because making it a gate then would
-have failed on code nobody had touched. `cargo fmt --all` landed as its own
-commit once the drift was the only thing left, so a failure now means a real
-change went in unformatted. `check.ps1 -Format` rewrites the tree — use it
-*before* committing, and follow it with `refresh-stub.ps1`, because any
+real gate, and CI runs it first, before the build. So a formatting failure
+fails the build, and it means *your* change — the tree is clean, so there
+is no inherited state to blame. `check.ps1 -Format` rewrites the tree; use
+it *before* committing, and follow it with `refresh-stub.ps1`, because any
 `snug-launcher` file it touches moves `bin/launcher-stub.source`.
-
-**CI now gates on fmt too.** `windows.yml` runs `cargo fmt --all --check`
-first, before the build, because rustfmt only parses source and fails in
-seconds where the later steps take minutes. That closes the gap where the
-local script enforced formatting and Actions did not.
 
 `snug-format` has integration roundtrip tests in
 `crates/snug-format/tests/roundtrip.rs`. `snug-cli` has unit tests for
