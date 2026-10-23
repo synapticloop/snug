@@ -117,7 +117,7 @@ fn validate_cache_dir(s: &str) -> Result<PathBuf, String> {
                   \n\
                   USAGE:\n\
                   \n  \
-                  snug.exe [OPTIONS] [JAR|DIR]:
+                  snug.exe [OPTIONS] [JAR|DIR]
                   \n    \
                   snug.exe MyApp.jar\n\
                   \n  \
@@ -125,7 +125,7 @@ fn validate_cache_dir(s: &str) -> Result<PathBuf, String> {
                   snug.exe --help\n  \
                   or\n    \
                   snug.exe -h\n  \
-                  for this complete reference.\n\
+                  for command-line help.\n\
                   ",
     // Footer printed after the options list. Keeps the common
     // workflows in front of the user without re-listing every flag;
@@ -135,7 +135,8 @@ fn validate_cache_dir(s: &str) -> Result<PathBuf, String> {
                   \n  \
                   snug App.jar --dry-run                      # validate, don't build\n  \
                   snug App.jar --emit-payload > payload.bin   # write encoded payload\n  \
-                  snug --init-options                         # write a starter snug.options\n  \n                  snug --init-localisations --init-localisations-tag de  # starter localisations/\n\
+                  snug --init-options                         # write a starter snug.options\n\
+                  snug --init-localisations --init-localisations-tag de  # starter localisations/\n\
                   \n\
                   Each `--localisation your-locale.txt` you pass is embedded in the\n\
                   launcher alongside the built-in English baseline; the user's Windows\n\
@@ -204,8 +205,8 @@ pub struct Cli {
     ///
     ///   snug.exe MyApp.jar
     ///
-    /// Do not use --input and a positional input together on
-    /// the same command line.
+    /// Equivalent to --input <JAR|DIR>. Do not supply both forms
+    /// on the same command line.
     #[arg(value_name = "JAR|DIR", help_heading = "INPUT / OUTPUT")]
     pub jar: Option<PathBuf>,
 
@@ -444,240 +445,170 @@ pub struct Cli {
     )]
     pub splash_max: String,
 
-    /// If the launcher can't find a compatible JDK at runtime, pop a
-    /// `TaskDialog` and offer to download Eclipse Temurin from
-    /// `api.adoptium.net`, verify SHA-256, extract to
-    /// `%LOCALAPPDATA%\snug\jdk\<version>\`, and retry.
+    /// Controls downloading Java when the application starts.
     ///
     /// Modes:
+    ///   - auto   Offer to download if no compatible Java runtime is found.
+    ///   - force  Always offer download if a cached snug version is not available
+    ///   - off    Disable downloading; Java must already be installed.
     ///
-    /// - omitted — `auto`: pop the dialog only if JVM discovery fails.
+    /// The download is verified using SHA-256 and installed in a
+    /// per-user directory. The mode is required when this flag is used.
     ///
-    /// - `--download-jdk=auto` — same as above, explicit.
+    /// Examples:
+    ///   --download-jdk auto
+    ///   --download-jdk=off
     ///
-    /// - `--download-jdk=force` — always pop the dialog, bypassing
-    ///   JVM discovery. Useful when the end user wants to install
-    ///   Temurin regardless of what's on `JAVA_HOME` / `PATH`.
-    ///
-    /// - `--download-jdk=off` — no download flow at all.
-    ///
-    /// **The value is required.** `--download-jdk` on its own is an
-    /// error, not a synonym for `auto`.
-    ///
-    /// That is a deliberate change from the earlier shape, where a bare
-    /// `--download-jdk` meant `auto` and the value had to be attached
-    /// with `=` (`require_equals = true`). The cost of that arrangement
-    /// was that `--download-jdk force` did not mean what it looked
-    /// like: `require_equals` stops clap consuming the next token, so
-    /// the flag silently became `auto` and `force` fell through to the
-    /// positional `[JAR|DIR]` slot. Depending on what else was on the
-    /// line the user got `input path does not exist: force`, or
-    /// `unexpected argument '<jar>' found`, or — the worst, because
-    /// nobody sees a command line — `the argument '--input <JAR|DIR>'
-    /// cannot be used with '[JAR|DIR]'` out of a shared options file.
-    /// Every one of those names something the user never typed.
-    ///
-    /// Requiring the value trades that for an error that points at the
-    /// flag you actually wrote. `--download-jdk force` now works, and
-    /// `--download-jdk app.jar` (mode forgotten) becomes `invalid
-    /// value 'app.jar' for '--download-jdk <DOWNLOAD_JDK>'` — still a
-    /// mistake, but one the message names the cause of.
-    ///
-    /// `auto` by default, because that is the portable choice: an EXE
-    /// that finds a compatible JVM runs silently, and one that doesn't
-    /// offers to install Temurin rather than dying with an error
-    /// dialog. Pass `--download-jdk=off` to cut a developer-facing
-    /// build down to "Java must already be installed".
+    /// Default: auto
     #[arg(
         long = "download-jdk",
         value_enum,
         default_value_t = CliDownloadJdkMode::Auto,
         num_args = 1,
-        help_heading = "Build behaviour"
+        help_heading = "RUNTIME AND BUILD BEHAVIOUR"
     )]
     pub download_jdk: CliDownloadJdkMode,
 
-    /// Allow more than one instance of the application to run at once.
+    /// Allow more than one copy of the application to run.
     ///
-    /// By default snug runs **one** instance per application. Launching
-    /// the produced EXE (or `.app`) again while it is already running
-    /// brings the running instance's window to the front and exits,
-    /// rather than starting a second JVM — which is what almost every
-    /// desktop application means by a second click on its icon, and
-    /// what stops the user ending up with two copies writing to the
-    /// same files.
+    /// By default, opening the application a second time brings the
+    /// existing window to the front instead of starting another JVM.
     ///
-    /// Pass this flag when a second copy is genuinely wanted: a server,
-    /// a command-line tool, or an app that is happy to be launched
-    /// twice.
+    /// Use this option for applications that need concurrent copies,
+    /// such as servers or tools that run independently.
     ///
-    /// The choice is stamped into the payload at build time and applies
-    /// to every launch of that EXE — the end user cannot override it.
-    /// Instances are identified by `--company` and `--name`, so two
-    /// builds with different metadata are independent of each other and
-    /// can run side by side.
-    #[arg(long = "allow-multiple-instances", help_heading = "Build behaviour")]
+    /// Default: one instance per application
+    #[arg(
+        long = "allow-multiple-instances",
+        help_heading = "RUNTIME AND BUILD BEHAVIOUR"
+    )]
     pub allow_multiple_instances: bool,
 
-    /// Override the per-user cache root the launcher extracts JARs into.
+    /// Choose where the launcher stores extracted JAR files.
     ///
-    /// By default the launcher uses
-    /// `%LOCALAPPDATA%\snug\<company>\<app>\` on Windows (and
-    /// `$HOME/.cache/snug/<company>/<app>/` elsewhere). Point this at a
-    /// different volume when the system drive is small or slow — a
-    /// large fat JAR is copied there in full on first launch, and
-    /// snug's retention policy keeps several generations.
+    /// By default, Windows uses:
+    ///   %LOCALAPPDATA%\snug\<company>\<app>\
     ///
-    /// The path is stamped into the payload at build time, so it must
-    /// be **absolute**: a relative path would resolve against whatever
-    /// working directory the end user happens to launch the EXE from.
-    /// Must exist or be creatable at runtime; snug creates the
-    /// directory tree on first launch.
+    /// Use an absolute path. The directory need not exist when
+    /// building; the launcher creates it when the application runs.
+    ///
+    /// Useful for storing large application files on another drive.
     #[arg(
         long = "cache-dir",
         value_name = "DIR",
         value_parser = validate_cache_dir,
-        help_heading = "Build behaviour"
+        help_heading = "RUNTIME AND BUILD BEHAVIOUR"
     )]
     pub cache_dir: Option<PathBuf>,
 
-    /// Localization bundle to embed in the launcher, formatted as a
-    /// flat `key = value` text file (Java-`.properties`-style).
+    /// Embed translated messages for the native launcher.
     ///
-    /// Filename convention: `snug-localisations.<tag>.txt` where
-    /// `<tag>` is a BCP 47 locale (`en`, `en-US`, `pt-BR`, `de`,
-    /// `ja`, ...). The tag is taken from the filename — the CLI does
-    /// not inspect its contents to guess.
+    /// Accepts a file or a directory and can be repeated. Files must
+    /// be named snug-localisations.<tag>.txt (for example, de or pt-BR).
+    /// Directories are searched at the top level only, and every file
+    /// in them must follow this naming convention.
     ///
-    /// Repeatable. Each bundle is embedded verbatim into the payload;
-    /// at runtime the launcher builds an ordered lookup list of
-    /// bundles (full BCP 47 tag → primary subtag → built-in English
-    /// baseline) and walks them on every lookup. The built-in English
-    /// baseline is always embedded by the CLI, so a build with no
-    /// `--localisation` flag still produces a working launcher.
+    /// The launcher uses the user's Windows language, falling back
+    /// to the built-in English messages. English is always included.
+    /// Snug warns about missing keys or mismatched placeholders.
     ///
-    /// Pass a single `--localisation your-locale.txt` for a
-    /// full-translation build, many (one per locale) to ship a
-    /// multilingual launcher, or a directory containing
-    /// `snug-localisations.<tag>.txt` files. A directory entry is
-    /// scanned top-level only (subdirectories are not searched); every
-    /// file in the directory must match the pattern (a stray `.bak`,
-    /// README, or typo'd name fails the build with a clear error),
-    /// and the expanded list combines freely with explicit-file flags.
-    /// Use the bare-stub `snug-localisations.en.txt` shipped in this
-    /// repo as a template for the keys.
+    /// Examples:
+    ///   --localisation snug-localisations.de.txt
+    ///   --localisation localisations
     ///
-    /// The CLI warns at build time about any keys the bundle is
-    /// missing relative to the built-in English baseline — keep the
-    /// keys in sync so end users never see raw key text instead of a
-    /// localised message.
+    /// See --init-localisations and --list-tokens.
     #[arg(
         long = "localisation",
         value_name = "TXT|DIR",
         value_parser = crate::localization::validate_localization_path,
-        help_heading = "Build behaviour"
+        help_heading = "RUNTIME AND BUILD BEHAVIOUR"
     )]
     pub localizations: Vec<std::path::PathBuf>,
 
-    /// Write the encoded embedded payload to stdout instead of writing a
-    /// file or building an EXE. Useful for piping into other tools or for
-    /// inspecting the format.
-    #[arg(long = "emit-payload", help_heading = "Build behaviour")]
+    /// Write the encoded application payload to standard output
+    /// instead of creating an executable.
+    ///
+    /// For advanced tooling or inspecting the payload format.
+    ///
+    /// Example:
+    ///   snug.exe MyApp.jar --emit-payload > payload.bin
+    #[arg(long = "emit-payload", help_heading = "RUNTIME AND BUILD BEHAVIOUR")]
     pub emit_payload: bool,
 
-    /// Validate inputs and print what would be built, but write nothing.
-    #[arg(long = "dry-run", help_heading = "Build behaviour")]
+    /// Validate the inputs and show what would be built, without
+    /// creating an executable or writing build output.
+    ///
+    /// Example:
+    ///   snug.exe MyApp.jar --dry-run
+    #[arg(long = "dry-run", help_heading = "RUNTIME AND BUILD BEHAVIOUR")]
     pub dry_run: bool,
 
-    /// List every class in the input JAR(s) that declares a
-    /// `public static void main(String[])`, then report whether the
-    /// main class snug would use is one of them.
+    /// List classes in the input JARs that declare a Java main method.
     ///
-    /// Use it to pick a value for `--main-class` on a fat JAR that
-    /// ships several entry points, or to confirm the one already
-    /// configured. The matching class is marked inline with `<--`.
+    /// Marks the configured entry point when it is found. Useful for
+    /// choosing or checking --main-class. JavaFX applications can have
+    /// valid entry points without declaring a main method.
     ///
-    /// Purely diagnostic: it writes no files, builds no EXE, and
-    /// never fails a build — including when your main class is absent
-    /// from the list. That case is genuinely ambiguous, because a
-    /// JavaFX `Application` subclass has no `main` method and snug's
-    /// launcher supports those directly.
+    /// Diagnostic only: does not create an executable.
     ///
-    /// Reads only the front of each `.class` entry, so it costs about
-    /// a second on a 5,000-class fat JAR and nothing at all on builds
-    /// that don't pass this flag.
-    #[arg(long = "find-main", help_heading = "Build behaviour")]
+    /// Example:
+    ///   snug.exe MyApp.jar --find-main
+    #[arg(long = "find-main", help_heading = "RUNTIME AND BUILD BEHAVIOUR")]
     pub find_main: bool,
 
-    /// Print the placeholder (`{token}`) contract for the built-in
-    /// English baseline: every key, which tokens its value uses, and
-    /// every distinct token in one list.
+    /// List the built-in English launcher message keys and the
+    /// replacement placeholders used by each message.
     ///
-    /// A bundle's keys are only half of what has to match; the other
-    /// half is the `{version}` / `{size_mb}` / `{attempt}` slots inside
-    /// each value. Nothing documented that outside the English file, so
-    /// authoring a translation meant reading 107 lines and spotting the
-    /// braces by eye.
+    /// When translating, preserve placeholders such as {version}
+    /// and {size_mb} in the corresponding translated message.
     ///
-    /// Diagnostic, like `--find-main`: reads only the compiled-in
-    /// baseline, touches no JAR and no options file, writes nothing, and
-    /// cannot fail a build. Runs in microseconds with no build context
-    /// at all — `snug --list-tokens` is the whole invocation.
+    /// No input JAR is required and no files are created.
     ///
-    /// The build-time counterpart is the placeholder warning snug emits
-    /// for `--localisation` bundles that disagree with the baseline.
-    #[arg(long = "list-tokens", help_heading = "CLI tooling")]
+    /// Example:
+    ///   snug.exe --list-tokens
+    #[arg(long = "list-tokens", help_heading = "CLI TOOLING")]
     pub list_tokens: bool,
 
-    /// Print snug's own version (from `Cargo.toml`) and exit.
+    /// Display Snug's own version number and exit.
     ///
-    /// Distinct from `--version <APP-VERSION>`, which sets the
-    /// wrapped application's version. Snug's version is otherwise
-    /// shown in the no-args help output.
-    #[arg(long = "snug-version", action = clap::ArgAction::Version, help_heading = "CLI tooling")]
+    /// Unlike --version, this does not set the version of the
+    /// application being packaged.
+    ///
+    /// Example:
+    ///   snug.exe --snug-version
+    #[arg(long = "snug-version", action = clap::ArgAction::Version, help_heading = "CLI TOOLING")]
     pub snug_version: (),
 
-    /// Path to a snug options file, used **instead of** the default
-    /// lookup. Naming a file means that file only: the OS-specific
-    /// `snug.<os>.options` is not consulted as well, so a build's
-    /// result never depends on which machine ran it.
+    /// Use a specific Snug options file instead of automatic lookup.
     ///
-    /// With no flag, snug reads up to two files — `snug.options` for
-    /// every platform, then `snug.<os>.options` for this host
-    /// (`snug.macos.options`, `snug.windows.options`,
-    /// `snug.linux.options`) — looking in the snug executable's own
-    /// directory first, then the current working directory, for each
-    /// name in turn. A missing file is not an error.
+    /// Without this flag, Snug reads snug.options followed by the
+    /// host-specific file (such as snug.windows.options). It looks
+    /// in the Snug executable's directory first, then the current
+    /// directory, for each filename.
     ///
-    /// Precedence, highest first: command line, then
-    /// `snug.<os>.options`, then `snug.options`. An OS file is a partial
-    /// override — it carries only the values that differ, and the rest
-    /// still come from `snug.options`.
+    /// Priority, highest first:
+    ///   Command line > host-specific options > general options
     ///
-    /// Format: one option per line, parsed as if it were supplied on
-    /// the command line (so `--name "My App"` works, quoting and
-    /// escaping included). Lines starting with `#` are comments.
-    #[arg(long = "options", value_name = "PATH", help_heading = "CLI tooling")]
+    /// Each line contains one command-line option; lines beginning
+    /// with # are comments. A named --options file is used alone.
+    ///
+    /// Example:
+    ///   --options config/build.options
+    #[arg(long = "options", value_name = "PATH", help_heading = "CLI TOOLING")]
     pub options: Option<PathBuf>,
 
-    /// Write the embedded `snug.options` example file to disk, then
-    /// exit without performing a build.
+    /// Create a starter snug.options file containing examples
+    /// of available build options, then exit without building.
     ///
-    /// The example covers every CLI flag with a commented-out
-    /// demonstration, suitable for dropping into a project root and
-    /// editing. The path is optional: `--init-options` writes
-    /// `./snug.options` (the CWD default lookup path), and
-    /// `--init-options=cfg/build.options` writes a custom path.
+    /// Defaults to ./snug.options. Existing files are not overwritten.
+    /// Use --init-options-force to overwrite or --init-options-stdout
+    /// to print the template instead of writing a file.
     ///
-    /// By default refuses to overwrite an existing file; pass
-    /// `--init-options-force` to overwrite silently. Pass
-    /// `--init-options-stdout` to print to stdout instead of writing
-    /// (useful for piping, version control, or previewing).
+    /// Examples:
+    ///   snug.exe --init-options
+    ///   snug.exe --init-options=cfg/build.options
     ///
-    /// When this flag is set, the CLI bypasses options-file loading
-    /// (no point reading a file we're about to write) and the
-    /// JAR-required check — you don't need a fat JAR to bootstrap a
-    /// config.
+    /// No input JAR is required.
     #[arg(
         long = "init-options",
         value_name = "PATH",
@@ -685,41 +616,37 @@ pub struct Cli {
         default_missing_value = "snug.options",
         conflicts_with = "jar",
         conflicts_with = "input",
-        help_heading = "CLI tooling"
+        help_heading = "CLI TOOLING"
     )]
     pub init_options: Option<String>,
 
-    /// Overwrite an existing file at the `--init-options` target
-    /// instead of refusing. Has no effect without `--init-options`.
-    #[arg(long = "init-options-force", help_heading = "CLI tooling")]
+    /// Allow --init-options to overwrite an existing file.
+    ///
+    /// Has no effect without --init-options.
+    #[arg(long = "init-options-force", help_heading = "CLI TOOLING")]
     pub init_options_force: bool,
 
-    /// Print the `--init-options` example to stdout instead of
-    /// writing it to disk. Has no effect without `--init-options`.
-    #[arg(long = "init-options-stdout", help_heading = "CLI tooling")]
+    /// Print the starter options template to standard output
+    /// instead of writing it to disk.
+    ///
+    /// Has no effect without --init-options.
+    #[arg(long = "init-options-stdout", help_heading = "CLI TOOLING")]
     pub init_options_stdout: bool,
 
-    /// Write a starter `localisations/` directory of
-    /// `snug-localisations.<tag>.txt` bundles, then exit without
-    /// performing a build.
+    /// Create starter launcher localisation files, then exit.
     ///
-    /// The English baseline is always written; add more languages with
-    /// `--init-localisations-tag de` (repeatable). The directory
-    /// contains only files matching `snug-localisations.<tag>.txt`,
-    /// so it can be handed straight to `--localisation
-    /// localisations` on a later build.
+    /// Defaults to a ./localisations directory containing the
+    /// English template. Add languages with --init-localisations-tag.
+    /// The generated directory can be passed to --localisation.
     ///
-    /// The directory defaults to `./localisations` — the directory
-    /// `snug` was invoked from.
-    /// Pass a path to write elsewhere.
+    /// Existing files are not overwritten unless
+    /// --init-localisations-force is supplied. Use
+    /// --init-localisations-stdout to print templates instead.
     ///
-    /// By default refuses to overwrite existing bundles; pass
-    /// `--init-localisations-force` to overwrite silently. Pass
-    /// `--init-localisations-stdout` to print to stdout instead of
-    /// writing (useful for piping or version control).
+    /// Example:
+    ///   snug.exe --init-localisations
     ///
-    /// Can be combined with `--init-options` to lay down a whole
-    /// project skeleton in one call.
+    /// Can be combined with --init-options.
     #[arg(
         long = "init-localisations",
         value_name = "DIR",
@@ -727,32 +654,38 @@ pub struct Cli {
         default_missing_value = "localisations",
         conflicts_with = "jar",
         conflicts_with = "input",
-        help_heading = "CLI tooling"
+        help_heading = "CLI TOOLING"
     )]
     pub init_localizations: Option<String>,
 
-    /// Scaffold an extra `snug-localisations.<tag>.txt` translation
-    /// template in the `--init-localisations` directory. Repeatable.
-    /// The template carries every baseline key with the English value
-    /// in place, ready to translate. Has no effect without
-    /// `--init-localisations`.
+    /// Add another language to the starter localisation files.
+    ///
+    /// Repeatable. Each template initially contains English messages,
+    /// ready to translate. Use language tags such as de, fr or pt-BR.
+    ///
+    /// Example:
+    ///   --init-localisations-tag de
+    ///
+    /// Has no effect without --init-localisations.
     #[arg(
         long = "init-localisations-tag",
         value_name = "TAG",
-        help_heading = "CLI tooling"
+        help_heading = "CLI TOOLING"
     )]
     pub init_localizations_tag: Vec<String>,
 
-    /// Overwrite existing bundles in the `--init-localisations`
-    /// directory instead of refusing. Has no effect without
-    /// `--init-localisations`.
-    #[arg(long = "init-localisations-force", help_heading = "CLI tooling")]
+    /// Allow --init-localisations to overwrite existing
+    /// localisation templates.
+    ///
+    /// Has no effect without --init-localisations.
+    #[arg(long = "init-localisations-force", help_heading = "CLI TOOLING")]
     pub init_localizations_force: bool,
 
-    /// Print the `--init-localisations` templates to stdout instead
-    /// of writing them to disk. Has no effect without
-    /// `--init-localisations`.
-    #[arg(long = "init-localisations-stdout", help_heading = "CLI tooling")]
+    /// Print localisation templates to standard output
+    /// instead of writing files.
+    ///
+    /// Has no effect without --init-localisations.
+    #[arg(long = "init-localisations-stdout", help_heading = "CLI TOOLING")]
     pub init_localizations_stdout: bool,
 }
 
