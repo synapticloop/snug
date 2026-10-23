@@ -130,6 +130,14 @@ fn help_flag_prints_the_full_help() {
 
     // The short help still carries the about text, which the removed
     // no-args path used to be the only way to see.
+    //
+    // Asserted structurally rather than by matching the wording: the
+    // about is prose that gets reworded, and pinning it here meant a
+    // copy edit broke a test about *which help form runs*, not about
+    // the copy. The real distinction is the lead — `-h` opens with the
+    // one-line `about`, while `--help` opens with the `long_about` art.
+    // So reject both of the leads that would mean `-h` is not the short
+    // form, and let the prose itself stay free to change.
     let short = Command::new(snug_bin())
         .arg("-h")
         .output()
@@ -140,9 +148,19 @@ fn help_flag_prints_the_full_help() {
         short.status
     );
     let short_stdout = String::from_utf8_lossy(&short.stdout);
+    let first_line = short_stdout
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or_default();
     assert!(
-        short_stdout.contains("Wrap a Java fat JAR"),
-        "short help should contain the about text, got: {short_stdout}"
+        !first_line.is_empty() && !first_line.starts_with("Usage:") && !first_line.starts_with('.'),
+        "short help should lead with the about prose, not the Usage line \
+         or the long-help art; got first line {first_line:?} in:\n{short_stdout}"
+    );
+    assert!(
+        short_stdout.contains("Usage: snug.exe"),
+        "short help should still print the Usage line, got: {short_stdout}"
     );
 }
 
@@ -162,9 +180,12 @@ fn snug_version_flag_prints_version_and_exits() {
         stdout.contains("snug "),
         "stdout should contain 'snug <version>', got: {stdout}"
     );
-    // Should NOT print the full help text — just the version.
+    // Should NOT print any help at all -- just the version. Asserted on
+    // the Usage line rather than the about prose, for the same reason as
+    // the short-help check above: `--help` and `-h` now differ precisely
+    // in which lead they carry, and neither lead is worth pinning.
     assert!(
-        !stdout.contains("Wrap a Java fat JAR"),
-        "--snug-version should not print the full help, got: {stdout}"
+        !stdout.contains("Usage:"),
+        "--snug-version should not print help, got: {stdout}"
     );
 }
