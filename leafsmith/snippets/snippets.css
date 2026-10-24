@@ -111,3 +111,29 @@
 .snippet-menu > ul li a:hover {
   background: #f2f2f2;
 }
+
+/* A link that looks like a button.
+ *
+ * The theme's topbar styles every link it holds at 26px, which is right for the site title but
+ * far too large for a link sitting beside a button. The .leafsmith-topbar prefix raises the
+ * specificity so this beats that rule, and the box is the same as .snippet-menu > summary so the
+ * two controls read as a pair rather than as a button and a stray word.
+ */
+.leafsmith-topbar .snippet-button {
+  display: inline-block;
+  padding: 5px 12px;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: normal;
+  line-height: 1.6;
+  text-align: left;
+  text-decoration: none;
+  opacity: .75;
+  white-space: nowrap;
+}
+
+.leafsmith-topbar .snippet-button:hover {
+  opacity: 1;
+}

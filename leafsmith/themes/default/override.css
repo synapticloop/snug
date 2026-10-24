@@ -1,0 +1,33 @@
+/* The site's colours, in one place.
+ *
+ * The theme reads these variables everywhere it draws something, so
+ * changing a value here recolours the whole site. They are written out in
+ * their own file, rather than left in the theme's stylesheet, so that
+ * changing the look and feel does not mean reading theme code.
+ *
+ * Every page links this file, and a project's own stylesheet is linked after
+ * it, so anything a project sets for itself still wins.
+ */
+:root {
+    --bg: #ffffff;
+    --ink: #24362c;
+    --ink-strong: #183b2b;
+    --muted: #52685c;
+    --quiet: #82948a;
+    --line: #d5e0d9;
+    --panel: #eef4ef;
+    --code-bg: #f4f6f4;
+    --accent: #28764e;
+
+    /* The three grounds of a page, one for each of its areas.
+     *
+     * --bg-sidebar is the column on the left, which holds the chapter list;
+     * --bg-toc is the column on the right, which holds the headings on this
+     * page; --bg-content is the band in the middle, which holds the reading
+     * column. Each is a full column of the page rather than a panel around a
+     * list, so the two sides can be set to different colours and the reading
+     * column keeps its own in the middle. */
+    --bg-sidebar: #f5f9f4;
+    --bg-toc: #f5f9f4;
+    --bg-content: #ffffff;
+}

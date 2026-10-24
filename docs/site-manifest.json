@@ -1,9 +1,10 @@
 {
   "generator": "Leafsmith 1.0.0",
   "pages": [
-    {"title": "SayHellotoSnug", "file": "index.html"},
+    {"title": "Say Hello to Snug", "file": "index.html"},
+    {"title": "Your First Snug Application", "file": "your-first-snug-application.html"},
     {"title": "SECTION 1: ABOUT THIS BOOK", "file": "section-1-about-this-book.html"},
-    {"title": "README.1ST", "file": "readme-1st.html"},
+    {"title": "About This Book", "file": "about-this-book.html"},
     {"title": "SECTION 2: BUILDING WITH SNUG", "file": "section-2-building-with-snug.html"},
     {"title": "Building an Application with Snug", "file": "building-an-application-with-snug.html"},
     {"title": "SECTION 3: CUSTOMISING THE SNUG USER EXPERIENCE", "file": "section-3-customising-the-snug-user-experience.html"},
@@ -16,12 +17,13 @@
     {"title": "SECTION 7: TECHNICAL DETAILS", "file": "section-7-technical-details.html"},
     {"title": "Snug Technical Details", "file": "snug-technical-details.html"},
     {"title": "SECTION 8: APPENDICES", "file": "section-8-appendices.html"},
-    {"title": "Command Line Options Reference", "file": "command-line-options-reference.html"},
+    {"title": "Command-Line Options Reference", "file": "command-line-options-reference.html"},
     {"title": "Building Snug from Source", "file": "building-snug-from-source.html"},
     {"title": "Definitions", "file": "definitions.html"},
     {"title": "Copyright, Licensing, and Third-Party Notices", "file": "copyright-licensing-and-third-party-notices.html"},
     {"title": "About Snug", "file": "about-snug.html"},
+    {"title": "Afterword: On Documentation", "file": "afterword-on-documentation.html"},
     {"title": "End Plate", "file": "end-plate.html"}
   ],
-  "warnings": 35
+  "warnings": 44
 }
