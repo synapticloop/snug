@@ -117,7 +117,7 @@
  * The theme's topbar styles every link it holds at 26px, which is right for the site title but
  * far too large for a link sitting beside a button. The .leafsmith-topbar prefix raises the
  * specificity so this beats that rule, and the box is the same as .snippet-menu > summary so the
- * two controls read as a pair rather than as a button and a stray word.
+ * two controls read as a pair rather than as a button and a stray word. this is for github
  */
 .leafsmith-topbar .snippet-button {
   display: inline-block;
