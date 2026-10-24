@@ -101,15 +101,11 @@ jobs:
         run: cargo test --workspace --lib --bins --tests --no-fail-fast
 
 
-      # The real pipeline. This is what proves the stub, the three icon
-      # stamps and the staged release folder all agree - steps 1-10 of the
-      # script, including `verify_icons` and the embedded-stub check.
+      # This is cheap -- it hashes the launcher source and compares it with
+      # the recorded fingerprint -- and it runs *before* the release pipeline
+      # below, which is the expensive step. A stale stub should fail in
+      # seconds, not after a full release build.
       #
-      # It needs the packaged demo JAR, which is committed, and the
-      # `snug.options` + `snug.windows.options` pair, likewise.
-      - name: Run the Windows release pipeline
-        run: .\scripts\windows\build.cmd
-
       # The committed stub must correspond to the *current* launcher source.
       #
       # This used to compare the stub's bytes against a fresh build, which
@@ -129,24 +125,26 @@ jobs:
       # editing platform\windows.rs and shipping last release's launcher, is
       # the one that actually happens.
       #
-      # No here-string here: see above.
+      # The comparison itself lives in scripts\windows\check-stub-pair.ps1.
+      # It used to live here, in YAML, which meant there were two copies of
+      # the rule: one in a file the shell had to re-implement, and one in a
+      # script the local loop could not reach. One implementation, three
+      # callers -- this step, scripts\windows\check.ps1, and the pre-push
+      # hook that refuses a push carrying a stale stub.
       - name: The committed stub matches the current launcher source
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          . .\scripts\windows\launcher-source-fingerprint.ps1
-          $current = Get-LauncherSourceFingerprint -Repo (Get-Location).Path
-          $recordedPath = 'bin\launcher-stub.source'
-          if (-not (Test-Path $recordedPath)) {
-            Write-Error "no $recordedPath -- run scripts\windows\refresh-stub.ps1 and commit it."
-            exit 1
-          }
-          $recorded = (Get-Content $recordedPath -Raw).Trim()
-          if ($current -ne $recorded) {
-            Write-Error "bin\launcher-stub-windows-x86_64.exe is stale.`n`n  launcher source now: $current`n  stub was built from: $recorded`n`nThe launcher source changed without the committed stub being rebuilt, so a`nclone would embed last release's launcher. Run scripts\windows\refresh-stub.ps1 and`ncommit both files."
-            exit 1
-          }
-          Write-Host "committed stub matches the current launcher source: $current"
+          ./scripts/windows/check-stub-pair.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # The real pipeline. This is what proves the stub, the three icon
+      # stamps and the staged release folder all agree - steps 1-10 of the
+      # script, including `verify_icons` and the embedded-stub check.
+      #
+      # It needs the packaged demo JAR, which is committed, and the
+      # `snug.options` + `snug.windows.options` pair, likewise.
+      - name: Run the Windows release pipeline
+        run: .\scripts\windows\build.cmd
 
       # Cheap, and it keeps a failure from being debugged through three
       # earlier steps first.

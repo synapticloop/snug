@@ -411,6 +411,22 @@ is where that belongs and there is no `HANDOFF.md` any more. Anything
 still open belongs here.
 
 **Not platform-specific, but it bites both**
+- **The committed stub and its fingerprint are two files, and only one of
+  them is checked.** `bin/launcher-stub.source` records the fingerprint of
+  the launcher source the stub was built from, and
+  `scripts\windows\check-stub-pair.ps1` compares it against the current
+  source. What it does *not* prove is that the stub binary was actually
+  built from that source — someone can update the fingerprint by hand and
+  the check goes green over a stale stub. The structural fix is to embed
+  the fingerprint *inside* the stub (a resource, or a trailing marker), so
+  the stub describes itself and there is one artefact to keep in sync
+  rather than two that can disagree. That is a build-format change to a
+  committed artefact, so it wants its own commit.
+- **`core.hooksPath` cannot be committed**, so the pre-push hook that
+  refuses a stale stub is only active on clones that ran
+  `git config core.hooksPath .githooks`. Until that is the default
+  everywhere, the invariant rests on CI catching it — which it now does in
+  seconds, before the release pipeline step rather than after it.
 - **`test/localisations/*.txt` are hand-maintained copies of the
   canonical baseline.** They are not read by any code — they exist so a
   `de` / `fr` bundle can be dropped in and eyeballed through
@@ -734,6 +750,29 @@ by accident.
   builds and stages a release, which is not needed between ordinary commits.
   The script takes `-CheckOnly`, which compares without building and exits 1
   if the committed stub is stale — usable as a pre-commit gate.
+- **The stub and its fingerprint are one commit.** Changing anything under
+  `crates/snug-launcher/` moves the fingerprint in `bin/launcher-stub.source`,
+  so `bin/launcher-stub-windows-x86_64.exe` and that file have to be committed
+  *together with* the change that moved them. Commit one without the other and
+  CI fails on *"the committed stub matches the current launcher source"* — a
+  red run on a push that looked fine. Runs #37-#39 failed exactly there before
+  this was enforced locally. `scripts\windows\refresh-stub.ps1` writes both,
+  and is the fix.
+- **`scripts\windows\check-stub-pair.ps1` is the one implementation of that
+  rule**, with three callers: the CI step, `check.ps1` (as gate 2), and
+  `.githooks\pre-push`. It hashes the launcher *source*, not the stub's bytes,
+  because a byte comparison spans two machines — this workstation and the
+  `windows-latest` runner disagree on rustc, the MSVC linker and the Windows
+  SDK, so their launcher binaries can never be byte-identical, and a byte
+  check cries wolf on a correctly refreshed stub. What it proves is that the
+  recorded fingerprint describes the source in this commit, not that the stub
+  was built from it.
+- **Activate the hook once per clone:** `git config core.hooksPath .githooks`.
+  `core.hooksPath` is local config and cannot be committed, so activation has
+  to be documented rather than inherited — and the hook needs LF endings to
+  run, which is what the `.gitattributes` rule pins. The hook refuses a push
+  carrying a stale stub, which turns "CI went red" into "the push did not
+  happen".
 - **A plain `cargo build` does NOT reproduce the stub.** The stub is only
   reproducible because `CARGO_ENCODED_RUSTFLAGS` remaps the machine-specific
   roots out of `file!()`; see `scripts\windows\reproducible-build.ps1`. Both

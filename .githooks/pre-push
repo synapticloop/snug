@@ -1,0 +1,49 @@
+#!/bin/sh
+#
+# pre-push - refuse a push whose launcher stub does not match its source.
+#
+# The launcher stub is a committed build artefact (snug-cli include_bytes!s
+# it), so it has to be refreshed and committed whenever the launcher source
+# moves. That is easy to forget, and the cost of forgetting is a red CI
+# run: the fingerprint gate in .github/workflows/windows.yml fails on the
+# push, and the push has to be corrected with a second commit.
+#
+# This hook catches it at the last moment instead. It is cheap - it hashes
+# the launcher source and compares it with the recorded fingerprint, no
+# build - so it can run on every push.
+#
+# To activate it (per clone, because core.hooksPath is local config):
+#
+#     git config core.hooksPath .githooks
+#
+# The check itself lives in scripts/windows/check-stub-pair.ps1, which the
+# CI workflow and scripts/windows/check.ps1 also call. There is one
+# implementation of the rule, not three.
+
+repo_root=$(git rev-parse --show-toplevel)
+check="$repo_root/scripts/windows/check-stub-pair.ps1"
+
+if [ ! -f "$check" ]; then
+    echo "pre-push: cannot find $check - skipping the stub check." >&2
+    exit 0
+fi
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "$check"
+status=$?
+
+if [ $status -ne 0 ]; then
+    echo "" >&2
+    echo "pre-push: refused." >&2
+    echo "  The launcher stub and its recorded source fingerprint have to be" >&2
+    echo "  committed together with the launcher source they correspond to." >&2
+    echo "" >&2
+    echo "  Fix:" >&2
+    echo "      .\\scripts\\windows\\refresh-stub.ps1" >&2
+    echo "      git add bin\\launcher-stub-windows-x86_64.exe bin\\launcher-stub.source" >&2
+    echo "      git commit --amend --no-edit" >&2
+    echo "      git push" >&2
+    echo "" >&2
+    exit $status
+fi
+
+exit 0

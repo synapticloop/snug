@@ -1,0 +1,5 @@
+# The pre-push hook is executed by sh, and a CRLF line ending turns its
+# shebang into "#!/bin/sh\r", which sh reports as "not found". With
+# core.autocrlf=true (the default on Windows) a checkout would otherwise
+# rewrite the hook to CRLF and break it on every fresh clone.
+.githooks/pre-push text eol=lf

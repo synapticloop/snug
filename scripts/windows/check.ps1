@@ -15,6 +15,12 @@ for a while, invisible because the one `op_ref` error in
 the `snug_preview` bin holding the other five. One error at a time, and
 the rest stay hidden until the first is fixed.
 
+It also gates the committed launcher stub. `snug-cli` include_bytes!s
+`bin/launcher-stub-windows-x86_64.exe`, so the stub is a committed build
+artefact that has to be refreshed whenever the launcher source moves. CI
+enforces that with a fingerprint check; running it here means the same
+mismatch is caught in seconds locally instead of after a push.
+
 This script exists so the local loop and the CI gate are the same shape.
 It is not part of the release path: `build.cmd`, `build-macos.sh`
 and `refresh-stub.ps1` deliberately do not call it, because those build a
@@ -98,12 +104,33 @@ try {
         Add-Gate -Name 'cargo fmt --all --check' -Code $fmt -Enforced $true
     }
 
-    # --- Gate 2: clippy --------------------------------------------------
+    # --- Gate 2: committed stub matches the launcher source ----------------
+    # Deliberately second, not first: `cargo fmt --all` in -Format mode
+    # rewrites launcher files, which moves bin\launcher-stub.source. Running
+    # this gate after the fmt gate means it reports the staleness that the
+    # rewrite just caused, rather than passing on a tree that is about to
+    # change underneath it.
+    Write-Host '==> committed launcher stub matches the launcher source' -ForegroundColor Cyan
+    & (Join-Path $PSScriptRoot 'check-stub-pair.ps1') -Repo $repo
+    $stub = $LASTEXITCODE
+    if ($stub -ne 0) {
+        Write-Host ''
+        Write-Host '    The launcher stub and its recorded fingerprint have to be' -ForegroundColor Yellow
+        Write-Host '    committed together with the launcher source they correspond to.' -ForegroundColor Yellow
+        Write-Host '        .\scripts\windows\refresh-stub.ps1' -ForegroundColor Yellow
+        Write-Host '        git add bin\launcher-stub-windows-x86_64.exe bin\launcher-stub.source' -ForegroundColor Yellow
+        Write-Host '        git commit --amend --no-edit' -ForegroundColor Yellow
+        Write-Host '    A push with a stale stub is refused by the pre-push hook.' -ForegroundColor Yellow
+        Write-Host ''
+    }
+    Add-Gate -Name 'committed stub matches launcher source' -Code $stub -Enforced $true
+
+    # --- Gate 3: clippy --------------------------------------------------
     Write-Host '==> cargo clippy --workspace --all-targets -- -D warnings' -ForegroundColor Cyan
     cargo clippy --workspace --all-targets -- -D warnings
     Add-Gate -Name 'cargo clippy -D warnings' -Code $LASTEXITCODE -Enforced $true
 
-    # --- Gate 3: tests ---------------------------------------------------
+    # --- Gate 4: tests ---------------------------------------------------
     Write-Host '==> cargo test --workspace --lib --bins --tests --no-fail-fast' -ForegroundColor Cyan
     cargo test --workspace --lib --bins --tests --no-fail-fast
     Add-Gate -Name 'cargo test --no-fail-fast' -Code $LASTEXITCODE -Enforced $true
