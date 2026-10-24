@@ -73,6 +73,12 @@
 //! spawn a second dialog side-by-side. The process only exits when
 //! **every** open window has been dismissed.
 //!
+//! Clicking the **same** button again does not spawn a second copy of
+//! that dialog. The one already open is brought back to the front
+//! instead. Two copies of the same window on screen is a thing to
+//! clean up by hand, and it is not something the preview can show
+//! anything new about.
+//!
 //! No `unsafe` crate dependencies beyond what's already pinned in
 //! `Cargo.toml` (just `windows-sys`).
 //!
@@ -86,7 +92,7 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::thread;
 use std::time::Duration;
 
-use windows_sys::Win32::Foundation::{HMODULE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows_sys::Win32::Foundation::{FALSE, HMODULE, HWND, LPARAM, LRESULT, RECT, TRUE, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, CreateFontW, CreateRoundRectRgn, CreateSolidBrush, DFC_BUTTON, DFCS_BUTTONCHECK,
     DFCS_CHECKED, DFCS_FLAT, DT_LEFT, DT_SINGLELINE, DT_VCENTER, DT_WORDBREAK, DeleteObject,
@@ -100,7 +106,7 @@ use windows_sys::Win32::Graphics::GdiPlus::{
     GdiplusStartupInput, GpBitmap, GpGraphics, GpImage, GpImageAttributes, UnitPixel,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows_sys::Win32::UI::Controls::BST_CHECKED;
 use windows_sys::Win32::UI::HiDpi::{
     AdjustWindowRectExForDpi, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForSystem,
@@ -111,14 +117,20 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_PUSHBUTTON, CB_ADDSTRING,
     CB_GETCOUNT, CB_GETCURSEL, CB_RESETCONTENT, CB_SETCURSEL, CBN_SELCHANGE, CBS_DROPDOWNLIST,
     CreateWindowExW, DI_NORMAL, DefWindowProcW, DestroyWindow, DispatchMessageW, DrawIconEx,
-    GetClientRect, GetDlgItem, GetMessageW, GetSystemMetrics, HICON, ICON_BIG, ICON_SMALL,
-    IDC_ARROW, IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE, LR_SHARED, LoadCursorW, LoadImageW,
-    MSG, MoveWindow, PostThreadMessageW, RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN,
-    SWP_NOACTIVATE, SWP_NOZORDER, SendMessageW, SetWindowPos, TranslateMessage, WM_CLOSE,
-    WM_COMMAND, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_NCDESTROY, WM_PAINT, WM_QUIT, WM_SETICON,
-    WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP,
-    WS_VISIBLE, WS_VSCROLL,
+    EnumThreadWindows, GWL_STYLE, GetClientRect, GetDlgItem, GetMessageW, GetSystemMetrics,
+    GetWindowLongPtrW, GetWindowThreadProcessId, HICON, HWND_TOPMOST, ICON_BIG, ICON_SMALL,
+    IDC_ARROW, IMAGE_ICON, IsIconic, LR_DEFAULTSIZE, LR_LOADFROMFILE, LR_SHARED, LoadCursorW,
+    LoadImageW, MSG, MoveWindow, PostThreadMessageW, RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN,
+    SW_RESTORE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SendMessageW,
+    SetForegroundWindow, SetWindowPos, ShowWindow, TranslateMessage, WM_CLOSE, WM_COMMAND,
+    WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_NCDESTROY, WM_PAINT, WM_QUIT, WM_SETICON, WNDCLASSEXW,
+    WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
+    WS_VSCROLL,
 };
+// `BOOL` is *not* in `Win32::Foundation` any more — it moved to `core`
+// in windows-sys 0.60, when the crate picked up a new Windows SDK
+// metadata set. `single_instance.rs` imports it the same way.
+use windows_sys::core::BOOL;
 
 use snug_format::Localization;
 use snug_launcher::dialogs;
@@ -279,13 +291,18 @@ const BTN_CLOSE_GAP: i32 = 16;
 const HEADING_Y: i32 = HEADER_ICON_BOTTOM + 16;
 const HEADING_H: i32 = 22;
 const SUBTITLE_Y: i32 = HEADING_Y + HEADING_H;
-/// Three lines at 10pt. The subtitle is the only place the detachment
+/// Four lines at 10pt. The subtitle is the only place the detachment
 /// behaviour can be explained, and the narrow window fits ~43
 /// characters a line — so the old two-line 40 px budget would have
 /// clipped the last word. Everything below chains off this, so growing
 /// it moves the controls down and `launcher_client_height` grows with
 /// them.
-const SUBTITLE_H: i32 = 54;
+///
+/// Four rather than three because the copy grew a sentence: the
+/// re-click behaviour is as much a part of how the preview works as
+/// the detachment is, and a subtitle that documents half of it is
+/// worse than none.
+const SUBTITLE_H: i32 = 72;
 /// Gap from the subtitle to the dropdown row.
 const COMBO_GAP: i32 = 24;
 const COMBO_Y: i32 = SUBTITLE_Y + SUBTITLE_H + COMBO_GAP;
@@ -332,9 +349,14 @@ const fn close_x() -> i32 {
 /// a button to open the corresponding dialog.", never mentioned that
 /// closing the launcher leaves every dialog you have opened alive, and
 /// the `--help` NOTES were the only place it was written down.
+///
+/// The third sentence is the same argument for the other surprise: a
+/// button that opens a dialog you already have open does not open
+/// another one, it raises the one you have. Without a line saying so,
+/// the button looks broken.
 const HEADING_TEXT: &str = "snug dialog preview";
 const SUBTITLE_TEXT: &str = "Each dialog opens in its own window and stays open until you close it, \
-     so you can compare two side by side.";
+     so you can compare two side by side. Click the same button again to bring it back to the front.";
 
 /// Language picker — a `COMBOBOX` between the subtitle and the dialog
 /// buttons, so a translation can be flipped on before opening a dialog
@@ -650,7 +672,12 @@ unsafe fn release_slot() {
 /// side-by-side from the launcher. The launcher releases its own
 /// slot in `WM_NCDESTROY`; the dialog's slot is released by the
 /// `SlotGuard` here.
-fn spawn_dialog<F>(f: F)
+///
+/// `slot` is the registry entry for this dialog. The thread publishes
+/// its own id into it *before* the dialog's window exists, which is
+/// what lets a second click on the same button find that window
+/// later — see the registry section below.
+fn spawn_dialog<F>(key: DialogKey, slot: DialogSlot, f: F)
 where
     F: FnOnce() + Send + 'static,
 {
@@ -660,15 +687,24 @@ where
     // The common path is `Ok(_)`, where the SlotGuard inside the
     // closure will fire when `f` returns and decrement the counter
     // for us.
-    if thread::Builder::new()
-        .spawn(move || {
-            let _slot = SlotGuard;
-            f();
-        })
-        .is_err()
-    {
+    let published = slot.clone();
+    let spawned = thread::Builder::new().spawn(move || {
+        // SAFETY: `GetCurrentThreadId` takes no arguments and cannot
+        // fail; it is only `unsafe` because every Win32 entry point is.
+        published.store(unsafe { GetCurrentThreadId() }, Ordering::SeqCst);
+        // Drop order is the reverse of declaration, so the registry
+        // entry goes first and the window slot second: the entry must
+        // be gone before the process is allowed to exit, or the next
+        // click would try to raise a window whose thread has ended.
+        let _slot = SlotGuard;
+        let _entry = EntryGuard { key };
+        f();
+    });
+    if spawned.is_err() {
         // Spawn failed — release the slot manually so the count
-        // doesn't leak above the live-window count.
+        // doesn't leak above the live-window count, and drop the
+        // registry entry so this button is not left permanently dead.
+        remove_dialog(key);
         unsafe { release_slot() };
     }
 }
@@ -680,6 +716,279 @@ impl Drop for SlotGuard {
     fn drop(&mut self) {
         unsafe { release_slot() };
     }
+}
+
+// ============================================================================
+//  Dialog registry — one live dialog per preview button
+// ============================================================================
+//
+//  A preview button opens *one* dialog. Clicking it again must not
+//  leave a second copy of the same window on screen; it brings the
+//  one that is already open back to the front.
+//
+//  The registry is what answers "is it already open?". It cannot be
+//  the window itself, because the dialog's HWND is created deep
+//  inside the shared `modal_window` / `progress_window` code, which
+//  blocks until the dialog is dismissed and never hands the handle
+//  back.
+//
+//  One entry per *button*, not per window class. Five of the seven
+//  previews render the same `snug_modal_dialog_v1` window, and the
+//  two progress previews render the same `snug_progress_dialog_v2`
+//  window in two different states, so the class cannot tell two
+//  dialogs apart.
+
+/// Identifies one of the preview's dialog buttons.
+///
+/// The **control id** of the button that opened the dialog. See the
+/// section note above for why the button, and not the window class,
+/// is the key.
+type DialogKey = usize;
+
+/// The registry slot for one dialog.
+///
+/// Holds the OS thread id of the thread that owns the dialog's
+/// window. `0` until that thread has started, which is the window in
+/// which the dialog is on its way but has not yet created its HWND.
+type DialogSlot = Arc<AtomicU32>;
+
+/// Every preview dialog that is currently open, keyed by the button
+/// that opened it.
+///
+/// The entry is created before the dialog's thread starts and removed
+/// by that thread when it ends, so "the entry exists" and "the dialog
+/// is open" are the same statement — there is no moment in which a
+/// dialog is on screen but unlisted.
+static DIALOGS: Mutex<Vec<(DialogKey, DialogSlot)>> = Mutex::new(Vec::new());
+
+/// What [`claim_dialog_slot`] found.
+#[derive(Debug)]
+enum Claim {
+    /// The button already has a dialog open; this is its slot.
+    Live(DialogSlot),
+    /// The slot was claimed for a dialog that is about to be opened.
+    Fresh(DialogSlot),
+}
+
+/// Take the registry slot for `key`.
+///
+/// The check and the insert happen under one lock, which is what
+/// stops two clicks a few milliseconds apart from both deciding the
+/// dialog is closed and opening two of them.
+fn claim_dialog_slot(key: DialogKey) -> Claim {
+    let mut guard = DIALOGS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, slot)) = guard.iter().find(|(k, _)| *k == key) {
+        return Claim::Live(slot.clone());
+    }
+    let slot: DialogSlot = Arc::new(AtomicU32::new(0));
+    guard.push((key, slot.clone()));
+    Claim::Fresh(slot)
+}
+
+/// Drop the registry entry for `key`.
+fn remove_dialog(key: DialogKey) {
+    let mut guard = DIALOGS.lock().unwrap_or_else(|e| e.into_inner());
+    guard.retain(|(k, _)| *k != key);
+}
+
+/// Removes a dialog's registry entry when its thread ends.
+///
+/// A `Drop` guard rather than a call at the end of the closure, so a
+/// panic inside the dialog code cannot leave the entry behind: a
+/// stale entry would make the button permanently dead, because the
+/// thread that owned the window is gone and there is nothing left to
+/// raise.
+struct EntryGuard {
+    key: DialogKey,
+}
+
+impl Drop for EntryGuard {
+    fn drop(&mut self) {
+        remove_dialog(self.key);
+    }
+}
+
+/// Open the dialog for `key`, or bring the open one back to the front.
+///
+/// A preview button is a one-shot action: clicking it twice must not
+/// leave two copies of the same dialog on screen. The second click
+/// raises the dialog that is already there instead.
+fn open_dialog<F>(key: DialogKey, f: F)
+where
+    F: FnOnce() + Send + 'static,
+{
+    match claim_dialog_slot(key) {
+        Claim::Live(slot) => raise_dialog(key, slot),
+        Claim::Fresh(slot) => {
+            spawn_dialog(key, slot.clone(), f);
+            // Watch for the window the same way a re-clicked dialog is
+            // watched for. Without this the two paths would disagree:
+            // a dialog opened by a *double* click would come to the
+            // front and take the keyboard, while the same dialog
+            // opened by a single click would sit behind the
+            // launcher's focus.
+            watch_and_raise(key, slot);
+        }
+    }
+}
+
+/// Bring an already-open dialog back to the front.
+///
+/// The window handle is not known here — it is created inside the
+/// shared `modal_window` / `progress_window` code, which blocks until
+/// the dialog is dismissed and never hands the handle back. It is
+/// found instead by asking Win32 which top-level window the dialog's
+/// thread owns: one thread per dialog, so the answer is unambiguous.
+fn raise_dialog(key: DialogKey, slot: DialogSlot) {
+    let tid = slot.load(Ordering::SeqCst);
+    if tid != 0
+        && let Some(hwnd) = top_level_window(tid)
+    {
+        // SAFETY: `hwnd` came from `EnumThreadWindows` and is a live
+        // top-level window owned by the dialog's thread.
+        unsafe { raise_and_activate(hwnd) };
+        log(&format!(
+            "preview: raised the open `{}` dialog back to the front",
+            button_label(key)
+        ));
+        return;
+    }
+
+    // Either the dialog's thread has not started yet, or its window
+    // has not been created yet — the gap between "the button was
+    // clicked" and "the dialog exists". Watch for it on a helper
+    // thread rather than blocking the launcher's message pump: the
+    // dialog should simply appear and come to the front a few
+    // milliseconds later.
+    watch_and_raise(key, slot);
+}
+
+/// How long to wait for a dialog's window to appear before giving up
+/// on raising it, and how often to look.
+///
+/// 100 × 20 ms = 2 s, which is far longer than a window takes to be
+/// created and far shorter than a user would sit staring at a button
+/// that appears to do nothing.
+const RAISE_WATCH_TRIES: u32 = 100;
+const RAISE_WATCH_INTERVAL_MS: u64 = 20;
+
+/// Wait for a dialog's window to appear, then bring it to the front.
+///
+/// The window is created by the shared dialog code, so there is a
+/// moment between the click and the moment there is anything to
+/// raise. Polling happens on a helper thread so the launcher stays
+/// responsive.
+fn watch_and_raise(key: DialogKey, slot: DialogSlot) {
+    thread::spawn(move || {
+        for _ in 0..RAISE_WATCH_TRIES {
+            let tid = slot.load(Ordering::SeqCst);
+            if tid != 0
+                && let Some(hwnd) = top_level_window(tid)
+            {
+                // SAFETY: `hwnd` came from `EnumThreadWindows` and is a
+                // live top-level window owned by the dialog's thread.
+                unsafe { raise_and_activate(hwnd) };
+                log(&format!(
+                    "preview: brought the `{}` dialog to the front once it appeared",
+                    button_label(key)
+                ));
+                return;
+            }
+            thread::sleep(Duration::from_millis(RAISE_WATCH_INTERVAL_MS));
+        }
+        log(&format!(
+            "preview: the `{}` dialog never showed a window; nothing to raise",
+            button_label(key)
+        ));
+    });
+}
+
+/// The top-level window owned by `tid`, if it has one.
+///
+/// `EnumThreadWindows` walks every window the thread owns, children
+/// included, and every preview dialog owns a pile of `STATIC` and
+/// `BUTTON` children — raising one of those would do nothing
+/// visible. So the first window *without* the `WS_CHILD` style is the
+/// one the user means.
+fn top_level_window(tid: u32) -> Option<HWND> {
+    unsafe extern "system" fn visit(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let slot = lparam as *mut HWND;
+        if unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } & WS_CHILD as isize != 0 {
+            // A child control — keep looking for the real window.
+            return TRUE;
+        }
+        unsafe { *slot = hwnd };
+        // One dialog, one top-level window: the first one is it.
+        FALSE
+    }
+
+    let mut found: HWND = std::ptr::null_mut();
+    unsafe {
+        EnumThreadWindows(tid, Some(visit), &mut found as *mut HWND as LPARAM);
+    }
+    if found.is_null() { None } else { Some(found) }
+}
+
+/// Put `hwnd` in front and give it the keyboard focus.
+///
+/// The same two moves `single_instance::activate_existing` makes, for
+/// the same reasons: a minimized window has to be restored before it
+/// can be brought forward, and `SetForegroundWindow` is refused
+/// unless the caller owns the foreground.
+unsafe fn raise_and_activate(hwnd: HWND) {
+    if unsafe { IsIconic(hwnd) } != 0 {
+        unsafe { ShowWindow(hwnd, SW_RESTORE) };
+    }
+
+    // The preview's dialogs are created `WS_EX_TOPMOST`, so "to the
+    // front" means the top of the topmost band. A plain `HWND_TOP`
+    // would leave the dialog *below* another dialog that is also
+    // topmost — which is exactly the case this exists for.
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+        );
+    }
+
+    // Keyboard focus. The foreground lock refuses the change unless
+    // the caller owns the foreground — which it does here, because the
+    // user clicked a button in our own launcher — but the shell can
+    // move the foreground elsewhere in the meantime, and then the
+    // usual fallback is to borrow the target thread's input queue
+    // first.
+    if unsafe { SetForegroundWindow(hwnd) } == 0 {
+        let target_thread = unsafe { GetWindowThreadProcessId(hwnd, std::ptr::null_mut()) };
+        let our_thread = unsafe { GetCurrentThreadId() };
+        let attached = target_thread != 0
+            && target_thread != our_thread
+            && unsafe { AttachThreadInput(our_thread, target_thread, TRUE) } != 0;
+        let ok = unsafe { SetForegroundWindow(hwnd) } != 0;
+        if attached {
+            unsafe { AttachThreadInput(our_thread, target_thread, 0) };
+        }
+        if !ok {
+            log("preview: the dialog could not take the keyboard focus");
+        }
+    }
+}
+
+/// The label of the button behind `key`, for logging.
+///
+/// Falls back to `?` for a key that is not one of the preview's
+/// buttons, which can only happen if a caller passes an id that was
+/// never wired to a button.
+fn button_label(key: DialogKey) -> &'static str {
+    DIALOG_BUTTONS
+        .iter()
+        .find(|(_, id)| *id == key)
+        .map(|(label, _)| *label)
+        .unwrap_or("?")
 }
 
 // Button control IDs. Cast to `usize` for the `wparam & 0xFFFF` mask
@@ -1396,6 +1705,9 @@ fn help_text() -> String {
     out.push_str("    closing the launcher does not destroy them and you can open\n");
     out.push_str("    several side by side. The process exits only when every\n");
     out.push_str("    open window has been dismissed.\n\n");
+    out.push_str("    Clicking the same button twice does not open a second copy\n");
+    out.push_str("    of that dialog: the one already open is brought back to the\n");
+    out.push_str("    front instead.\n\n");
     out.push_str("    Changing the language affects dialogs opened afterwards;\n");
     out.push_str("    windows already on screen keep the copy they were built\n");
     out.push_str("    with. Close and reopen them to see the new language.\n\n");
@@ -1965,16 +2277,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
 
             match id {
-                ID_BTN_PROGRESS_ANIMATED => spawn_dialog(|| run_progress(false)),
-                ID_BTN_PROGRESS_STATIC => spawn_dialog(|| run_progress(true)),
-                ID_BTN_METADATA_FAILED => spawn_dialog(|| {
+                ID_BTN_PROGRESS_ANIMATED => open_dialog(id, || run_progress(false)),
+                ID_BTN_PROGRESS_STATIC => open_dialog(id, || run_progress(true)),
+                ID_BTN_METADATA_FAILED => open_dialog(id, || {
                     let _ = jdk_install::show_metadata_failed_dialog(
                         std::ptr::null_mut(),
                         25,
                         "DNS resolution failed: no such host is known",
                     );
                 }),
-                ID_BTN_RETRY => spawn_dialog(|| {
+                ID_BTN_RETRY => open_dialog(id, || {
                     let _ = jdk_install::show_retry_dialog(
                         std::ptr::null_mut(),
                         2,
@@ -1983,7 +2295,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         "TLS handshake timeout after 30s",
                     );
                 }),
-                ID_BTN_ERROR => spawn_dialog(|| {
+                ID_BTN_ERROR => open_dialog(id, || {
                     // Mirrors `jdk_install.rs`: fill the bundle's
                     // `runtime.failure.content` rather than handing the
                     // dialog a pre-baked string.
@@ -2017,14 +2329,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         &content,
                     );
                 }),
-                ID_BTN_LAUNCH_ERROR => spawn_dialog(|| {
+                ID_BTN_LAUNCH_ERROR => open_dialog(id, || {
                     error_window::show_launcher_error(
                         std::ptr::null_mut(),
                         "java.lang.NoClassDefFoundError: com/example/Main",
                         Some("https://github.com/adoptium/temurin25-binaries/releases"),
                     );
                 }),
-                ID_BTN_INSTALL_PROMPT => spawn_dialog(run_install_prompt_v5),
+                ID_BTN_INSTALL_PROMPT => open_dialog(id, run_install_prompt_v5),
                 ID_BTN_CLOSE => {
                     // Same as the X button: destroy the launcher
                     // window. Any dialogs spawned before this point
@@ -2105,7 +2417,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 /// `phase 0 → 95% → phase 1 → 98% → phase 2 → 100%` like the real
 /// install flow.
 ///
-/// Always invoked via `spawn_dialog` so it runs on its own OS thread
+/// Always invoked via `open_dialog` so it runs on its own OS thread
 /// — closing the launcher doesn't take this dialog down. The dialog
 /// itself is **null-parented** (top-level), so it's also independent
 /// visually (can be moved to a different monitor, doesn't follow the
@@ -3420,5 +3732,92 @@ mod tests {
         let h = help_text();
         assert!(h.contains("magnifying glass"), "{h}");
         assert!(h.contains("bottom-right"), "{h}");
+    }
+
+    // ------------------------------------------------------------------
+    // Dialog registry
+    // ------------------------------------------------------------------
+    //
+    //  The registry is keyed by control id, so these tests use ids
+    //  well above the real button range: they share one process-wide
+    //  registry with every other test, and a parallel test that
+    //  claimed a real button id would make these lie.
+
+    #[test]
+    fn a_dialog_slot_is_claimed_once() {
+        // The whole point of the registry: a second click on the same
+        // button must find the dialog that is already open rather than
+        // claim a slot of its own.
+        let key = 9001;
+        assert!(
+            matches!(claim_dialog_slot(key), Claim::Fresh(_)),
+            "the first click claims the slot"
+        );
+        assert!(
+            matches!(claim_dialog_slot(key), Claim::Live(_)),
+            "the second click finds the open dialog"
+        );
+        remove_dialog(key);
+        assert!(
+            matches!(claim_dialog_slot(key), Claim::Fresh(_)),
+            "the slot is free again once the dialog has ended"
+        );
+        remove_dialog(key);
+    }
+
+    #[test]
+    fn each_button_gets_its_own_slot() {
+        // Two *different* dialogs side by side is the preview's whole
+        // point; only the same button must not open a second copy.
+        let (a, b) = (9002, 9003);
+        assert!(matches!(claim_dialog_slot(a), Claim::Fresh(_)));
+        assert!(matches!(claim_dialog_slot(b), Claim::Fresh(_)));
+        assert!(matches!(claim_dialog_slot(a), Claim::Live(_)));
+        remove_dialog(a);
+        remove_dialog(b);
+    }
+
+    #[test]
+    fn removing_one_dialog_leaves_the_others_alone() {
+        let (a, b) = (9004, 9005);
+        claim_dialog_slot(a);
+        claim_dialog_slot(b);
+        remove_dialog(a);
+        assert!(matches!(claim_dialog_slot(a), Claim::Fresh(_)));
+        assert!(
+            matches!(claim_dialog_slot(b), Claim::Live(_)),
+            "closing one dialog must not free the other's slot"
+        );
+        remove_dialog(a);
+        remove_dialog(b);
+    }
+
+    #[test]
+    fn every_preview_button_has_its_own_id_and_label() {
+        // The registry is keyed by control id, so two buttons sharing
+        // an id would share a slot and one of the two dialogs would
+        // become unreachable.
+        let mut ids: Vec<usize> = DIALOG_BUTTONS.iter().map(|(_, id)| *id).collect();
+        ids.sort_unstable();
+        let total = ids.len();
+        ids.dedup();
+        assert_eq!(ids.len(), total, "two preview buttons share a control id");
+        // And the log line names the dialog the user clicked, so the
+        // key has to resolve back to a label.
+        for (label, id) in DIALOG_BUTTONS {
+            assert_eq!(button_label(*id), *label);
+        }
+    }
+
+    #[test]
+    fn the_second_click_behaviour_is_written_down() {
+        // A button that raises the open dialog instead of opening a
+        // second copy looks broken unless something says it is not.
+        let h = help_text();
+        assert!(h.contains("brought back to the"), "{h}");
+        assert!(
+            SUBTITLE_TEXT.contains("same button again"),
+            "the subtitle is where the behaviour is shown: {SUBTITLE_TEXT}"
+        );
     }
 }
