@@ -23,84 +23,84 @@ a test holds the baseline to it.
 
 ## Token meanings
 
-| Token | Meaning |
-|---|---|
-| `{0}` | positional slot — the single argument this key is handed, usually an error message |
-| `{actual}` | byte length the pixel buffer turned out to have |
-| `{arch}` | target architecture label, e.g. "Windows x64" |
-| `{attempt}` | which attempt this is, counting from 1 |
-| `{computed}` | the SHA-256 the launcher calculated from the downloaded file |
-| `{declared}` | the SHA-256 the publisher advertised |
-| `{done_mb}` | megabytes downloaded so far |
-| `{error}` | the underlying error, already localised when it is a launcher error |
-| `{expected}` | byte length the buffer's dimensions require |
-| `{found}` | the Java major version actually found on the machine |
-| `{library}` | the library that failed to load |
-| `{major}` | the Java major version the runtime metadata lookup was for |
-| `{max_attempts}` | total number of attempts configured |
-| `{message}` | the OS-level error text explaining the failed load |
-| `{min_java}` | the Java major version the application requires |
-| `{n}` | whole seconds of estimated time remaining |
-| `{name}` | name of the metadata field that was malformed |
-| `{path}` | a filesystem path that was located, or searched |
-| `{pct}` | completion percentage as a whole number |
-| `{sha256}` | the SHA-256 digest the download is verified against |
-| `{size_mb}` | approximate download size in megabytes |
-| `{speed_mb_s}` | current download speed in MB/s |
-| `{symbol}` | the exported symbol that was missing from it |
-| `{total_mb}` | total megabytes to download |
-| `{update_check_url}` | the URL to check for a newer release, from the payload |
-| `{value}` | the value the launcher received for that field |
-| `{version}` | the JDK release being downloaded or installed, e.g. "25.0.1+9" |
+| Token                | Meaning                                                                            |
+|----------------------|------------------------------------------------------------------------------------|
+| `{0}`                | positional slot — the single argument this key is handed, usually an error message |
+| `{actual}`           | byte length the pixel buffer turned out to have                                    |
+| `{arch}`             | target architecture label, e.g. "Windows x64"                                      |
+| `{attempt}`          | which attempt this is, counting from 1                                             |
+| `{computed}`         | the SHA-256 the launcher calculated from the downloaded file                       |
+| `{declared}`         | the SHA-256 the publisher advertised                                               |
+| `{done_mb}`          | megabytes downloaded so far                                                        |
+| `{error}`            | the underlying error, already localised when it is a launcher error                |
+| `{expected}`         | byte length the buffer's dimensions require                                        |
+| `{found}`            | the Java major version actually found on the machine                               |
+| `{library}`          | the library that failed to load                                                    |
+| `{major}`            | the Java major version the runtime metadata lookup was for                         |
+| `{max_attempts}`     | total number of attempts configured                                                |
+| `{message}`          | the OS-level error text explaining the failed load                                 |
+| `{min_java}`         | the Java major version the application requires                                    |
+| `{n}`                | whole seconds of estimated time remaining                                          |
+| `{name}`             | name of the metadata field that was malformed                                      |
+| `{path}`             | a filesystem path that was located, or searched                                    |
+| `{pct}`              | completion percentage as a whole number                                            |
+| `{sha256}`           | the SHA-256 digest the download is verified against                                |
+| `{size_mb}`          | approximate download size in megabytes                                             |
+| `{speed_mb_s}`       | current download speed in MB/s                                                     |
+| `{symbol}`           | the exported symbol that was missing from it                                       |
+| `{total_mb}`         | total megabytes to download                                                        |
+| `{update_check_url}` | the URL to check for a newer release, from the payload                             |
+| `{value}`            | the value the launcher received for that field                                     |
+| `{version}`          | the JDK release being downloaded or installed, e.g. "25.0.1+9"                     |
 
 ## Keys and the slots they may use
 
-| Key | May use | English copy uses |
-|---|---|---|
-| `err.format` | `{0}` | `{0}` |
-| `err.invalid_state` | `{0}` | `{0}` |
-| `err.io` | `{0}` | `{0}` |
-| `err.java_exception` | `{0}` | `{0}` |
-| `err.jni_attach` | `{0}` | `{0}` |
-| `err.jni_create` | `{0}` | `{0}` |
-| `err.jni_init` | `{0}` | `{0}` |
-| `err.jni_invoke` | `{0}` | `{0}` |
-| `err.main_class_not_found` | `{0}` | `{0}` |
-| `err.no_main_method` | `{0}` | `{0}` |
-| `err.self_path` | `{0}` | `{0}` |
-| `err.zip` | `{0}` | `{0}` |
-| `err.jvm_not_found` | `{min_java}` | `{min_java}` |
-| `err.jvm_too_old` | `{path}` `{found}` `{min_java}` | `{found}` `{min_java}` `{path}` |
-| `err.library_load` | `{library}` `{message}` | `{library}` `{message}` |
-| `err.symbol_not_found` | `{symbol}` `{library}` | `{library}` `{symbol}` |
-| `jdk.err.bad_metadata_shape` | `{0}` | `{0}` |
-| `jdk.err.dialog` | `{0}` | `{0}` |
-| `jdk.err.download` | `{0}` | `{0}` |
-| `jdk.err.extract` | `{0}` | `{0}` |
-| `jdk.err.io` | `{0}` | `{0}` |
-| `jdk.err.metadata_fetch` | `{0}` | `{0}` |
-| `jdk.err.no_java_exe` | `{0}` | `{0}` |
-| `jdk.err.no_metadata_for_version` | `{0}` | `{0}` |
-| `jdk.err.bad_field` | `{name}` `{value}` | `{name}` `{value}` |
-| `jdk.err.sha256_mismatch` | `{declared}` `{computed}` | `{computed}` `{declared}` |
-| `splash.err.thread_spawn` | `{0}` | `{0}` |
-| `splash.err.buffer_length` | `{expected}` `{actual}` | `{actual}` `{expected}` |
-| `launcher.bare_stub.no_payload` | `{path}` | `{path}` |
-| `launcher.error.content` | `{error}` | `{error}` |
-| `launcher.error.info_subtext_2` | `{update_check_url}` | `{update_check_url}` |
-| `runtime.prompt.content` | `{version}` `{size_mb}` `{sha256}` | `{size_mb}` |
-| `runtime.prompt.button_download` | `{version}` `{size_mb}` `{sha256}` | — |
-| `runtime.metadata_failed.subheading` | `{major}` | — |
-| `runtime.metadata_failed.content` | `{major}` `{error}` | `{error}` |
-| `runtime.progress.content` | `{version}` `{size_mb}` | `{size_mb}` `{version}` |
-| `runtime.progress.phase_label` | `{arch}` | `{arch}` |
-| `runtime.progress.pct_label` | `{pct}` | `{pct}` |
-| `runtime.progress.detail_with_size` | `{done_mb}` `{total_mb}` `{speed_mb_s}` | `{done_mb}` `{speed_mb_s}` `{total_mb}` |
-| `runtime.progress.detail_no_size` | `{pct}` | `{pct}` |
-| `runtime.progress.detail_eta_seconds` | `{n}` | `{n}` |
-| `runtime.failure.content` | `{version}` `{error}` | `{error}` `{version}` |
-| `runtime.retry.subheading` | `{version}` `{attempt}` `{max_attempts}` `{error}` | `{attempt}` `{max_attempts}` |
-| `runtime.retry.content` | `{version}` `{attempt}` `{max_attempts}` `{error}` | `{error}` |
+| Key                                   | May use                                            | English copy uses                       |
+|---------------------------------------|----------------------------------------------------|-----------------------------------------|
+| `err.format`                          | `{0}`                                              | `{0}`                                   |
+| `err.invalid_state`                   | `{0}`                                              | `{0}`                                   |
+| `err.io`                              | `{0}`                                              | `{0}`                                   |
+| `err.java_exception`                  | `{0}`                                              | `{0}`                                   |
+| `err.jni_attach`                      | `{0}`                                              | `{0}`                                   |
+| `err.jni_create`                      | `{0}`                                              | `{0}`                                   |
+| `err.jni_init`                        | `{0}`                                              | `{0}`                                   |
+| `err.jni_invoke`                      | `{0}`                                              | `{0}`                                   |
+| `err.main_class_not_found`            | `{0}`                                              | `{0}`                                   |
+| `err.no_main_method`                  | `{0}`                                              | `{0}`                                   |
+| `err.self_path`                       | `{0}`                                              | `{0}`                                   |
+| `err.zip`                             | `{0}`                                              | `{0}`                                   |
+| `err.jvm_not_found`                   | `{min_java}`                                       | `{min_java}`                            |
+| `err.jvm_too_old`                     | `{path}` `{found}` `{min_java}`                    | `{found}` `{min_java}` `{path}`         |
+| `err.library_load`                    | `{library}` `{message}`                            | `{library}` `{message}`                 |
+| `err.symbol_not_found`                | `{symbol}` `{library}`                             | `{library}` `{symbol}`                  |
+| `jdk.err.bad_metadata_shape`          | `{0}`                                              | `{0}`                                   |
+| `jdk.err.dialog`                      | `{0}`                                              | `{0}`                                   |
+| `jdk.err.download`                    | `{0}`                                              | `{0}`                                   |
+| `jdk.err.extract`                     | `{0}`                                              | `{0}`                                   |
+| `jdk.err.io`                          | `{0}`                                              | `{0}`                                   |
+| `jdk.err.metadata_fetch`              | `{0}`                                              | `{0}`                                   |
+| `jdk.err.no_java_exe`                 | `{0}`                                              | `{0}`                                   |
+| `jdk.err.no_metadata_for_version`     | `{0}`                                              | `{0}`                                   |
+| `jdk.err.bad_field`                   | `{name}` `{value}`                                 | `{name}` `{value}`                      |
+| `jdk.err.sha256_mismatch`             | `{declared}` `{computed}`                          | `{computed}` `{declared}`               |
+| `splash.err.thread_spawn`             | `{0}`                                              | `{0}`                                   |
+| `splash.err.buffer_length`            | `{expected}` `{actual}`                            | `{actual}` `{expected}`                 |
+| `launcher.bare_stub.no_payload`       | `{path}`                                           | `{path}`                                |
+| `launcher.error.content`              | `{error}`                                          | `{error}`                               |
+| `launcher.error.info_subtext_2`       | `{update_check_url}`                               | `{update_check_url}`                    |
+| `runtime.prompt.content`              | `{version}` `{size_mb}` `{sha256}`                 | `{size_mb}`                             |
+| `runtime.prompt.button_download`      | `{version}` `{size_mb}` `{sha256}`                 | —                                       |
+| `runtime.metadata_failed.subheading`  | `{major}`                                          | —                                       |
+| `runtime.metadata_failed.content`     | `{major}` `{error}`                                | `{error}`                               |
+| `runtime.progress.content`            | `{version}` `{size_mb}`                            | `{size_mb}` `{version}`                 |
+| `runtime.progress.phase_label`        | `{arch}`                                           | `{arch}`                                |
+| `runtime.progress.pct_label`          | `{pct}`                                            | `{pct}`                                 |
+| `runtime.progress.detail_with_size`   | `{done_mb}` `{total_mb}` `{speed_mb_s}`            | `{done_mb}` `{speed_mb_s}` `{total_mb}` |
+| `runtime.progress.detail_no_size`     | `{pct}`                                            | `{pct}`                                 |
+| `runtime.progress.detail_eta_seconds` | `{n}`                                              | `{n}`                                   |
+| `runtime.failure.content`             | `{version}` `{error}`                              | `{error}` `{version}`                   |
+| `runtime.retry.subheading`            | `{version}` `{attempt}` `{max_attempts}` `{error}` | `{attempt}` `{max_attempts}`            |
+| `runtime.retry.content`               | `{version}` `{attempt}` `{max_attempts}` `{error}` | `{error}`                               |
 
 ## Keys that may use nothing
 
