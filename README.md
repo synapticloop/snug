@@ -28,7 +28,7 @@ Snug wraps your Java application JAR (or a directory of JARs) in a native **Wind
 
 You need the Windows `snug.exe` builder and a runnable Java JAR. To try Snug without writing Java code, use the included [JavaFX demo JAR](assets/snug-javafx-demo-windows.jar).
 
-1. Download `snug.exe` from [Releases](https://github.com/synapticloop/snug/releases) when a build is available.
+1. Download the Windows x64 ZIP from [GitHub Releases](https://github.com/synapticloop/snug/releases) and extract it to a folder.
 2. Put `snug.exe` and `snug-javafx-demo-windows.jar` in a folder.
 3. Open a terminal in that folder and run:
 
