@@ -6,10 +6,11 @@ REM
 REM Chains scripts\windows\check.ps1 (gates: cargo fmt --all --check,
 REM cargo clippy --workspace --all-targets -- -D warnings, cargo test
 REM --workspace --lib --bins --tests --no-fail-fast) and
-REM scripts\windows\build.cmd (the 10-step release pipeline: launcher stub
+REM scripts\windows\build.cmd (the 11-step release pipeline: launcher stub
 REM refresh, snug-cli, demo JAR package, embedded-stub verify, snug.exe icon
 REM stamp, snug_preview, dropper, icon verify, stage into
-REM release\windows-x86_64\).
+REM release\windows-x86_64\, package the release archive into
+REM release\windows-x86_64\github\).
 REM
 REM Why a wrapper rather than baking the gates into build.cmd: the two
 REM scripts serve different concerns. build.cmd produces the shipping

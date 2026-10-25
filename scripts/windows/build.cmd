@@ -18,11 +18,14 @@ REM   1. (cargo | cargo zig)build --release -p snug-launcher
 REM   2. copy target\...\snug-launcher.exe -> bin\launcher-stub-windows-x86_64.exe
 REM      The CLI embed_bytes!()s this exact file; cargo tracks it by content,
 REM      so step 3 picks up the change automatically.
-REM   3. (cargo | cargo zig)build --release -p snug-cli --bin snug --bin verify_icons
+REM   3. (cargo | cargo zig)build --release -p snug-cli --bin snug
+REM      --bin verify_icons --bin package_release
 REM      verify_icons is built here rather than in step 9 so that the icon
 REM      check is a plain existence test, not a nested cargo invocation in
 REM      the middle of a verification step. It is a build tool, not a
 REM      runtime dependency, and adds nothing to the shipped snug.exe.
+REM      package_release joins it for the same reason: the archive in step 11
+REM      is written by a build tool, and the shipped snug.exe does not do it.
 REM   4. target\...\snug.exe assets\snug-javafx-demo-windows.jar
 REM      Reads snug.options for the shared metadata, then snug.windows.options
 REM      for the platform-specific --output, and writes
@@ -50,6 +53,14 @@ REM      They land in release\windows-<arch>\ - the same <os>-<arch>
 REM      convention build-macos.sh stages macos-arm64/ and macos-x86_64/
 REM      into. release\ ignores its own contents, so nothing here is
 REM      tracked. Skip with --SkipRelease.
+REM  11. Package the release archive. release\windows-<arch>\github\ holds
+REM      the ZIP a user downloads - snug.exe, snug_preview.exe and the
+REM      Snug Quick Build shim, all under a snug\ folder inside it - plus a
+REM      copy of the demo JAR beside it. Written by the zip crate
+REM      (crates\snug-cli\src\bin\package_release.rs), not by
+REM      Compress-Archive: the PowerShell cmdlets write backslash entry
+REM      names, which a POSIX extractor reads as one filename containing a
+REM      backslash rather than as a folder. Skip with --SkipArchive.
 REM
 REM Run from the repo root:
 REM     .\scripts\windows\build.cmd
@@ -75,6 +86,13 @@ REM                             rather than implied by --SkipDevTools.
 REM     --SkipRelease           Skip step 10 (copy the shipping artefacts into
 REM                             release\). The folder is regenerated in place,
 REM                             so stale files from a previous run are NOT
+REM                             removed; delete them by hand, or use --Clean
+REM                             and stage into a fresh folder.
+REM     --SkipArchive           Skip step 11 (package the release archive into
+REM                             release\<os>-<arch>\github\). The archive is what
+REM                             a user actually downloads, so this is for when you
+REM                             want the staged tree without the zip - not for a
+REM                             release.
 REM     --CrossCompile          Cross-compile to x86_64-pc-windows-gnu via
 REM                             cargo-zigbuild. Same architecture, different
 REM                             toolchain - for inspecting a GNU-linked build,
@@ -126,6 +144,7 @@ set "SKIP_VERIFY=0"
 set "SKIP_DEV_TOOLS=0"
 set "SKIP_DROPPER=0"
 set "SKIP_RELEASE=0"
+set "SKIP_ARCHIVE=0"
 set "CROSS_COMPILE=0"
 set "CLEAN=0"
 
@@ -137,6 +156,7 @@ if /i "%~1"=="--SkipVerify"          set "SKIP_VERIFY=1"
 if /i "%~1"=="--SkipDevTools"        set "SKIP_DEV_TOOLS=1"
 if /i "%~1"=="--SkipDropper"         set "SKIP_DROPPER=1"
 if /i "%~1"=="--SkipRelease"         set "SKIP_RELEASE=1"
+if /i "%~1"=="--SkipArchive"         set "SKIP_ARCHIVE=1"
 if /i "%~1"=="--CrossCompile"        set "CROSS_COMPILE=1"
 if /i "%~1"=="--Clean"               set "CLEAN=1"
 shift
@@ -175,8 +195,9 @@ if "!CROSS_COMPILE!"=="1" (
     set "BUILT_PREVIEW_EXE=target\!TARGET_TRIPLE!\release\snug_preview.exe"
     set "BUILT_STAMP_EXE=target\!TARGET_TRIPLE!\release\stamp_preview_icon.exe"
     set "BUILT_VERIFY_EXE=target\!TARGET_TRIPLE!\release\verify_icons.exe"
+    set "BUILT_PACKAGER_EXE=target\!TARGET_TRIPLE!\release\package_release.exe"
     set "CARGO_LAUNCHER_ARGS=zigbuild --target !TARGET_TRIPLE! --release -p snug-launcher"
-    set "CARGO_CLI_ARGS=zigbuild --target !TARGET_TRIPLE! --release -p snug-cli --bin snug --bin verify_icons"
+    set "CARGO_CLI_ARGS=zigbuild --target !TARGET_TRIPLE! --release -p snug-cli --bin snug --bin verify_icons --bin package_release"
     set "CARGO_STAMP_ARGS=zigbuild --target !TARGET_TRIPLE! --release -p snug-launcher --bin stamp_preview_icon"
     set "CARGO_PREVIEW_ARGS=zigbuild --target !TARGET_TRIPLE! --release -p snug-launcher --bin snug_preview"
     set "BUILT_DROPPER_EXE=target\!TARGET_TRIPLE!\release\snug-dropper.exe"
@@ -196,8 +217,9 @@ if "!CROSS_COMPILE!"=="1" (
     set "BUILT_PREVIEW_EXE=target\release\snug_preview.exe"
     set "BUILT_STAMP_EXE=target\release\stamp_preview_icon.exe"
     set "BUILT_VERIFY_EXE=target\release\verify_icons.exe"
+    set "BUILT_PACKAGER_EXE=target\release\package_release.exe"
     set "CARGO_LAUNCHER_ARGS=build --release -p snug-launcher"
-    set "CARGO_CLI_ARGS=build --release -p snug-cli --bin snug --bin verify_icons"
+    set "CARGO_CLI_ARGS=build --release -p snug-cli --bin snug --bin verify_icons --bin package_release"
     set "CARGO_STAMP_ARGS=build --release -p snug-launcher --bin stamp_preview_icon"
     set "CARGO_PREVIEW_ARGS=build --release -p snug-launcher --bin snug_preview"
     set "BUILT_DROPPER_EXE=target\release\snug-dropper.exe"
@@ -303,6 +325,10 @@ if not exist "!BUILT_CLI_EXE!" (
 )
 if not exist "!BUILT_VERIFY_EXE!" (
     echo [build] Expected verify_icons at !BUILT_VERIFY_EXE! but it was not produced.
+    exit /b 1
+)
+if not exist "!BUILT_PACKAGER_EXE!" (
+    echo [build] Expected package_release at !BUILT_PACKAGER_EXE! but it was not produced.
     exit /b 1
 )
 
@@ -642,6 +668,64 @@ echo ==^> Skipping release staging ^(--SkipRelease^)
 :after_release
 
 REM ---------------------------------------------------------------------------
+REM 11. Package the release archive.
+REM
+REM    release\windows-x86_64\github\ holds what a release consists of: the
+REM    ZIP a user downloads, and a copy of the demo JAR beside it.
+REM
+REM    The ZIP's shape is
+REM
+REM        snug-<version>-windows-x86_64.zip
+REM        └── snug\
+REM            ├── snug.exe
+REM            ├── snug_preview.exe
+REM            └── Snug Quick Build.exe
+REM
+REM    The inner folder is always `snug`, and the platform lives in the file
+REM    name, which is the same convention the staged tree already uses: the
+REM    binary keeps its own name and the platform is never baked into it.
+REM
+REM    It is written by package_release (the zip crate) rather than by
+REM    Compress-Archive, which writes backslash entry names - snug\snug.exe.
+REM    Windows unzips that correctly, because `\` is a path separator there
+REM    anyway, but a POSIX extractor reads it as ONE filename containing a
+REM    backslash, and the archive unpacks into a flat file rather than a
+REM    folder. The packager also reads its own output back and compares
+REM    every entry against the staged file it came from, so a zip that
+REM    quietly lost a file does not ship.
+REM
+REM    The archive is skipped when the staged tree is partial. --SkipDropper
+REM    and --SkipDevTools leave a shipping artefact out of the tree, and an
+REM    archive missing one of them is worse than no archive at all.
+REM ---------------------------------------------------------------------------
+
+REM Why the archive is skipped, if it is. Computed before the branch so the
+REM message names the flag that caused it rather than just saying "skipped".
+set "ARCHIVE_SKIP_REASON="
+if "!SKIP_ARCHIVE!"=="1" set "ARCHIVE_SKIP_REASON=--SkipArchive was given"
+if "!SKIP_RELEASE!"=="1" set "ARCHIVE_SKIP_REASON=--SkipRelease was given, so nothing was staged"
+if "!SKIP_DROPPER!"=="1" set "ARCHIVE_SKIP_REASON=--SkipDropper was given, so Snug Quick Build.exe is not in the tree"
+if "!SKIP_DEV_TOOLS!"=="1" set "ARCHIVE_SKIP_REASON=--SkipDevTools was given, so snug_preview.exe is not in the tree"
+
+if not "!ARCHIVE_SKIP_REASON!"=="" goto skip_archive
+
+echo.
+echo ==^> packaging the release archive
+"!BUILT_PACKAGER_EXE!" "!STAGE_DIR!"
+if errorlevel 1 (
+    echo [build] Packaging the release archive failed with exit code %errorlevel%
+    exit /b %errorlevel%
+)
+
+goto after_archive
+
+:skip_archive
+echo.
+echo ==^> Skipping the release archive: !ARCHIVE_SKIP_REASON!
+
+:after_archive
+
+REM ---------------------------------------------------------------------------
 REM Summary.
 REM ---------------------------------------------------------------------------
 
@@ -661,6 +745,14 @@ for %%I in ("!STAGE_DIR!\snug.exe")               do ( if exist "!STAGE_DIR!\snu
 for %%I in ("!STAGE_DIR!\!DROPPER_SHIPPED!")     do ( if exist "!STAGE_DIR!\!DROPPER_SHIPPED!" echo     !DROPPER_SHIPPED!:   !STAGE_DIR!\!DROPPER_SHIPPED! ^(%%~zI bytes^) )
 for %%I in ("!STAGE_DIR!\snug_preview.exe")      do ( if exist "!STAGE_DIR!\snug_preview.exe" echo     snug_preview.exe        !STAGE_DIR!\snug_preview.exe ^(%%~zI bytes^) )
 for %%I in ("!STAGE_DIR!\snug-javafx-demo-windows.jar") do ( if exist "!STAGE_DIR!\snug-javafx-demo-windows.jar" echo     snug-javafx-demo-windows.jar !STAGE_DIR!\snug-javafx-demo-windows.jar ^(%%~zI bytes^) )
+REM The archive and the demo JAR copy beside it. The glob is guarded with
+REM `if exist` on the name it produced, because a `for` over a pattern that
+REM matches nothing yields the pattern itself rather than nothing at all.
+REM No parentheses in the echo text: cmd parses an unescaped `(` inside a
+REM for-block as block syntax, and the whole line dies with
+REM ": was unexpected at this time" before the summary is printed.
+for %%I in ("!STAGE_DIR!\github\*.zip") do ( if exist "!STAGE_DIR!\github\%%~nxI" echo     archive:                  !STAGE_DIR!\github\%%~nxI ^(%%~zI bytes^) )
+for %%I in ("!STAGE_DIR!\github\*.jar") do ( if exist "!STAGE_DIR!\github\%%~nxI" echo     demo JAR copy:            !STAGE_DIR!\github\%%~nxI ^(%%~zI bytes^) )
 
 REM End the main flow here. :stage and :verify_icon below are reachable only
 REM through CALL, which is what stops the pipeline running off the end of the

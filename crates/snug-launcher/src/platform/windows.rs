@@ -213,31 +213,46 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
     //    - `Force` — skip discovery entirely. The user always gets
     //      the dialog; a previously cached Temurin (under
     //      `%LOCALAPPDATA%\snug\jdk\`) is silently reused.
-    let mut jvm_dir = match config.behavior.download_jdk {
-        DownloadJdkMode::Off | DownloadJdkMode::Auto => {
-            let found = discover_jvm(&config.behavior.jvm_discovery, config.min_java)?;
-            log::log(&format!(
-                "JVM discovery: {}",
-                found
-                    .as_ref()
-                    .map(|p| format!("found at {}", p.display()))
-                    .unwrap_or_else(|| "no compatible JVM found".to_string())
-            ));
-            found
-        }
-        // Force — let `maybe_install` decide (its internal cache
-        // check covers "already downloaded on a previous run").
-        DownloadJdkMode::Force => {
-            log::log("JVM discovery: skipped (download-jdk=force)");
-            None
-        }
-    };
-    let should_offer_install = match config.behavior.download_jdk {
-        DownloadJdkMode::Off => false,
-        DownloadJdkMode::Auto => jvm_dir.is_none(),
-        DownloadJdkMode::Force => true,
-    };
-    if should_offer_install {
+    //    `plan_jvm` owns that decision, and it is also where a too-old JDK
+    //    stops being fatal. In `Auto` mode "the only Java on this machine
+    //    is too old" is exactly the situation the download flow exists
+    //    for; treating it as a failure meant a machine with Java 21 could
+    //    not download a Java 25, while a machine with no Java at all
+    //    could. The diagnostic is carried through rather than discarded,
+    //    so the final error — if the user declines the download — can
+    //    still say "you have Java 21, you need 25".
+    let plan = plan_jvm(config.behavior.download_jdk, || {
+        discover_jvm(&config.behavior.jvm_discovery, config.min_java)
+    })?;
+    if config.behavior.download_jdk == DownloadJdkMode::Force {
+        log::log("JVM discovery: skipped (download-jdk=force)");
+    } else {
+        log::log(&format!(
+            "JVM discovery: {}",
+            plan.jvm_dir
+                .as_ref()
+                .map(|p| format!("found at {}", p.display()))
+                .unwrap_or_else(|| "no compatible JVM found".to_string())
+        ));
+    }
+    if let Some(LauncherError::JvmTooOld {
+        path,
+        found,
+        min_java,
+    }) = &plan.too_old
+    {
+        log::log(&format!(
+            "JVM discovery: found Java {found} at {} but {min_java}+ is required; \
+             treating it as no compatible runtime",
+            path.display()
+        ));
+    }
+    let JvmPlan {
+        mut jvm_dir,
+        offer_install,
+        mut too_old,
+    } = plan;
+    if offer_install {
         let install_root = jdk_install_root();
         log::log(&format!(
             "JDK install flow starting; root: {}",
@@ -283,9 +298,18 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
                 // common install dirs we check first. For `Auto`
                 // discovery already returned `None`, so this is a
                 // cheap no-op.
+                //
+                // A too-old JDK found here is not re-raised: it is the
+                // same "no compatible runtime" the user just declined a
+                // download for, and `rediscover_jvm` keeps it as the
+                // diagnostic for the final error.
                 if jvm_dir.is_none() {
                     log::log("post-cancel fallback: re-running discovery");
-                    jvm_dir = discover_jvm(&config.behavior.jvm_discovery, config.min_java)?;
+                    jvm_dir = rediscover_jvm(
+                        &config.behavior.jvm_discovery,
+                        config.min_java,
+                        &mut too_old,
+                    )?;
                 }
             }
             Err(e) => {
@@ -296,9 +320,16 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
                 // fallback as the cancel arm — don't strand the user
                 // on a usable local JDK just because the download
                 // flow hiccupped.
+                //
+                // As in the cancel arm, a too-old JDK is kept as a
+                // diagnostic rather than re-raised.
                 if jvm_dir.is_none() {
                     log::log("post-error fallback: re-running discovery");
-                    jvm_dir = discover_jvm(&config.behavior.jvm_discovery, config.min_java)?;
+                    jvm_dir = rediscover_jvm(
+                        &config.behavior.jvm_discovery,
+                        config.min_java,
+                        &mut too_old,
+                    )?;
                 }
             }
         }
@@ -308,9 +339,12 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
             "no compatible Java {}+ JVM found; aborting",
             config.min_java
         ));
-        LauncherError::JvmNotFound {
+        // The specific diagnosis beats "nothing found" when there is
+        // one: the user *has* a Java, it is just too old, and the
+        // download flow was declined. Say which one, and where.
+        too_old.unwrap_or(LauncherError::JvmNotFound {
             min_java: config.min_java,
-        }
+        })
     })?;
     log::log(&format!("using JAVA_HOME: {}", jvm_dir.display()));
     let jvm_dll = locate_jvm_dll(&jvm_dir).ok_or_else(|| {
@@ -770,6 +804,98 @@ pub fn discover_jvm(
         });
     }
     Ok(None)
+}
+
+/// What the launcher decided to do after a discovery attempt.
+///
+/// Split out of `run()` so the rule can be tested. "In `Auto` mode, no
+/// compatible runtime means offer the download" is a one-line rule, and
+/// the `?` that used to hide it behind a fatal error was invisible to
+/// the suite because it lived inside the launch flow.
+#[derive(Debug)]
+struct JvmPlan {
+    /// The JVM to run with, if discovery found a usable one.
+    jvm_dir: Option<PathBuf>,
+    /// Whether to offer the JDK download flow.
+    offer_install: bool,
+    /// The "too old" diagnostic, kept for the final error message.
+    too_old: Option<LauncherError>,
+}
+
+/// Turn a discovery attempt into a plan.
+///
+/// * `Off` never offers the download, and any discovery error is fatal:
+///   the user asked for no download flow, so "your Java is too old" is
+///   the answer they need.
+/// * `Force` always offers it, and never runs discovery at all — the
+///   closure is not called, which is what keeps `Force` from paying
+///   for a discovery pass whose result it would throw away.
+/// * `Auto` offers the download whenever no compatible runtime exists.
+///   A too-old JDK counts as *no compatible runtime*, not as a fatal
+///   error: offering a download is precisely the answer to "the only
+///   Java on this machine is too old". The diagnostic is kept so the
+///   final error, if the user declines, can still name the version.
+///
+/// `discover` is a closure rather than a value because `Force` must not
+/// run it at all.
+fn plan_jvm(
+    mode: DownloadJdkMode,
+    discover: impl FnOnce() -> Result<Option<PathBuf>, LauncherError>,
+) -> Result<JvmPlan, LauncherError> {
+    match mode {
+        DownloadJdkMode::Off => Ok(JvmPlan {
+            jvm_dir: discover()?,
+            offer_install: false,
+            too_old: None,
+        }),
+        DownloadJdkMode::Force => Ok(JvmPlan {
+            jvm_dir: None,
+            offer_install: true,
+            too_old: None,
+        }),
+        DownloadJdkMode::Auto => match discover() {
+            Ok(found) => Ok(JvmPlan {
+                offer_install: found.is_none(),
+                jvm_dir: found,
+                too_old: None,
+            }),
+            // A too-old JDK is not a fatal discovery error here. It is
+            // the case the download flow exists for, and treating it as
+            // fatal made having an old JDK *worse* than having none: the
+            // no-Java machine got the offer, the Java-21 machine got a
+            // dead end.
+            Err(e @ LauncherError::JvmTooOld { .. }) => Ok(JvmPlan {
+                jvm_dir: None,
+                offer_install: true,
+                too_old: Some(e),
+            }),
+            Err(e) => Err(e),
+        },
+    }
+}
+
+/// Re-run discovery as a courtesy after the download flow did not
+/// produce a JVM.
+///
+/// A too-old JDK is not re-raised here: it is the same "no compatible
+/// runtime" the user just declined a download for, and the caller
+/// carries the diagnostic through to the final error. Any other
+/// discovery error is still fatal.
+fn rediscover_jvm(
+    strategy: &JvmDiscovery,
+    min_java: u16,
+    too_old: &mut Option<LauncherError>,
+) -> Result<Option<PathBuf>, LauncherError> {
+    match discover_jvm(strategy, min_java) {
+        Ok(found) => Ok(found),
+        Err(e @ LauncherError::JvmTooOld { .. }) => {
+            if too_old.is_none() {
+                *too_old = Some(e);
+            }
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 fn check_candidate(dir: &Path, min_java: u16) -> Result<Option<PathBuf>, LauncherError> {
@@ -1242,6 +1368,131 @@ mod tests {
         let mut too_old = None;
         assert!(scan_candidate(&mut too_old, &home, 25).unwrap().is_none());
         assert_eq!(too_old, Some((home, 11)));
+    }
+
+    // ---- TA-009: a too-old JDK must not block the download offer -------
+
+    /// A discovery strategy that looks at exactly one place, so a test
+    /// cannot be swayed by whatever the machine it runs on happens to
+    /// have installed.
+    fn only_candidate(home: PathBuf) -> JvmDiscovery {
+        JvmDiscovery {
+            explicit: Some(home),
+            try_java_home: false,
+            try_jdk_home: false,
+            try_path: false,
+            try_registry: false,
+            try_common: false,
+        }
+    }
+
+    #[test]
+    fn auto_mode_offers_the_download_when_the_only_java_is_too_old() {
+        // The bug: `Auto` decided by propagating discovery's error, so a
+        // machine with Java 21 and an app wanting 25 got "located JVM at
+        // ... version 21 is below 25" and *no* offer -- while a machine
+        // with no Java at all got the offer. Having an old JDK was worse
+        // than having none.
+        let dir = tempdir();
+        let old = fake_jdk(&dir, "21");
+        let strategy = only_candidate(old);
+
+        let plan = plan_jvm(DownloadJdkMode::Auto, || discover_jvm(&strategy, 25))
+            .expect("Auto must not treat a too-old JDK as a fatal error");
+
+        assert!(plan.offer_install, "the download offer must be made");
+        assert!(plan.jvm_dir.is_none(), "there is no usable JVM yet");
+        assert!(
+            plan.too_old.is_some(),
+            "the too-old diagnostic must survive for the final error"
+        );
+    }
+
+    #[test]
+    fn auto_mode_offers_the_download_when_there_is_no_java_at_all() {
+        // The control: the case that already worked, and that the
+        // too-old case has to match.
+        let plan = plan_jvm(DownloadJdkMode::Auto, || Ok(None)).expect("no error");
+        assert!(plan.offer_install, "no JVM at all must reach the offer");
+        assert!(plan.jvm_dir.is_none());
+        assert!(plan.too_old.is_none());
+    }
+
+    #[test]
+    fn auto_mode_does_not_offer_the_download_when_a_jvm_was_found() {
+        let dir = tempdir();
+        let good = fake_jdk(&dir, "25");
+        let strategy = only_candidate(good.clone());
+
+        let plan = plan_jvm(DownloadJdkMode::Auto, || discover_jvm(&strategy, 25)).unwrap();
+        assert!(
+            !plan.offer_install,
+            "a usable JVM must not trigger the offer"
+        );
+        assert_eq!(plan.jvm_dir.as_deref(), Some(good.as_path()));
+    }
+
+    #[test]
+    fn off_mode_still_fails_on_a_too_old_jdk() {
+        // `Off` means "no download flow at all", so "your Java is too
+        // old" is exactly the error the user needs. The fix must not
+        // soften it.
+        let dir = tempdir();
+        let old = fake_jdk(&dir, "21");
+        let strategy = only_candidate(old);
+
+        let err = plan_jvm(DownloadJdkMode::Off, || discover_jvm(&strategy, 25))
+            .expect_err("Off must not offer a download, so it must fail");
+        assert!(
+            matches!(&err, LauncherError::JvmTooOld { .. }),
+            "expected JvmTooOld, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_discovery_error_other_than_too_old_is_still_fatal_in_auto_mode() {
+        // The fix is narrow on purpose: only "too old" means "no
+        // compatible runtime". Everything else is still a failure.
+        let err = plan_jvm(DownloadJdkMode::Auto, || {
+            Err(LauncherError::JvmNotFound { min_java: 25 })
+        })
+        .expect_err("an unrelated discovery error must stay fatal");
+        assert!(
+            matches!(&err, LauncherError::JvmNotFound { .. }),
+            "expected JvmNotFound, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn force_mode_never_runs_discovery() {
+        // `Force` skips discovery outright. The closure must not be
+        // called at all -- a discovery pass here would be a behaviour
+        // change, not merely a slower one.
+        let plan = plan_jvm(DownloadJdkMode::Force, || {
+            panic!("Force must not run discovery")
+        })
+        .expect("Force never fails on discovery");
+        assert!(plan.offer_install, "Force always offers the download");
+        assert!(plan.jvm_dir.is_none());
+    }
+
+    #[test]
+    fn a_too_old_jdk_found_by_the_fallback_is_kept_as_a_diagnostic() {
+        // The post-cancel / post-error fallback re-runs discovery. A
+        // too-old JDK there is not re-raised: the user just declined a
+        // download, and "you have Java 21, you need 25" is the message
+        // the final error should carry.
+        let dir = tempdir();
+        let old = fake_jdk(&dir, "21");
+        let strategy = only_candidate(old);
+        let mut too_old = None;
+
+        let found = rediscover_jvm(&strategy, 25, &mut too_old).unwrap();
+        assert!(found.is_none(), "a too-old JDK is not a usable JVM");
+        assert!(
+            too_old.is_some(),
+            "the diagnostic must be kept rather than dropped"
+        );
     }
 
     // ---- F-08: vendor directories must be expanded ----------------------
