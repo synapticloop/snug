@@ -597,7 +597,7 @@ pub struct Cli {
 
     /// Use a specific Snug options file instead of automatic lookup.
     ///
-    /// Without this flag, Snug reads snug.options followed by the host-specific file (such as snug.windows.options). It looks in the Snug executable's directory first, then the current directory, for each filename.
+    /// Without this flag, Snug reads snug.options followed by the host-specific file (such as snug.windows.options). Both files are searched for in the current working directory only.
     ///
     /// Priority, highest first:
     ///
