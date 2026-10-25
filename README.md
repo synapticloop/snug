@@ -13,7 +13,9 @@ Turn a runnable Java application into a Windows executable that people can doubl
 Snug wraps your Java application JAR (or a directory of JARs) in a native **Windows x64** `.exe`. It helps launch Java, can offer to download a compatible runtime, and lets you add your own icon, splash screen, and application details. It's designed for people who want to share a working Java application without asking others to run a JAR manually.
 
 
-> **Development status:** Snug is under active development. Check [Releases](https://github.com/synapticloop/snug/releases) for available builds.
+> **Development status:** Snug is under active development and a beta 
+> version has been released. 
+> Check [Releases](https://github.com/synapticloop/snug/releases) for available builds.
  
 
 ---
