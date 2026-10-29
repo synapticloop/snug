@@ -59,7 +59,7 @@ snug/
 ├── test/
 │   └── localisations/    # hand-maintained en/de/fr/ts bundles, drift-guarded
 └── scripts/              # native-only build pipelines, grouped by platform
-    ├── windows/          # .cmd + .ps1 — launcher stub, CLI, dropper, dialog preview
+    ├── windows/          # .cmd + .ps1 — launcher stub, CLI, dropper, dialog preview, clean
     └── macos/            # .sh — slim CLI per-arch builds + demo bundle
 ```
 
@@ -124,6 +124,20 @@ release path. Nothing in the release process depends on it.
 cargo build --release -p snug-launcher
 Copy-Item target\release\snug-launcher.exe bin\launcher-stub-windows-x86_64.exe
 ```
+
+### Disk footprint
+
+`target\` is the largest thing in a working copy, and cargo never throws
+any of it away on its own: measured here, 5.4 GB, of which `target\debug\`
+alone was 4.3 GB (deps 2.1 GB, incremental 1.8 GB, build 0.3 GB).
+`scripts\windows\clean.cmd` reclaims it, by `cargo clean` granularity —
+the whole tree, the dev profile, the release profile, or the three
+workspace crates — and by a separate staging pass for `release\` and the
+gitignored demo outputs in `assets\`. The staging pass asks git before
+it deletes a file and refuses if the answer is yes, so `release\.gitignore`
+and the tracked `assets\*.jar` source assets are safe;
+`bin\launcher-stub-*.exe` is never in a swept path. `--DryRun` reports
+what would go and deletes nothing.
 
 ### The `snug` CLI also builds and runs natively on macOS / Linux
 
