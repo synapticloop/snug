@@ -33,9 +33,14 @@ REM     --CheckOnly        Run check.ps1 and stop. The opposite of --SkipCheck:
 REM                         verify the tree is green without spending the
 REM                         build budget.
 REM
-REM Any other flags (--SkipLauncherRebuild, --SkipPackage, --SkipVerify,
-REM --SkipDevTools, --SkipDropper, --SkipRelease, --CrossCompile, --Clean,
-REM -Format) are forwarded to check.ps1 / build.cmd unchanged.
+REM Flags are split by which script understands them. check.ps1 declares
+REM exactly one parameter, -Format, and fails on anything else ("A parameter
+REM cannot be found that matches parameter name"), so the gates only ever
+REM receive -Format. Everything else is forwarded to build.cmd unchanged:
+REM --SkipLauncherRebuild, --SkipPackage, --SkipVerify, --SkipDevTools,
+REM --SkipDropper, --SkipRelease, --SkipArchive, --CrossCompile, --Clean.
+REM build.cmd ignores flags it does not recognise, so -Format reaching it
+REM too is harmless.
 REM ===========================================================================
 
 setlocal EnableExtensions EnableDelayedExpansion
@@ -59,15 +64,18 @@ REM ---------------------------------------------------------------------------
 
 set "SKIP_CHECK=0"
 set "CHECK_ONLY=0"
-set "FORWARDED_FLAGS="
+set "CHECK_FLAGS="
+set "BUILD_FLAGS="
 
 :parse_args
 if "%~1"=="" goto args_done
 if /i "%~1"=="--SkipCheck"  set "SKIP_CHECK=1"
 if /i "%~1"=="--CheckOnly"  set "CHECK_ONLY=1"
 REM Anything else is forwarded. Quote-stripped so build.cmd can parse it the
-REM same way it does when invoked directly.
-if /i not "%~1"=="--SkipCheck" if /i not "%~1"=="--CheckOnly" set "FORWARDED_FLAGS=!FORWARDED_FLAGS! %~1"
+REM same way it does when invoked directly. -Format is the only flag
+REM check.ps1 can bind, so it gets its own list.
+if /i "%~1"=="-Format" set "CHECK_FLAGS=!CHECK_FLAGS! -Format"
+if /i not "%~1"=="--SkipCheck" if /i not "%~1"=="--CheckOnly" set "BUILD_FLAGS=!BUILD_FLAGS! %~1"
 shift
 goto parse_args
 
@@ -85,8 +93,8 @@ REM ---------------------------------------------------------------------------
 if "!SKIP_CHECK!"=="1" goto skip_check
 
 echo.
-echo ==^> scripts\windows\check.ps1 !FORWARDED_FLAGS!
-powershell -NoProfile -ExecutionPolicy Bypass -File "!_SCRIPT_DIR!check.ps1" !FORWARDED_FLAGS!
+echo ==^> scripts\windows\check.ps1 !CHECK_FLAGS!
+powershell -NoProfile -ExecutionPolicy Bypass -File "!_SCRIPT_DIR!check.ps1" !CHECK_FLAGS!
 if errorlevel 1 (
     echo [release] check.ps1 failed with exit code %errorlevel% - aborting before the build.
     exit /b %errorlevel%
@@ -105,8 +113,8 @@ REM 2. Release pipeline: launcher stub, CLI, demo, verify, icons, stage
 REM ---------------------------------------------------------------------------
 
 echo.
-echo ==^> scripts\windows\build.cmd !FORWARDED_FLAGS!
-call "!_SCRIPT_DIR!build.cmd" !FORWARDED_FLAGS!
+echo ==^> scripts\windows\build.cmd !BUILD_FLAGS!
+call "!_SCRIPT_DIR!build.cmd" !BUILD_FLAGS!
 if errorlevel 1 (
     echo [release] build.cmd failed with exit code %errorlevel%
     exit /b %errorlevel%
