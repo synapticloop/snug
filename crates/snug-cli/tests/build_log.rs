@@ -385,3 +385,115 @@ fn a_build_log_that_is_also_an_input_is_refused() {
         "the input must not have been truncated"
     );
 }
+
+
+#[test]
+fn log_cannot_truncate_an_existing_executable() {
+    let tmp = tempdir();
+    let jar = tmp.join("demo.jar");
+    let exe = tmp.join("demo.exe");
+    write_jar(&jar, Some("com.example.Main"));
+    fs::write(&exe, b"existing executable").unwrap();
+
+    let result = Command::new(snug_bin())
+        .current_dir(&tmp)
+        .arg(&jar)
+        .arg("--output")
+        .arg(&exe)
+        .arg("--build-log")
+        .arg(&exe)
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert_eq!(fs::read(&exe).unwrap(), b"existing executable");
+}
+
+#[test]
+fn log_cannot_truncate_a_jar_inside_an_input_directory() {
+    let tmp = tempdir();
+    let jars = tmp.join("jars");
+    fs::create_dir_all(&jars).unwrap();
+    let jar = jars.join("app.jar");
+    write_jar(&jar, Some("com.example.Main"));
+    let original = fs::read(&jar).unwrap();
+
+    let result = Command::new(snug_bin())
+        .current_dir(&tmp)
+        .arg("--input")
+        .arg(&jars)
+        .arg("--build-log")
+        .arg(&jar)
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert_eq!(fs::read(&jar).unwrap(), original);
+}
+
+#[test]
+fn duplicate_main_class_uses_the_first_jar_version() {
+    let tmp = tempdir();
+    let jars = tmp.join("jars");
+    fs::create_dir_all(&jars).unwrap();
+    write_jar_with_version(&jars.join("a.jar"), Some("com.example.Main"), 61);
+    write_jar_with_version(&jars.join("b.jar"), Some("com.example.Main"), 69);
+
+    let result = Command::new(snug_bin())
+        .current_dir(&tmp)
+        .arg("--input")
+        .arg(&jars)
+        .arg("--min-java")
+        .arg("17")
+        .arg("--dry-run")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(result.status.success(), "{stderr}");
+    assert!(stderr.contains("SNUG-MAIN-005"), "{stderr}");
+    assert!(!stderr.contains("error SNUG-JAVA-001"), "{stderr}");
+}
+
+#[test]
+fn dry_run_rejects_invalid_manifest_without_writing_executable() {
+    let tmp = tempdir();
+    let jar = tmp.join("demo.jar");
+    let manifest = tmp.join("broken.manifest");
+    let exe = tmp.join("demo.exe");
+    write_jar(&jar, Some("com.example.Main"));
+    fs::write(&manifest, "<assembly><unclosed>").unwrap();
+
+    let result = Command::new(snug_bin())
+        .current_dir(&tmp)
+        .arg(&jar)
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("--dry-run")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(!result.status.success(), "{stderr}");
+    assert!(stderr.contains("SNUG-RESOURCE-001"), "{stderr}");
+    assert!(!exe.exists());
+}
+
+#[test]
+fn dry_run_rejects_invalid_icon_without_writing_executable() {
+    let tmp = tempdir();
+    let jar = tmp.join("demo.jar");
+    let icon = tmp.join("broken.png");
+    let exe = tmp.join("demo.exe");
+    write_jar(&jar, Some("com.example.Main"));
+    fs::write(&icon, b"not a PNG").unwrap();
+
+    let result = Command::new(snug_bin())
+        .current_dir(&tmp)
+        .arg(&jar)
+        .arg("--icon")
+        .arg(&icon)
+        .arg("--dry-run")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(!result.status.success(), "{stderr}");
+    assert!(stderr.contains("SNUG-RESOURCE-001"), "{stderr}");
+    assert!(!exe.exists());
+}
