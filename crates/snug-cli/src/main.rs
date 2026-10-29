@@ -113,17 +113,27 @@ fn run() -> Result<Outcome> {
     // lets a parse error land in the log instead of only on screen.
     let advisory = options_file::flags_present(&merged.argv, &["find-main", "list-tokens"]);
 
+    // Parse once, before opening a file that may be truncated. We keep
+    // the result until after the logger opens so clap errors still reach it.
+    let parsed_matches = Cli::command().try_get_matches_from(&merged.argv);
+    let early_output = parsed_matches
+        .as_ref()
+        .ok()
+        .and_then(|matches| Cli::from_arg_matches(matches).ok())
+        .map(|cli| output_path(&cli))
+        .or_else(|| options_file::flag_value(&merged.argv, "output").map(PathBuf::from));
+
     let mut reporter = if advisory {
         Reporter::new(BuildLog::none())
     } else {
-        open_build_log(&merged, &cwd, &options_paths)?
+        open_build_log(&merged, &cwd, &options_paths, early_output.as_deref())?
     };
 
     // Parse fallibly, so an ordinary parse error is reported rather than
     // exiting with clap's own handler before anything was recorded.
     // Help and version are informational exits, not failures, and clap
     // renders them to stdout.
-    let matches = match Cli::command().try_get_matches_from(&merged.argv) {
+    let matches = match parsed_matches {
         Ok(matches) => matches,
         Err(err) => {
             report_parse_error(&mut reporter, &err);
@@ -259,12 +269,24 @@ fn run() -> Result<Outcome> {
     }
 
     if cli.dry_run {
+        // Run the same PE resource checks as a normal Windows build,
+        // including icon decoding and manifest XML validation. Nothing
+        // is written to the output path.
+        if !build_failed && !wants_app_bundle(&cli) {
+            reporter.set_stage("resources");
+            if let Err(err) = snug_cli::build::validate_resources(&cli, &embedded) {
+                reporter
+                    .error(codes::RESOURCE_INVALID, "resources", format!("{err:?}"))
+                    .emit();
+            }
+        }
+        let succeeded = !reporter.has_errors();
         dry_run(&cli, &embedded, &mut reporter);
-        finish(&mut reporter, &cli, None, !build_failed);
-        return if build_failed {
-            Ok(Outcome::Reported)
-        } else {
+        finish(&mut reporter, &cli, None, succeeded);
+        return if succeeded {
             Ok(Outcome::Success)
+        } else {
+            Ok(Outcome::Reported)
         };
     }
 
@@ -327,6 +349,13 @@ fn run() -> Result<Outcome> {
             return Ok(Outcome::Reported);
         }
     };
+    let final_size = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
+    reporter.write_line(&format!(
+        "snug: wrote {} ({} bytes; payload {} as RT_RCDATA)",
+        output.display(),
+        final_size,
+        embedded.payload_len
+    ));
     reporter.write_line(&format!("snug: built {}", output.display()));
     finish(&mut reporter, &cli, Some(output.as_path()), true);
     Ok(Outcome::Success)
@@ -339,7 +368,12 @@ fn run() -> Result<Outcome> {
 /// before it writes an executable: a build whose report nobody can read
 /// is not a build worth shipping. A temporary log still captures the
 /// reason, so the failure is never silent.
-fn open_build_log(merged: &Merged, cwd: &Path, options_paths: &[PathBuf]) -> Result<Reporter> {
+fn open_build_log(
+    merged: &Merged,
+    cwd: &Path,
+    options_paths: &[PathBuf],
+    output: Option<&Path>,
+) -> Result<Reporter> {
     let requested = options_file::flag_value(&merged.argv, "build-log");
     let requested = requested.map(PathBuf::from);
     let destination = BuildLog::resolve(requested.as_deref(), cwd);
@@ -348,7 +382,21 @@ fn open_build_log(merged: &Merged, cwd: &Path, options_paths: &[PathBuf]) -> Res
     // files the build reads. Checking this here matters: the log opens
     // *before* the full parse, so the collision guard downstream is too
     // late to protect the input.
-    for input in protected_paths(merged, options_paths) {
+    // The output must be protected *before* the log is opened, not
+    // by the later output guard (which would be too late).
+    if output.is_some_and(|path| same_file(path, &destination)) {
+        eprintln!(
+            "snug: error {}: the build log {} would overwrite the executable",
+            codes::OUTPUT_COLLISION,
+            destination.display()
+        );
+        anyhow::bail!(
+            "the build log and executable output refer to the same file: {}",
+            destination.display()
+        );
+    }
+
+    for input in protected_paths(merged, options_paths)? {
         if same_file(&input, &destination) {
             eprintln!(
                 "snug: error {}: the build log {} is also one of this build's input files",
@@ -387,20 +435,43 @@ fn open_build_log(merged: &Merged, cwd: &Path, options_paths: &[PathBuf]) -> Res
 ///
 /// The log opens before the full parse, so this is how the log
 /// destination is checked against the inputs it must not alias.
-fn protected_paths(merged: &Merged, options_paths: &[PathBuf]) -> Vec<PathBuf> {
+fn protected_paths(merged: &Merged, options_paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
     let mut paths: Vec<PathBuf> = options_paths.to_vec();
-    for name in ["input", "icon", "splash", "manifest", "localisation"] {
-        for value in options_file::flag_values(&merged.argv, name) {
-            paths.push(PathBuf::from(value));
-        }
+    let mut inputs: Vec<PathBuf> = Vec::new();
+    for value in options_file::flag_values(&merged.argv, "input") {
+        inputs.push(PathBuf::from(value));
     }
     // The positional JAR, if there is one.
     if let Some(index) = merged.positional_at.first()
         && let Some(token) = merged.argv.get(*index)
     {
-        paths.push(PathBuf::from(token));
+        inputs.push(PathBuf::from(token));
     }
-    paths
+    for name in ["icon", "splash", "manifest", "localisation"] {
+        for value in options_file::flag_values(&merged.argv, name) {
+            paths.push(PathBuf::from(value));
+        }
+    }
+
+    for input in inputs {
+        if input.is_dir() {
+            // Reuse the exact JAR enumeration and ordering of the
+            // packaging path. If enumeration is incomplete, never
+            // risk truncating an undiscovered input JAR.
+            let mut sink = Reporter::new(BuildLog::none());
+            let jars = snug_cli::build::jar_paths_in(&input, &mut sink)
+                .with_context(|| format!("checking JARs in {}", input.display()))?;
+            if sink.warning_count() != 0 {
+                anyhow::bail!(
+                    "cannot safely inspect every JAR in input directory {}",
+                    input.display()
+                );
+            }
+            paths.extend(jars);
+        }
+        paths.push(input);
+    }
+    Ok(paths)
 }
 
 /// Whether two paths name the same file.
