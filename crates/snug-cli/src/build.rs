@@ -971,10 +971,6 @@ pub fn build_exe(cli: &Cli, embedded: &SnugEmbedded) -> Result<PathBuf> {
     // moment anyone mutated it, and a silently-wrong payload is worse than
     // one redundant pass. Left alone deliberately.
     let encoded = encode(embedded).context("encoding snug payload")?;
-    // Taken now because `set_rcdata` consumes the vector below; the log line
-    // at the end wants the length. Cheaper than cloning it back.
-    let payload_len = encoded.len();
-
     if let Some(parent) = output.parent()
         && !parent.as_os_str().is_empty()
     {
