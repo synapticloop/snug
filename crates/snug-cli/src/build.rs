@@ -146,7 +146,7 @@ pub fn build_payload_with(cli: &Cli, reporter: &mut Reporter) -> Result<SnugPayl
             let img = image::load_from_memory_with_format(&png_bytes, image::ImageFormat::Png)
                 .map_err(|e| anyhow::anyhow!("decode splash PNG {}: {e}", path.display()))?;
             let (width, height) = img.dimensions();
-            check_splash_dimensions(width, height, &cli.splash_max);
+            check_splash_dimensions(width, height, &cli.splash_max, reporter);
             let rgba = img.to_rgba8();
             let mut pixels: Vec<u8> = rgba.into_raw();
             // Convert RGBA straight → BGRA pre-multiplied. `UpdateLayeredWindow`
@@ -227,7 +227,7 @@ pub fn build_payload_with(cli: &Cli, reporter: &mut Reporter) -> Result<SnugPayl
     Ok(SnugPayload {
         config,
         jars,
-        localizations: collect_localizations(cli)?,
+        localizations: collect_localizations(cli, reporter)?,
     })
 }
 
@@ -238,10 +238,10 @@ pub fn build_payload_with(cli: &Cli, reporter: &mut Reporter) -> Result<SnugPayl
 /// matters because `snug.options` accumulates `--localisation` lines
 /// in arbitrary order, and a `--localisation X` on the CLI vs. one
 /// in the file shouldn't reorder the rest of the chain.
-fn collect_localizations(cli: &Cli) -> Result<Vec<snug_format::Localization>> {
+fn collect_localizations(cli: &Cli, reporter: &mut Reporter) -> Result<Vec<snug_format::Localization>> {
     let mut paths: Vec<std::path::PathBuf> = cli.localizations.clone();
     paths.sort();
-    let bundles = localization::collect(&paths)?;
+    let bundles = localization::collect_with_reporter(&paths, reporter)?;
     localization::ensure_unique_tags(&bundles).context("validating localization bundle tags")?;
     Ok(bundles)
 }
@@ -387,11 +387,11 @@ fn resolve_input(
             jars.push(embedded_file(bytes));
             labels.push(file_name_of(jar_path));
         }
-        eprintln!(
+        reporter.write_line(&format!(
             "snug: indexed {} JAR(s) from {}",
             jars.len(),
             input_path.display()
-        );
+        ));
         Ok((input_path, jars, labels))
     }
 }
@@ -548,8 +548,9 @@ fn check_entry_class(
     // supplied JARs. Snug does not resolve them, so the entry class may
     // legitimately be absent — and saying it is missing would be wrong.
     let mut declares_class_path = false;
+    let mut entry_sources: Vec<String> = Vec::new();
 
-    for (file, _label) in jars.iter().zip(labels.iter()) {
+    for (file, label) in jars.iter().zip(labels.iter()) {
         let Ok(mut scan) = classfile::scan_class_versions_in_bytes(&file.bytes) else {
             continue;
         };
@@ -564,7 +565,11 @@ fn check_entry_class(
         for (name, version) in scan.effective_classes(min_java) {
             if main_class == Some(name.as_str()) {
                 entry_found = true;
-                entry_version = Some(version);
+                entry_sources.push(format!("{label} (Java {})", version.java_release()));
+                // The first copy on the embedded classpath wins.
+                if entry_version.is_none() {
+                    entry_version = Some(version);
+                }
             }
             if !seen.insert(name.clone()) {
                 continue;
@@ -588,35 +593,41 @@ fn check_entry_class(
     if let Some(class) = main_class
         && !entry_found
     {
-        if declares_class_path {
-            reporter
-                .warning(
-                    codes::MAIN_ABSENT,
-                    "entry point",
-                    format!(
-                        "the selected class `{class}` is not in any of the supplied JARs, \
-                         but a manifest declares a Class-Path, so it may be provided \
-                         externally"
-                    ),
-                )
-                .hint(
-                    "snug does not resolve manifest Class-Path entries; make sure the \
-                     class is on the runtime classpath",
-                )
-                .emit();
-        } else {
-            reporter
-                .error(
-                    codes::MAIN_ABSENT,
-                    "entry point",
-                    format!("the selected class `{class}` is not in any of the supplied JARs"),
-                )
-                .hint(
-                    "check the spelling, and check that the JAR containing it was \
-                     included in the input",
-                )
-                .emit();
-        }
+        reporter
+            .error(
+                codes::MAIN_ABSENT,
+                "entry point",
+                format!("the selected class `{class}` is not in any of the supplied JARs"),
+            )
+            .hint(
+                "check the spelling and include the JAR containing the selected class;                  external manifest Class-Path entries are not bundled",
+            )
+            .emit();
+    }
+    if let Some(class) = main_class
+        && entry_sources.len() > 1
+    {
+        reporter
+            .warning(
+                codes::MAIN_DUPLICATE,
+                "entry point",
+                format!(
+                    "`{class}` occurs in multiple JARs; the first copy wins:\n  {}",
+                    entry_sources.join("\n  ")
+                ),
+            )
+            .hint("remove unintended duplicate entry classes")
+            .emit();
+    }
+    if declares_class_path {
+        reporter
+            .warning(
+                codes::DEP_CLASSPATH,
+                "dependencies",
+                "a JAR manifest declares Class-Path entries that Snug does not bundle",
+            )
+            .hint("include dependencies in the supplied JARs or build a fat JAR")
+            .emit();
     }
 
     reporter.set_stage("bytecode");
@@ -734,23 +745,23 @@ fn parse_splash_max(value: &str) -> Option<(u32, u32)> {
 /// Emit a build-time warning if the decoded splash dimensions exceed
 /// the `--splash-max` bounds. No-op when the value parses to
 /// `off`/`none` or anything that disables the cap.
-fn check_splash_dimensions(width: u32, height: u32, max_value: &str) {
-    let max = match parse_splash_max(max_value) {
-        Some(m) => m,
-        None => return,
+fn check_splash_dimensions(width: u32, height: u32, max_value: &str, reporter: &mut Reporter) {
+    let Some((max_width, max_height)) = parse_splash_max(max_value) else {
+        return;
     };
-    if width > max.0 || height > max.1 {
-        eprintln!(
-            "snug: warning: splash PNG is {width}x{height}, exceeds recommended max {}x{}",
-            max.0, max.1
-        );
-        eprintln!(
-            "snug: note:    the launcher renders at native pixel size (often looks oversized at >{}x{})",
-            max.0, max.1
-        );
-        eprintln!(
-            "snug: note:    silence with --splash-max off, or customise with --splash-max <WxH>"
-        );
+    if width > max_width || height > max_height {
+        reporter
+            .warning(
+                codes::RESOURCE_OVERSIZED,
+                "resources",
+                format!(
+                    "splash PNG is {width}x{height}, exceeds recommended max {max_width}x{max_height}"
+                ),
+            )
+            .hint(
+                "the launcher renders at native pixel size; use --splash-max off                  to silence this warning or --splash-max <WxH> to customise it",
+            )
+            .emit();
     }
 }
 
@@ -915,6 +926,19 @@ fn staged_output_path(output: &std::path::Path) -> std::path::PathBuf {
     output.with_file_name(name)
 }
 
+/// Validate the same icon, manifest, and version resources as an EXE build,
+/// without creating an output file.
+pub fn validate_resources(cli: &Cli, embedded: &SnugEmbedded) -> Result<()> {
+    let mut resources = Image::parse(STUB_BYTES)
+        .context("parsing embedded stub as PE image")?
+        .resource_directory()
+        .cloned()
+        .unwrap_or_default();
+    ResourcePlan::from_cli(cli)
+        .apply(&mut resources, embedded)
+        .context("validating icon / manifest / version resources")
+}
+
 /// Build the final Windows `.exe`.
 ///
 /// v2 (slice 4): the encoded payload is embedded as an `RT_RCDATA`
@@ -1004,13 +1028,6 @@ pub fn build_exe(cli: &Cli, embedded: &SnugEmbedded) -> Result<PathBuf> {
             .with_context(|| format!("installing the EXE at {}", output.display()));
     }
 
-    let final_size = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
-    eprintln!(
-        "snug: wrote {} ({} bytes; payload {} as RT_RCDATA)",
-        output.display(),
-        final_size,
-        payload_len,
-    );
 
     Ok(output)
 }
