@@ -92,6 +92,48 @@ fn builds_a_real_exe_next_to_the_dropped_jar() {
 }
 
 #[test]
+fn the_build_log_lands_in_the_droppers_own_folder() {
+    let Some(snug) = snug_exe() else {
+        eprintln!("skipping: snug.exe has not been built (run `cargo test --workspace`)");
+        return;
+    };
+
+    // The dropper and `snug.exe` ship in the same folder, so the folder
+    // `snug.exe` lives in *is* the dropper's folder. Copying it into a
+    // scratch directory reproduces that layout.
+    let tools = scratch("tools");
+    let snug_here = tools.join("snug.exe");
+    std::fs::copy(&snug, &snug_here).expect("copying snug.exe");
+
+    let work = scratch("log-work");
+    let input = work.join("demo.jar");
+    std::fs::copy(demo_jar(), &input).expect("copying the demo jar");
+
+    let invocation = build::invocation(&snug_here, &input);
+    let transcript = work.join(build::LOG_FILE_NAME);
+    let outcome = build::run(&invocation, &transcript);
+
+    // The build may or may not succeed — the demo jar's entry class is
+    // JavaFX and the build is not what is under test here. What matters
+    // is where the log went.
+    let _ = outcome;
+
+    let build_log = tools.join(build::BUILD_LOG_NAME);
+    assert!(
+        build_log.is_file(),
+        "the build log should be in the dropper's own folder, next to snug.exe: {}",
+        build_log.display()
+    );
+    assert!(
+        !work.join(build::BUILD_LOG_NAME).exists(),
+        "the build log should not land beside the dropped jar"
+    );
+
+    let _ = std::fs::remove_dir_all(&tools);
+    let _ = std::fs::remove_dir_all(&work);
+}
+
+#[test]
 fn a_missing_snug_exe_fails_with_a_readable_reason() {
     let dir = scratch("no-snug");
     let input = dir.join("demo.jar");

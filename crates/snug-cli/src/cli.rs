@@ -529,6 +529,7 @@ pub struct Cli {
     ///     snug.exe MyApp.jar --emit-payload > payload.bin
     #[arg(
         long = "emit-payload",
+        conflicts_with = "dry_run",
         help_heading = "RUNTIME AND BUILD BEHAVIOUR",
         verbatim_doc_comment
     )]
@@ -536,15 +537,39 @@ pub struct Cli {
 
     /// Validate the inputs and show what would be built, without creating an executable or writing build output.
     ///
+    /// The build log is still written, because the diagnostics are the point of a dry run.
+    ///
     /// Example:
     ///
     ///     snug.exe MyApp.jar --dry-run
     #[arg(
         long = "dry-run",
+        conflicts_with = "emit_payload",
         help_heading = "RUNTIME AND BUILD BEHAVIOUR",
         verbatim_doc_comment
     )]
     pub dry_run: bool,
+
+    /// Write a build log to this path.
+    ///
+    /// Every build writes a log. By default it is snug.build.log in the current working directory, and each build replaces the log from the previous one.
+    ///
+    /// If the path names an existing directory, the log is written as snug.build.log inside it. Any other path is used as the file name.
+    ///
+    /// The log records the options the build actually used and where each one came from, every diagnostic raised along the way, and where the output was written.
+    ///
+    /// Example:
+    ///
+    /// ```text
+    /// snug.exe MyApp.jar --build-log build.log
+    /// ```
+    #[arg(
+        long = "build-log",
+        value_name = "PATH",
+        help_heading = "RUNTIME AND BUILD BEHAVIOUR",
+        verbatim_doc_comment
+    )]
+    pub build_log: Option<PathBuf>,
 
     /// List classes in the input JARs that declare a Java main method.
     ///

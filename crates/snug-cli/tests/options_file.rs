@@ -51,7 +51,31 @@ fn write_jar(path: &PathBuf) {
         .expect("start_file");
     zip.write_all(b"Manifest-Version: 1.0\nMain-Class: com.example.Main\n")
         .expect("write manifest");
+    // The class the manifest names has to be *in* the JAR. A manifest
+    // that points at a class nothing contains is a JAR that cannot
+    // start, and snug now says so rather than building an executable
+    // that fails on the user's machine.
+    zip.start_file("com/example/Main.class", opts)
+        .expect("start_file");
+    zip.write_all(&class_file_header(61)).expect("write class");
     zip.finish().expect("finish zip");
+}
+
+/// A class-file header: the magic, then major version 61 (Java 17).
+///
+/// Only the header is written. Snug reads the version from these eight
+/// bytes and never looks further into a class it was not asked to
+/// inspect.
+///
+/// Java 17 is deliberate: it satisfies every `--min-java` these tests
+/// use — 17, 21 and the default 25 — so the class-version check stays
+/// out of their way. A fixture compiled for the newest Java would fail
+/// the build wherever a test set a lower minimum.
+fn class_file_header(major: u16) -> Vec<u8> {
+    let mut class = vec![0u8; 16];
+    class[0..4].copy_from_slice(&[0xCA, 0xFE, 0xBA, 0xBE]);
+    class[6..8].copy_from_slice(&major.to_be_bytes());
+    class
 }
 
 #[test]
@@ -75,14 +99,20 @@ fn default_snug_options_in_cwd_is_loaded() {
 
     assert!(output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stderr.contains("loaded options from"),
         "stderr should mention loading the file: {stderr}"
     );
     assert!(
-        stdout.contains("min-java:    21"),
-        "stdout should reflect the file's --min-java: {stdout}"
+        field(&stderr, "min-java").as_deref() == Some("21"),
+        "the effective options should reflect the file's --min-java: {stderr}"
+    );
+    // The origin is the point of the whole exercise: the value came from
+    // the options file, and the report says which file and which line.
+    let origin = origin(&stderr, "min-java").expect("the origin should be reported");
+    assert!(
+        origin.ends_with("snug.options:3"),
+        "the origin should name the file and the line, got {origin}: {stderr}"
     );
 }
 
@@ -113,14 +143,23 @@ fn cli_options_override_file_options() {
         output.status.code(),
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stdout.contains("min-java:    17"),
-        "CLI --min-java 17 should override file's 21: {stdout}"
+        field(&stderr, "min-java").as_deref() == Some("17"),
+        "CLI --min-java 17 should override file's 21: {stderr}"
     );
     assert!(
-        !stdout.contains("min-java:    21"),
-        "file's --min-java 21 should not appear when CLI overrides: {stdout}"
+        field(&stderr, "min-java").as_deref() != Some("21"),
+        "file's --min-java 21 should not appear when CLI overrides: {stderr}"
+    );
+    // A value typed on the command line says so, and does not claim to
+    // be the default. Distinguishing "the user asked for 17" from "17
+    // happens to be the default" is the whole reason the provenance
+    // side-channel exists.
+    assert_eq!(
+        origin(&stderr, "min-java").as_deref(),
+        Some("command line"),
+        "a value typed on the command line should say so: {stderr}"
     );
 }
 
@@ -197,10 +236,10 @@ fn options_file_with_input_builds_without_a_positional() {
         "a file-supplied --input should build; stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stdout.contains("min-java:    21"),
-        "stdout should reflect the file's values: {stdout}"
+        field(&stderr, "min-java").as_deref() == Some("21"),
+        "the effective options should reflect the file's values: {stderr}"
     );
 }
 
@@ -238,10 +277,9 @@ fn explicit_options_flag_overrides_cwd_default() {
     );
     assert!(stderr.contains("custom.opts"));
     assert!(!stderr.contains("snug.options\n") || stderr.contains("custom.opts"));
-    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("min-java:    30"),
-        "explicit --options should win over CWD default: {stdout}"
+        field(&stderr, "min-java").as_deref() == Some("30"),
+        "explicit --options should win over CWD default: {stderr}"
     );
 }
 
@@ -284,8 +322,9 @@ fn options_file_load_skips_comments() {
     )
     .unwrap();
     let tokens = options_file::load(&opts).unwrap();
+    let texts: Vec<String> = tokens.iter().map(|t| t.text.clone()).collect();
     assert_eq!(
-        tokens,
+        texts,
         vec![
             "--name".to_string(),
             "OK".to_string(),
@@ -369,7 +408,6 @@ fn options_file_next_to_executable_is_ignored() {
 
     assert!(output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         !stderr.contains(&tool_dir.join("snug.options").display().to_string()),
         "the exe-dir options file must not be loaded: {stderr}"
@@ -379,8 +417,8 @@ fn options_file_next_to_executable_is_ignored() {
         "the CWD options file is the one that should load: {stderr}"
     );
     assert!(
-        stdout.contains("min-java:    17"),
-        "CWD --min-java 17 should be the value that survives: {stdout}"
+        field(&stderr, "min-java").as_deref() == Some("17"),
+        "CWD --min-java 17 should be the value that survives: {stderr}"
     );
 }
 
@@ -411,10 +449,10 @@ fn cwd_options_file_is_loaded() {
         output.status.code(),
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stdout.contains("min-java:    21"),
-        "CWD options file should still be used: {stdout}"
+        field(&stderr, "min-java").as_deref() == Some("21"),
+        "CWD options file should still be used: {stderr}"
     );
 }
 
@@ -467,20 +505,58 @@ fn host_os_file(dir: &std::path::Path) -> PathBuf {
     dir.join(options_file::os_options_file_name(std::env::consts::OS))
 }
 
-/// Values the dry-run output exposes, as (label, value) pairs.
-fn dry_run_fields(stdout: &str) -> Vec<(String, String)> {
-    stdout
-        .lines()
-        .filter_map(|l| {
-            let (k, v) = l.split_once(':')?;
-            Some((k.trim().to_string(), v.trim().to_string()))
-        })
-        .collect()
+/// The effective build options, as (label, value) pairs.
+///
+/// The table is printed on stderr, with the origin of each value in a
+/// trailing bracketed column. The value is whatever sits between the
+/// label and that column.
+fn effective_options(stderr: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut in_table = false;
+    for line in stderr.lines() {
+        if line.starts_with("Effective build options:") {
+            in_table = true;
+            continue;
+        }
+        if !in_table {
+            continue;
+        }
+        // The table ends at the first line that is not one of its rows.
+        let Some(rest) = line.strip_prefix("  ") else {
+            break;
+        };
+        let Some((label, rest)) = rest.split_once(':') else {
+            break;
+        };
+        let value = rest.trim_start();
+        let value = match value.rfind(" [") {
+            Some(index) => value[..index].trim_end(),
+            None => value.trim_end(),
+        };
+        out.push((label.to_string(), value.to_string()));
+    }
+    out
 }
 
-fn field(stdout: &str, key: &str) -> Option<String> {
-    dry_run_fields(stdout)
+/// The value of one effective option.
+fn field(stderr: &str, key: &str) -> Option<String> {
+    effective_options(stderr)
         .into_iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v)
+}
+
+/// The origin of one effective option.
+fn origin(stderr: &str, key: &str) -> Option<String> {
+    stderr
+        .lines()
+        .filter_map(|line| {
+            let rest = line.strip_prefix("  ")?;
+            let (label, rest) = rest.split_once(':')?;
+            let open = rest.rfind(" [")?;
+            let origin = rest[open + 2..].trim_end_matches(']');
+            Some((label.to_string(), origin.to_string()))
+        })
         .find(|(k, _)| k == key)
         .map(|(_, v)| v)
 }
@@ -509,8 +585,6 @@ fn os_options_file_overrides_the_generic_one() {
         "snug should exit 0; stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
     // The dry run does not print `--name`, so assert on what it does
     // print plus the two loaded-file lines, which together prove the
     // OS file was both read and ranked above the generic one.
@@ -525,7 +599,7 @@ fn os_options_file_overrides_the_generic_one() {
     );
     // Inherited from the generic file, proving this is a partial
     // override rather than a replacement.
-    assert_eq!(field(&stdout, "min-java").as_deref(), Some("21"));
+    assert_eq!(field(&stderr, "min-java").as_deref(), Some("21"));
 }
 
 #[test]
@@ -558,7 +632,7 @@ fn a_conflicting_flag_in_both_files_does_not_break_the_build() {
     );
     // The OS file's value is the one that lands.
     assert_eq!(
-        field(&String::from_utf8_lossy(&output.stdout), "min-java").as_deref(),
+        field(&String::from_utf8_lossy(&output.stderr), "min-java").as_deref(),
         Some("25")
     );
 }
@@ -582,7 +656,7 @@ fn cli_still_beats_the_os_options_file() {
 
     assert!(output.status.success());
     assert_eq!(
-        field(&String::from_utf8_lossy(&output.stdout), "min-java").as_deref(),
+        field(&String::from_utf8_lossy(&output.stderr), "min-java").as_deref(),
         Some("17"),
         "the command line must beat both files"
     );
@@ -614,7 +688,7 @@ fn another_platforms_options_file_is_ignored() {
 
     assert!(output.status.success());
     assert_eq!(
-        field(&String::from_utf8_lossy(&output.stdout), "min-java").as_deref(),
+        field(&String::from_utf8_lossy(&output.stderr), "min-java").as_deref(),
         Some("21"),
         "a file for another platform must not be loaded"
     );
@@ -651,7 +725,10 @@ fn missing_os_options_file_is_silent() {
         1,
         "only the generic file should be reported: {stderr}"
     );
-    for noise in ["not found", "missing", "warn"] {
+    // The absence of the OS file must not produce a diagnostic. The check
+    // is for snug's own warning line rather than the bare word, because
+    // the closing summary reports a warning *count* on every run.
+    for noise in ["not found", "missing", "snug: warning"] {
         assert!(
             !stderr.to_lowercase().contains(noise),
             "an absent OS file must be silent, but stderr mentioned `{noise}`: {stderr}"
@@ -682,7 +759,7 @@ fn explicit_options_flag_ignores_the_os_file() {
 
     assert!(output.status.success());
     assert_eq!(
-        field(&String::from_utf8_lossy(&output.stdout), "min-java").as_deref(),
+        field(&String::from_utf8_lossy(&output.stderr), "min-java").as_deref(),
         Some("30"),
         "--options should mean that file only"
     );
@@ -730,11 +807,11 @@ fn effective_repo_output(os: &str) -> Result<Option<PathBuf>, clap::Error> {
     let paths = options_file::resolve_all(&raw, &root, os).unwrap();
     let mut layers = Vec::with_capacity(paths.len());
     for p in &paths {
-        layers.push(options_file::load(p).expect("repo options files must parse"));
+        layers.push(options_file::load_layer(p).expect("repo options files must parse"));
     }
 
     let merged = options_file::merge(&raw, layers);
-    let cli = Cli::try_parse_from(merged)?;
+    let cli = Cli::try_parse_from(&merged.argv)?;
     Ok(cli
         .output
         .map(|o| if o.is_absolute() { o } else { root.join(o) }))
@@ -804,6 +881,7 @@ fn the_platform_files_agree_on_which_value_differs() {
         options_file::load(&root.join(name))
             .unwrap_or_else(|e| panic!("{name} must parse: {e}"))
             .into_iter()
+            .map(|t| t.text)
             .filter(|t| t.starts_with("--"))
             .map(|t| t.split('=').next().unwrap_or(&t).to_string())
             .collect()

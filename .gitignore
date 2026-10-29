@@ -8,6 +8,12 @@
 # committed.
 /assets/*.app
 *.err
+# The build log every snug build writes. It lands in the directory snug
+# was invoked from, so it can turn up anywhere in the tree. The pattern
+# is the exact file name so it cannot swallow the dropper's own
+# `snug-build.log` transcript, which is a different file with a
+# different job.
+snug.build.log
 # macOS: Finder writes one into every directory it visits, including
 # build output trees like release/. The path-scoped exclusion used in
 # `git add` only ever covered the root one.

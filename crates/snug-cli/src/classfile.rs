@@ -36,7 +36,7 @@
 //! We read a bounded prefix of each entry and parse forward. See
 //! [`MAX_CLASS_PREFIX`] for the cap and what it costs.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::Path;
 
@@ -302,6 +302,173 @@ fn class_name_from_entry(entry_name: &str) -> String {
         .strip_suffix(".class")
         .unwrap_or(entry_name)
         .replace('/', ".")
+}
+
+// --- Class-file versions ---------------------------------------------------
+//
+// The version lives in the first eight bytes of a class file, which
+// makes a version check a *different* kind of scan from the method
+// table above: it needs no constant pool and no forward walk, so it
+// covers every class in the archive with no scan window at all.
+//
+// That distinction matters for what the check can claim. "This class
+// needs a newer Java" is answered for every class in the JAR. "This
+// class declares a main method" is answered only for classes whose
+// method table fits inside [`MAX_CLASS_PREFIX`]. The two limits are
+// reported separately, because conflating them would make the first
+// claim look as weak as the second.
+
+/// The class-file version of one class.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClassVersion {
+    /// The major version — the Java release the class targets.
+    pub major: u16,
+    /// The minor version. `0xFFFF` marks preview bytecode.
+    pub minor: u16,
+}
+
+impl ClassVersion {
+    /// The Java release this class file targets.
+    ///
+    /// Class-file major 45 is Java 1, so the release is `major - 44`:
+    /// major 52 is Java 8, major 61 is Java 17, major 69 is Java 25.
+    pub fn java_release(&self) -> u16 {
+        self.major.saturating_sub(44)
+    }
+
+    /// Whether this is preview bytecode.
+    ///
+    /// A preview class file carries minor version `0xFFFF`. It only runs
+    /// with `--enable-preview`, which snug never injects on the user's
+    /// behalf.
+    pub fn is_preview(&self) -> bool {
+        self.minor == 0xFFFF
+    }
+}
+
+/// Read the class-file version from the head of a class file.
+///
+/// Only the first eight bytes are needed: the magic, the minor version
+/// and the major version.
+pub fn read_class_version(bytes: &[u8]) -> Option<ClassVersion> {
+    if bytes.len() < 8 {
+        return None;
+    }
+    let magic = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    if magic != CLASS_MAGIC {
+        return None;
+    }
+    Some(ClassVersion {
+        minor: u16::from_be_bytes([bytes[4], bytes[5]]),
+        major: u16::from_be_bytes([bytes[6], bytes[7]]),
+    })
+}
+
+/// The class-file versions in one archive.
+#[derive(Debug, Default, Clone)]
+pub struct VersionScan {
+    /// The root copies: fully-qualified name to version.
+    pub root: BTreeMap<String, ClassVersion>,
+    /// The multi-release overlays: name to (Java release to version).
+    pub overlays: BTreeMap<String, BTreeMap<u16, ClassVersion>>,
+    /// Whether the archive declares itself multi-release.
+    pub multi_release: bool,
+    /// How many `.class` entries could not be read at all.
+    pub unreadable: usize,
+}
+
+impl VersionScan {
+    /// The version of `class` that a JVM at `release` would load.
+    ///
+    /// A multi-release archive serves the highest overlay at or below
+    /// the running release, falling back to the root copy. An overlay
+    /// *above* the release is not used at all — which is why an overlay
+    /// for a newer Java never raises the minimum.
+    pub fn effective(&self, class: &str, release: u16) -> Option<ClassVersion> {
+        if self.multi_release
+            && let Some(overlays) = self.overlays.get(class)
+            && let Some((_, version)) = overlays.range(..=release).next_back()
+        {
+            return Some(*version);
+        }
+        self.root.get(class).copied()
+    }
+
+    /// Every class in the archive, with the version a JVM at `release`
+    /// would load for it.
+    pub fn effective_classes(&self, release: u16) -> Vec<(String, ClassVersion)> {
+        let mut names: BTreeSet<&str> = self.root.keys().map(String::as_str).collect();
+        names.extend(self.overlays.keys().map(String::as_str));
+        names
+            .into_iter()
+            .filter_map(|name| {
+                self.effective(name, release)
+                    .map(|version| (name.to_string(), version))
+            })
+            .collect()
+    }
+}
+
+/// Scan a JAR's bytes for the class-file version of every class it holds.
+///
+/// The bytes are borrowed rather than taken by value: the builder
+/// already holds every JAR in memory — it is about to embed them — and
+/// cloning a 200 MB archive to read eight bytes out of each entry would
+/// be pure waste.
+pub fn scan_class_versions_in_bytes(bytes: &[u8]) -> Result<VersionScan> {
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
+        .context("reading JAR as a zip archive")?;
+    let mut scan = VersionScan::default();
+
+    for index in 0..archive.len() {
+        let mut entry = match archive.by_index(index) {
+            Ok(entry) => entry,
+            Err(_) => continue,
+        };
+        let name = entry.name().to_owned();
+        if !name.ends_with(".class") {
+            continue;
+        }
+
+        // Eight bytes is the whole version header. Stopping there means
+        // the rest of the entry is never inflated — which is what makes
+        // this affordable on a large fat JAR, and why the check can
+        // claim to cover every class rather than a sample.
+        let mut header = [0u8; 8];
+        if entry.read_exact(&mut header).is_err() {
+            scan.unreadable += 1;
+            continue;
+        }
+        let Some(version) = read_class_version(&header) else {
+            scan.unreadable += 1;
+            continue;
+        };
+
+        match overlay_release(&name) {
+            Some((class_name, release)) => {
+                scan.overlays
+                    .entry(class_name)
+                    .or_default()
+                    .insert(release, version);
+            }
+            None => {
+                scan.root.insert(class_name_from_entry(&name), version);
+            }
+        }
+    }
+
+    Ok(scan)
+}
+
+/// The class name and Java release of a multi-release overlay entry.
+///
+/// `META-INF/versions/17/com/example/Main.class` is the Java 17 copy of
+/// `com.example.Main`. Returns `None` for an ordinary entry.
+fn overlay_release(entry_name: &str) -> Option<(String, u16)> {
+    let rest = entry_name.strip_prefix("META-INF/versions/")?;
+    let (release, class) = rest.split_once('/')?;
+    let release: u16 = release.parse().ok()?;
+    Some((class_name_from_entry(class), release))
 }
 
 /// A bounds-checked, `Option`-returning big-endian reader.

@@ -53,9 +53,11 @@ pub struct Invocation {
 ///    `build/libs` would put the artefact somewhere the next `gradle
 ///    clean` erases.
 ///
-/// Note the precedence consequence: `snug.options` beside `snug.exe`
-/// outranks the CWD copy, so the packaging layout must not ship one
-/// there or it would silently beat every project file.
+/// Note the precedence consequence: only the CWD copy of `snug.options`
+/// is read. The folder `snug.exe` lives in is *not* consulted, so the
+/// packaging layout cannot accidentally ship a config that silently
+/// beats every project file.
+///
 /// Is this path already rooted (leading separator) or drive-qualified?
 ///
 /// Deliberately not `Path::is_absolute`, which on Windows reports `false`
@@ -68,6 +70,15 @@ fn is_rooted_or_drive_qualified(path: &Path) -> bool {
             Some(std::path::Component::RootDir | std::path::Component::Prefix(_))
         )
 }
+
+/// The name of the build log the dropper asks `snug` to write.
+///
+/// It lives in the dropper's own folder, beside `snug.exe`, so it is
+/// where the user is already looking when the build fails. The
+/// dropper's own `snug-build.log` — the raw transcript of the child's
+/// output — stays where it is; the two are different files with
+/// different jobs.
+pub const BUILD_LOG_NAME: &str = "snug.build.log";
 
 pub fn invocation(snug_exe: &Path, input: &Path) -> Invocation {
     // Fix the one genuinely broken shape: a *relative* input with a
@@ -102,6 +113,19 @@ pub fn invocation(snug_exe: &Path, input: &Path) -> Invocation {
     };
     let output = cwd.join(format!("{OUTPUT_STEM}.exe"));
 
+    // The build log goes in the dropper's own folder — the one `snug.exe`
+    // lives in, which is where the dropper's own transcript goes too.
+    //
+    // The child's working directory is the *input's* parent, so without
+    // this the CLI's default destination would land beside the dropped
+    // JAR rather than beside the tool the user is looking at, and the
+    // two logs would be in two different folders.
+    let build_log = snug_exe
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .join(BUILD_LOG_NAME);
+
     let args = vec![
         OsString::from("--name"),
         OsString::from(APP_NAME),
@@ -109,6 +133,8 @@ pub fn invocation(snug_exe: &Path, input: &Path) -> Invocation {
         OsString::from(COMPANY),
         OsString::from("-o"),
         output.clone().into_os_string(),
+        OsString::from("--build-log"),
+        build_log.into_os_string(),
         input.into_os_string(),
     ];
 
@@ -315,9 +341,30 @@ mod tests {
                 OsString::from("Example Company Pty Ltd"),
                 OsString::from("-o"),
                 work.join(format!("{OUTPUT_STEM}.exe")).into_os_string(),
+                OsString::from("--build-log"),
+                p(&["C:", "tools", BUILD_LOG_NAME]).into_os_string(),
                 input.into_os_string(),
             ]
         );
+    }
+
+    #[test]
+    fn the_build_log_goes_beside_snug_not_beside_the_dropped_jar() {
+        // The child's working directory is the dropped JAR's parent, so
+        // without an explicit `--build-log` the log would land beside the
+        // JAR — two logs in two folders, and the one the user is shown
+        // would be the empty one.
+        let work = p(&["C:", "work"]);
+        let input = work.join("App.jar");
+        let inv = invocation(&p(&["C:", "tools", "snug.exe"]), &input);
+
+        let log = inv
+            .args
+            .iter()
+            .position(|a| a == "--build-log")
+            .and_then(|i| inv.args.get(i + 1))
+            .expect("--build-log and its value are passed");
+        assert_eq!(log, &p(&["C:", "tools", BUILD_LOG_NAME]).into_os_string());
     }
 
     #[test]

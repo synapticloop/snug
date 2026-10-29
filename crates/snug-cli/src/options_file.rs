@@ -114,6 +114,8 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+use crate::provenance::{Merged, OptionsLayer, Origin, Overridden, Token};
+
 /// Generic options-file name, consulted on every platform.
 pub const DEFAULT_OPTIONS_FILE: &str = "snug.options";
 
@@ -258,12 +260,17 @@ pub fn find_options_flag(raw_args: &[String]) -> Result<Option<PathBuf>, Options
 }
 
 /// Load a `snug.options` file and return its contents as a flat list of
-/// argv-style tokens.
+/// argv-style tokens, each carrying the line it came from.
 ///
 /// Comment lines (starting with `#` after trimming) and blank lines are
 /// skipped. Each remaining line is split by [`tokenise`], which honours
 /// double-quoted and single-quoted strings.
-pub fn load(path: &Path) -> Result<Vec<String>, OptionsFileError> {
+///
+/// The line number is kept because it is the only way to point a user at
+/// the setting they need to change: `snug.options:12` says which line to
+/// edit, and a bare value says nothing once three sources have been
+/// merged into one argv.
+pub fn load(path: &Path) -> Result<Vec<Token>, OptionsFileError> {
     let mut content = std::fs::read_to_string(path).map_err(|source| OptionsFileError::Io {
         path: path.to_path_buf(),
         source,
@@ -287,7 +294,16 @@ pub fn load(path: &Path) -> Result<Vec<String>, OptionsFileError> {
             continue;
         }
         match tokenise(trimmed) {
-            Ok(line_tokens) => tokens.extend(line_tokens),
+            Ok(line_tokens) => {
+                // Every token from one line carries that line's number,
+                // so a value is attributed to the setting that introduced
+                // it.
+                tokens.extend(
+                    line_tokens
+                        .into_iter()
+                        .map(|text| Token::new(text, idx + 1)),
+                )
+            }
             Err(message) => {
                 return Err(OptionsFileError::Syntax {
                     path: path.to_path_buf(),
@@ -298,6 +314,19 @@ pub fn load(path: &Path) -> Result<Vec<String>, OptionsFileError> {
         }
     }
     Ok(tokens)
+}
+
+/// Load an options file as a [`OptionsLayer`] — the file's path plus its
+/// tokens.
+///
+/// The path is what the provenance side-channel needs to say
+/// `snug.options:12` rather than just `12`, so a layer and its origin
+/// are created together rather than being matched up afterwards.
+pub fn load_layer(path: &Path) -> Result<OptionsLayer, OptionsFileError> {
+    Ok(OptionsLayer {
+        path: path.to_path_buf(),
+        tokens: load(path)?,
+    })
 }
 
 /// Split one options-file line into tokens.
@@ -461,7 +490,7 @@ const META_FLAGS: &[&str] = &["options", "init-options", "init-localisations"];
 /// silent data loss, and because `--options` takes a separate value the
 /// naive walk then set `skip_next` and ate the line after it as well. A
 /// token is a meta-flag only when it sits in flag position.
-fn strip_meta_flags(tokens: &[String], spec: &FlagSpec) -> Vec<String> {
+fn strip_meta_flags(tokens: &[Token], spec: &FlagSpec) -> Vec<Token> {
     let mut out = Vec::with_capacity(tokens.len());
     let mut skip_meta_value = false;
     let mut expect_value = false;
@@ -485,12 +514,12 @@ fn strip_meta_flags(tokens: &[String], spec: &FlagSpec) -> Vec<String> {
             out.push(token.clone());
             continue;
         }
-        if token == "--" {
+        if token.text == "--" {
             after_separator = true;
             out.push(token.clone());
             continue;
         }
-        match spec.token_flag(token) {
+        match spec.token_flag(&token.text) {
             Some((canonical, has_inline_value)) => {
                 if META_FLAGS.contains(&canonical.as_str()) {
                     // `--options` takes a separate value; the rest do not.
@@ -510,7 +539,19 @@ fn strip_meta_flags(tokens: &[String], spec: &FlagSpec) -> Vec<String> {
     out
 }
 
-pub fn merge(raw_args: &[String], file_layers: Vec<Vec<String>>) -> Vec<String> {
+/// Merge the command line and the options-file layers into one argv.
+///
+/// The layers are given lowest priority first. The returned [`Merged`]
+/// carries the argv clap will parse *and* the provenance side-channel
+/// that explains where each value in it came from.
+///
+/// The argv itself is unchanged from what it has always been: file
+/// layers first, then the command line, so a command-line flag always
+/// beats a file's. That ordering is load-bearing — it is what makes the
+/// precedence rules work — and keeping it means clap still sees one
+/// command line and can still reject a conflict that spans two sources.
+pub fn merge<L: Into<OptionsLayer>>(raw_args: &[String], file_layers: Vec<L>) -> Merged {
+    let file_layers: Vec<OptionsLayer> = file_layers.into_iter().map(Into::into).collect();
     let spec = FlagSpec::from_cli();
     let cli_args = strip_options_flag(&raw_args[1..]);
 
@@ -530,9 +571,10 @@ pub fn merge(raw_args: &[String], file_layers: Vec<Vec<String>>) -> Vec<String> 
         seen.insert(INPUT_FLAG.to_string());
     }
 
-    let mut layers: Vec<Vec<String>> = vec![Vec::new(); file_layers.len()];
+    let mut layers: Vec<Vec<Token>> = vec![Vec::new(); file_layers.len()];
+    let mut overridden: Vec<Overridden> = Vec::new();
 
-    for (idx, tokens) in file_layers.iter().enumerate().rev() {
+    for (idx, layer) in file_layers.iter().enumerate().rev() {
         // Meta-flags are meaningless in a file: they are consumed by `main`
         // *before* any file is read, so a file's copy can never take effect.
         // Left in place they used to reach clap, which then either loaded
@@ -540,9 +582,22 @@ pub fn merge(raw_args: &[String], file_layers: Vec<Vec<String>>) -> Vec<String> 
         // the whole build (`--init-options` in a file), silently and with a
         // success message. Dropping them is the honest reading: the file
         // described a request that had already been decided.
-        let tokens = &strip_meta_flags(tokens, &spec);
-        let surviving = spec.strip_overridden(tokens, &seen);
-        seen.extend(spec.collect_cli_flags(&surviving));
+        let tokens = strip_meta_flags(&layer.tokens, &spec);
+        let (surviving, dropped) = spec.strip_overridden(&tokens, &seen);
+        // The losers are recorded rather than discarded. They never reach
+        // the argv, so without this the log could only say what won —
+        // never what it beat.
+        for drop in dropped {
+            overridden.push(Overridden {
+                flag: drop.flag,
+                value: drop.value,
+                origin: Origin::OptionsFile {
+                    path: layer.path.clone(),
+                    line: drop.line,
+                },
+            });
+        }
+        seen.extend(spec.collect_cli_flags(&token_texts(&surviving)));
         // Same precedence one tier down: a JAR in a higher-priority file
         // beats an `--input` in a lower one. (The reverse — a higher
         // `--input` against a lower file's bare JAR — still conflicts,
@@ -550,25 +605,118 @@ pub fn merge(raw_args: &[String], file_layers: Vec<Vec<String>>) -> Vec<String> 
         // walk does. No options file in the wild carries one; it would be
         // a strange thing to write, since a file's whole purpose is to
         // be a set of flags.)
-        if spec.cli_has_positional(&surviving) {
+        if spec.cli_has_positional(&token_texts(&surviving)) {
             seen.insert(INPUT_FLAG.to_string());
         }
         layers[idx] = surviving;
     }
 
     let total: usize = cli_args.len() + layers.iter().map(Vec::len).sum::<usize>();
-    let mut out = Vec::with_capacity(total + 1);
-    out.push(
+    let mut argv = Vec::with_capacity(total + 1);
+    let mut origins = Vec::with_capacity(total + 1);
+
+    argv.push(
         raw_args
             .first()
             .cloned()
             .unwrap_or_else(|| "snug".to_string()),
     );
-    for layer in &layers {
-        out.extend(layer.iter().cloned());
+    origins.push(Origin::CommandLine);
+
+    for (idx, layer) in layers.iter().enumerate() {
+        let path = file_layers[idx].path.clone();
+        for token in layer {
+            argv.push(token.text.clone());
+            origins.push(Origin::OptionsFile {
+                path: path.clone(),
+                line: token.line,
+            });
+        }
     }
-    out.extend(cli_args);
-    out
+    for arg in &cli_args {
+        argv.push(arg.clone());
+        origins.push(Origin::CommandLine);
+    }
+
+    let (flag_at, positional_at) = spec.scan(&argv);
+
+    Merged {
+        argv,
+        origins,
+        flag_at,
+        positional_at,
+        overridden,
+        id_to_canonical: spec.id_to_canonical.clone(),
+        positional_ids: spec.positional_ids.clone(),
+    }
+}
+
+/// The text of a token list.
+///
+/// The flag walks work on text because that is what the flag surface is
+/// made of; the tokens themselves carry line numbers that the walks have
+/// no use for.
+fn token_texts(tokens: &[Token]) -> Vec<String> {
+    tokens.iter().map(|token| token.text.clone()).collect()
+}
+
+/// A value that was stripped because a higher-priority source set the
+/// same flag.
+struct Dropped {
+    /// The canonical flag name.
+    flag: String,
+    /// The value that was stripped, when one could be read.
+    value: Option<String>,
+    /// The line it came from.
+    line: usize,
+}
+
+/// The value carried by a flag token that has it attached, such as
+/// `--name=My App` or `-oMyApp.exe`.
+fn attached_value(token: &str) -> Option<String> {
+    if let Some((_, value)) = token.split_once('=') {
+        return Some(value.to_string());
+    }
+    // Short form with the value glued on: `-oMyApp.exe`.
+    let rest = token.strip_prefix('-')?;
+    let mut chars = rest.chars();
+    chars.next()?;
+    let value = chars.as_str();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+/// Whether any of the given canonical flags appears in `argv`.
+///
+/// Used to decide whether a run is a build at all — `--find-main` and
+/// `--list-tokens` are diagnostics, and a diagnostic does not write a
+/// build log.
+pub fn flags_present(argv: &[String], wanted: &[&str]) -> bool {
+    let spec = FlagSpec::from_cli();
+    let present = spec.collect_cli_flags(argv);
+    wanted.iter().any(|name| present.contains(*name))
+}
+
+/// The value of a flag in `argv`, if it is there.
+///
+/// `--flag value` and `--flag=value` both count. The scan is
+/// flag-aware, so a value that merely *looks* like a flag is not
+/// mistaken for one.
+pub fn flag_value(argv: &[String], canonical: &str) -> Option<String> {
+    let spec = FlagSpec::from_cli();
+    spec.value_of(argv, canonical)
+}
+
+/// Every value of a flag in `argv`, in argv order.
+///
+/// For a repeatable flag this is the whole list; for a single-valued
+/// one it is at most one entry.
+pub fn flag_values(argv: &[String], canonical: &str) -> Vec<String> {
+    let spec = FlagSpec::from_cli();
+    spec.values_of(argv, canonical)
 }
 
 /// Drop the `--options <path>` flag and its value from the CLI portion
@@ -621,6 +769,15 @@ struct FlagSpec {
     /// Canonical names of `ArgAction::Append` args, i.e. `Vec<T>` fields.
     /// Their values accumulate across file and CLI instead of overriding.
     repeatable: std::collections::HashSet<String>,
+    /// clap argument id to canonical long name.
+    ///
+    /// clap's ids are field names (`update_url`, `jvm_args`) while the
+    /// canonical name is the flag (`update-url`, `jvm-arg`). The
+    /// provenance side-channel is keyed by the latter, and the clap
+    /// matches are keyed by the former, so the two need translating.
+    id_to_canonical: std::collections::HashMap<String, String>,
+    /// The clap ids of the positional arguments.
+    positional_ids: Vec<String>,
 }
 
 impl FlagSpec {
@@ -632,6 +789,8 @@ impl FlagSpec {
             aliases: std::collections::HashMap::new(),
             takes_value: std::collections::HashSet::new(),
             repeatable: std::collections::HashSet::new(),
+            id_to_canonical: std::collections::HashMap::new(),
+            positional_ids: Vec::new(),
         };
 
         for arg in crate::cli::Cli::command().get_arguments() {
@@ -642,6 +801,12 @@ impl FlagSpec {
                 .get_long()
                 .unwrap_or_else(|| arg.get_id().as_str())
                 .to_string();
+
+            spec.id_to_canonical
+                .insert(arg.get_id().as_str().to_string(), canonical.clone());
+            if arg.is_positional() {
+                spec.positional_ids.push(arg.get_id().as_str().to_string());
+            }
 
             if let Some(long) = arg.get_long() {
                 spec.aliases.insert(long.to_string(), canonical.clone());
@@ -815,36 +980,140 @@ impl FlagSpec {
     /// `Vec<T>` fields, so occurrences from every layer are meant to
     /// accumulate. Stripping any of them would silently discard part of
     /// the JVM options.
+    ///
+    /// The dropped values are returned rather than discarded. They never
+    /// reach the argv, so they are the only evidence of what the winning
+    /// value beat — and a user asking "why is my `--name` not what my
+    /// options file says?" deserves the answer.
     fn strip_overridden(
         &self,
-        tokens: &[String],
+        tokens: &[Token],
         cli_flags: &std::collections::HashSet<String>,
-    ) -> Vec<String> {
+    ) -> (Vec<Token>, Vec<Dropped>) {
         let mut out = Vec::with_capacity(tokens.len());
-        let mut skip_next = false;
+        let mut dropped = Vec::new();
+        let mut index = 0;
 
-        for token in tokens {
+        while index < tokens.len() {
+            let token = &tokens[index];
+            if token.text == "--" {
+                out.push(token.clone());
+                index += 1;
+                continue;
+            }
+            if let Some((canonical, attached)) = self.token_flag(&token.text)
+                && cli_flags.contains(&canonical)
+                && !self.repeatable.contains(&canonical)
+            {
+                let value = if attached {
+                    attached_value(&token.text)
+                } else if self.takes_value.contains(&canonical) && index + 1 < tokens.len() {
+                    index += 1;
+                    Some(tokens[index].text.clone())
+                } else {
+                    None
+                };
+                dropped.push(Dropped {
+                    flag: canonical,
+                    value,
+                    line: token.line,
+                });
+                index += 1;
+                continue;
+            }
+            out.push(token.clone());
+            index += 1;
+        }
+
+        (out, dropped)
+    }
+
+    /// Walk `argv` once, recording which token starts which flag and
+    /// which tokens are positional arguments.
+    ///
+    /// The two answers come from the same walk because they are the same
+    /// question: a token is either a flag, the value of the flag before
+    /// it, or a positional. Walking twice would risk the two walks
+    /// disagreeing about which is which.
+    fn scan(&self, argv: &[String]) -> (Vec<Option<String>>, Vec<usize>) {
+        let mut flags: Vec<Option<String>> = vec![None; argv.len()];
+        let mut positionals: Vec<usize> = Vec::new();
+        let mut skip_next = false;
+        let mut after_separator = false;
+
+        for (index, token) in argv.iter().enumerate() {
+            // Index 0 is the program name, not a positional argument.
+            if index == 0 {
+                continue;
+            }
             if skip_next {
                 skip_next = false;
                 continue;
             }
-            if token == "--" {
-                out.push(token.clone());
+            if after_separator {
+                positionals.push(index);
                 continue;
             }
-            if let Some((canonical, attached)) = self.token_flag(token)
-                && cli_flags.contains(&canonical)
-                && !self.repeatable.contains(&canonical)
-            {
-                if !attached && self.takes_value.contains(&canonical) {
+            if token == "--" {
+                after_separator = true;
+                continue;
+            }
+            match self.token_flag(token) {
+                Some((canonical, attached)) => {
+                    let takes_value = !attached && self.takes_value.contains(&canonical);
+                    flags[index] = Some(canonical);
+                    if takes_value {
+                        skip_next = true;
+                    }
+                }
+                None => positionals.push(index),
+            }
+        }
+
+        (flags, positionals)
+    }
+
+    /// The value of a flag in `argv`, if it is there.
+    fn value_of(&self, argv: &[String], canonical: &str) -> Option<String> {
+        self.values_of(argv, canonical).into_iter().next()
+    }
+
+    /// Every value of a flag in `argv`, in argv order.
+    fn values_of(&self, argv: &[String], canonical: &str) -> Vec<String> {
+        let mut found = Vec::new();
+        let mut skip_next = false;
+        for (index, token) in argv.iter().enumerate() {
+            if skip_next {
+                skip_next = false;
+                continue;
+            }
+            if index == 0 || token == "--" {
+                continue;
+            }
+            let Some((found_flag, attached)) = self.token_flag(token) else {
+                continue;
+            };
+            if found_flag != canonical {
+                if !attached && self.takes_value.contains(&found_flag) {
                     skip_next = true;
                 }
                 continue;
             }
-            out.push(token.clone());
+            if attached {
+                if let Some(value) = attached_value(token) {
+                    found.push(value);
+                }
+                continue;
+            }
+            if self.takes_value.iter().any(|name| name == canonical) {
+                match argv.get(index + 1) {
+                    Some(value) => found.push(value.clone()),
+                    None => break,
+                }
+                skip_next = true;
+            }
         }
-
-        out
+        found
     }
 }
 
@@ -875,8 +1144,13 @@ mod tests {
     /// A single options-file layer. Most merge tests below exercise the
     /// file-vs-CLI relationship with just one file, so this keeps them
     /// readable rather than adding a nesting level to every call.
-    fn layer(tokens: Vec<String>) -> Vec<Vec<String>> {
-        vec![tokens]
+    fn layer(tokens: Vec<String>) -> Vec<OptionsLayer> {
+        vec![OptionsLayer::from(tokens)]
+    }
+
+    /// The text of a loaded token list.
+    fn texts(tokens: &[Token]) -> Vec<String> {
+        tokens.iter().map(|token| token.text.clone()).collect()
     }
 
     // --- tokenise: the properties the file format actually promises -----
@@ -1156,7 +1430,7 @@ mod tests {
 
         let tokens = load(&f).unwrap();
         assert_eq!(
-            tokens,
+            texts(&tokens),
             vec![
                 "--name".to_string(),
                 "My App".to_string(),
@@ -1167,7 +1441,7 @@ mod tests {
         );
         // And the first token must still be recognised as a flag.
         assert_eq!(
-            long_flag_name(&tokens[0]),
+            long_flag_name(&tokens[0].text),
             Some("name".to_string()),
             "the first token is no longer a recognisable flag"
         );
@@ -1211,7 +1485,7 @@ mod tests {
             "From CLI",
         ]);
         let file_tokens = load(&f).unwrap();
-        let merged = merge(&cli_tokens, vec![file_tokens]);
+        let merged = merge(&cli_tokens, vec![OptionsLayer::new(f.clone(), file_tokens)]);
 
         assert!(
             merged.iter().any(|t| t == "force"),
@@ -1251,7 +1525,7 @@ mod tests {
         .unwrap();
         let tokens = load(&f).unwrap();
         assert_eq!(
-            tokens,
+            texts(&tokens),
             vec![
                 "--name".to_string(),
                 "My App".to_string(),

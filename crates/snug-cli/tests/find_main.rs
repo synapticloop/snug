@@ -680,7 +680,13 @@ fn manifests_that_agree_are_not_a_conflict() {
 
 /// The nastier case: the first JAR declares nothing, so snug embeds no
 /// main class even though one was sitting right there in the
-/// directory. The build itself still succeeds.
+/// directory.
+///
+/// This is now an **error** rather than a warning. A build with no
+/// entry point produces an executable that cannot start, and finding
+/// that out on the user's machine is the worst place to find it. The
+/// diagnostics still name the declaration that was available, so the
+/// fix is one flag away.
 #[test]
 fn build_flags_a_first_jar_with_no_main_class() {
     let dir = tempdir();
@@ -701,13 +707,17 @@ fn build_flags_a_first_jar_with_no_main_class() {
         "Demo",
     ]);
 
-    assert_eq!(
+    assert_ne!(
         code, 0,
-        "a warning must not fail the build; stderr:\n{stderr}"
+        "a build with no entry point must not succeed; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("SNUG-MAIN-001"),
+        "expected the no-entry-point diagnostic, stderr:\n{stderr}"
     );
     assert!(
         stderr.contains("declares no Main-Class"),
-        "expected the missing-manifest warning, stderr:\n{stderr}"
+        "expected the missing-manifest explanation, stderr:\n{stderr}"
     );
     assert!(
         stderr.contains("02-app.jar") && stderr.contains("com.gamma.Main"),
@@ -715,7 +725,7 @@ fn build_flags_a_first_jar_with_no_main_class() {
     );
     assert!(
         stderr.contains("--main-class"),
-        "the warning should say how to fix it, stderr:\n{stderr}"
+        "the diagnostic should say how to fix it, stderr:\n{stderr}"
     );
 }
 

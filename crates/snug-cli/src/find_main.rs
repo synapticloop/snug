@@ -22,9 +22,11 @@ use std::path::PathBuf;
 use anyhow::Result;
 
 use crate::build::{jar_paths_in, resolve_input_path};
+use crate::build_log::BuildLog;
 use crate::classfile::find_main_classes;
 use crate::cli::Cli;
 use crate::manifest::{MainClassDeclaration, read_main_class, survey_main_classes};
+use crate::report::Reporter;
 
 /// Where the main class snug would use came from, for labelling.
 struct MainClassTarget {
@@ -37,8 +39,9 @@ struct MainClassTarget {
 pub fn run(cli: &Cli) -> Result<()> {
     let (input_path, is_dir) = resolve_input_path(cli)?;
 
+    let mut reporter = Reporter::new(BuildLog::none());
     let jar_paths: Vec<PathBuf> = if is_dir {
-        jar_paths_in(&input_path)?
+        jar_paths_in(&input_path, &mut reporter)?
     } else {
         vec![input_path.clone()]
     };
@@ -169,14 +172,24 @@ pub fn run(cli: &Cli) -> Result<()> {
 /// entry per JAR, against builds that are about to hash and embed
 /// every byte of those same files.
 fn survey_jars(jar_paths: &[PathBuf]) -> Vec<MainClassDeclaration> {
-    survey_main_classes(jar_paths.iter().map(|path| {
-        let label = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.display().to_string());
-        let bytes = std::fs::read(path).unwrap_or_default();
-        (label, bytes)
-    }))
+    // The bytes are read once and kept alive for the whole survey:
+    // handing out a slice of a temporary would borrow a local that is
+    // gone by the time the survey reads it.
+    let contents: Vec<(String, Vec<u8>)> = jar_paths
+        .iter()
+        .map(|path| {
+            let label = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string());
+            (label, std::fs::read(path).unwrap_or_default())
+        })
+        .collect();
+    survey_main_classes(
+        contents
+            .iter()
+            .map(|(label, bytes)| (label.clone(), bytes.as_slice())),
+    )
 }
 
 /// Flag the "which manifest wins?" question when it has no answer.

@@ -7,9 +7,12 @@ use anyhow::{Context, Result, bail};
 use editpe::Image;
 use image::GenericImageView;
 
+use crate::build_log::BuildLog;
+use crate::classfile::{self, ClassVersion};
 use crate::cli::Cli;
 use crate::localization;
 use crate::manifest::{read_main_class_from_bytes, survey_main_classes};
+use crate::report::{Reporter, codes};
 use crate::resources::ResourcePlan;
 use crate::stub::STUB_BYTES;
 use editpe::constants::IMAGE_SUBSYSTEM_WINDOWS_GUI;
@@ -34,7 +37,42 @@ use snug_payload::PAYLOAD_RESOURCE_NAME;
 /// (unless `--main-class` overrides), and assembles a complete
 /// [`SnugPayload`].
 pub fn build_payload(cli: &Cli) -> Result<SnugPayload> {
-    let (input_path, jars, labels) = resolve_input(cli)?;
+    let mut reporter = Reporter::new(BuildLog::none());
+    build_payload_with(cli, &mut reporter)
+}
+
+/// Build the payload, reporting what it finds along the way.
+///
+/// The [`Reporter`] collects the diagnostics that do not stop the
+/// build — an ambiguous `Main-Class`, a JAR that is not a ZIP — and the
+/// ones that do. [`build_payload`] is the same call without a reporter
+/// worth reading, for callers that only want the payload.
+pub fn build_payload_with(cli: &Cli, reporter: &mut Reporter) -> Result<SnugPayload> {
+    let (input_path, jars, labels) = resolve_input(cli, reporter)?;
+
+    // --- Validate every supplied archive ---------------------------------
+    // Every JAR is opened as a ZIP, including when `--main-class`
+    // overrides the manifest. An override must not turn an archive that
+    // cannot be read into one that is silently embedded: the build would
+    // succeed and the application would fail at runtime, with the cause
+    // sitting in a file the user never looked at.
+    reporter.set_stage("archives");
+    for (file, label) in jars.iter().zip(labels.iter()) {
+        if zip::ZipArchive::new(std::io::Cursor::new(file.bytes.as_slice())).is_err() {
+            reporter
+                .error(
+                    codes::JAR_INVALID,
+                    "archives",
+                    format!("{label} is not a readable ZIP archive"),
+                )
+                .location(label.clone())
+                .hint(
+                    "a JAR that cannot be opened cannot be embedded; re-export it, \
+                     or remove it from the input",
+                )
+                .emit();
+        }
+    }
 
     // --- Resolve main class ---------------------------------------------
     // For multi-JAR builds, Main-Class is read from the first JAR's
@@ -55,7 +93,35 @@ pub fn build_payload(cli: &Cli) -> Result<SnugPayload> {
         }
     };
 
-    warn_on_ambiguous_manifests(&jars, &labels, &main_class, cli.main_class.is_some());
+    reporter.set_stage("entry point");
+    warn_on_ambiguous_manifests(
+        &jars,
+        &labels,
+        &main_class,
+        cli.main_class.is_some(),
+        reporter,
+    );
+
+    // No entry point at all is an error, not a silent build. The launcher
+    // has nothing to call: neither a `main` method nor the JavaFX
+    // `Application.launch` fallback can be reached without a class name,
+    // so the EXE would be built and then fail on the user's machine.
+    if main_class.is_none() {
+        reporter
+            .error(
+                codes::MAIN_NONE,
+                "entry point",
+                "no entry point was selected: no JAR declares a Main-Class",
+            )
+            .hint(
+                "pass --main-class <CLASS>, or run snug --find-main to list the \
+                 classes that declare one",
+            )
+            .emit();
+    }
+
+    // --- The selected class, and the bytecode around it --------------------
+    check_entry_class(cli, &jars, &labels, main_class.as_deref(), reporter);
 
     // The icon is *not* read here. It used to be: `build_payload` loaded it
     // into `SnugPayload::icon` for the builder to stamp, while
@@ -237,15 +303,40 @@ pub fn resolve_input_path(cli: &Cli) -> Result<(PathBuf, bool)> {
 
 /// Every `*.jar` directly inside `dir`, sorted by path for
 /// determinism. Subdirectories are not searched.
-pub fn jar_paths_in(dir: &Path) -> Result<Vec<PathBuf>> {
+///
+/// An entry that cannot be read is reported rather than dropped. The old
+/// behaviour — `filter_map(|entry| entry.ok()?)` — discarded a failed
+/// read silently, so a JAR that existed but could not be opened simply
+/// was not there, and the build carried on with fewer JARs than the
+/// directory held.
+pub fn jar_paths_in(dir: &Path, reporter: &mut Reporter) -> Result<Vec<PathBuf>> {
     let mut jar_paths: Vec<PathBuf> = std::fs::read_dir(dir)
         .with_context(|| format!("reading directory {}", dir.display()))?
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            let path = entry.path();
-            if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("jar") {
-                Some(path)
-            } else {
+        .filter_map(|entry| match entry {
+            Ok(entry) => {
+                let path = entry.path();
+                if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("jar") {
+                    Some(path)
+                } else {
+                    None
+                }
+            }
+            Err(err) => {
+                reporter
+                    .warning(
+                        codes::INPUT_ENTRY_UNREADABLE,
+                        "input",
+                        format!(
+                            "a directory entry in {} could not be read: {err}",
+                            dir.display()
+                        ),
+                    )
+                    .location(dir.display().to_string())
+                    .hint(
+                        "the entry was skipped, so it is not part of this build; \
+                         check the directory's permissions if that is not what you expected",
+                    )
+                    .emit();
                 None
             }
         })
@@ -265,7 +356,10 @@ pub fn jar_paths_in(dir: &Path) -> Result<Vec<PathBuf>> {
 /// Resolve `[JAR]` vs `--input <JAR|DIR>` and return the resolved
 /// path, the embedded JAR(s), and a display label per JAR (indexes
 /// align with the embedded list).
-fn resolve_input(cli: &Cli) -> Result<(PathBuf, Vec<EmbeddedFile>, Vec<String>)> {
+fn resolve_input(
+    cli: &Cli,
+    reporter: &mut Reporter,
+) -> Result<(PathBuf, Vec<EmbeddedFile>, Vec<String>)> {
     let (input_path, is_dir) = resolve_input_path(cli)?;
 
     if !is_dir {
@@ -280,7 +374,7 @@ fn resolve_input(cli: &Cli) -> Result<(PathBuf, Vec<EmbeddedFile>, Vec<String>)>
     } else {
         // Multi-JAR input: scan the directory for `*.jar`, sort by
         // filename for determinism.
-        let jar_paths = jar_paths_in(&input_path)?;
+        let jar_paths = jar_paths_in(&input_path, reporter)?;
 
         let mut jars = Vec::with_capacity(jar_paths.len());
         let mut labels = Vec::with_capacity(jar_paths.len());
@@ -337,6 +431,7 @@ fn warn_on_ambiguous_manifests(
     labels: &[String],
     main_class: &Option<String>,
     explicit: bool,
+    reporter: &mut Reporter,
 ) {
     if explicit || jars.len() < 2 {
         return;
@@ -345,7 +440,7 @@ fn warn_on_ambiguous_manifests(
     let declarations = survey_main_classes(
         jars.iter()
             .zip(labels)
-            .map(|(file, label)| (label.clone(), file.bytes.clone())),
+            .map(|(file, label)| (label.clone(), file.bytes.as_slice())),
     );
     if declarations.is_empty() {
         return;
@@ -354,23 +449,24 @@ fn warn_on_ambiguous_manifests(
     // The first JAR is what snug actually reads. If it declares
     // nothing, we embedded no main class even though one was on offer.
     if main_class.is_none() {
-        eprintln!(
-            "snug: warning: {} (the first JAR by filename) declares no Main-Class, \
-             so the built launcher will have none.",
+        let mut message = format!(
+            "{} (the first JAR by filename) declares no Main-Class, so the built \
+             launcher will have none.",
             labels[0]
         );
-        eprintln!("snug: note:    other JAR(s) in this directory do declare one:");
         for declaration in &declarations {
-            eprintln!(
-                "snug:            {} -> {}",
+            message.push_str(&format!(
+                "\n  {} -> {}",
                 declaration.jar, declaration.main_class
-            );
+            ));
         }
-        eprintln!(
-            "snug: note:    pass --main-class <CLASS> to choose one, e.g. \
-             --main-class {}",
-            declarations[0].main_class
-        );
+        reporter
+            .warning(codes::MAIN_CONFLICT, "entry point", message)
+            .hint(format!(
+                "pass --main-class <CLASS> to choose one, e.g. --main-class {}",
+                declarations[0].main_class
+            ))
+            .emit();
         return;
     }
 
@@ -383,30 +479,213 @@ fn warn_on_ambiguous_manifests(
         return;
     }
 
-    eprintln!(
-        "snug: warning: {} JARs declare different Main-Class values:",
+    let mut message = format!(
+        "{} JARs declare different Main-Class values:",
         distinct.len()
     );
     for declaration in &declarations {
-        eprintln!(
-            "snug:          {} -> {}",
+        message.push_str(&format!(
+            "\n  {} -> {}",
             declaration.jar, declaration.main_class
-        );
+        ));
     }
-
     // `declarations` is in JAR order and snug reads the first JAR, so
     // index 0 is the one in use. Match on position rather than on the
     // class value — two JARs can declare the same class, and a
     // value-based match would credit the wrong one.
-    eprintln!(
-        "snug: note:    using {} (from {}, the first JAR by filename)",
+    message.push_str(&format!(
+        "\n  using {} (from {}, the first JAR by filename)",
         declarations[0].main_class, declarations[0].jar
-    );
-    eprintln!(
-        "snug: note:    pass --main-class <CLASS> to choose explicitly, e.g. \
-         --main-class {}",
-        declarations[0].main_class
-    );
+    ));
+    reporter
+        .warning(codes::MAIN_CONFLICT, "entry point", message)
+        .hint(format!(
+            "pass --main-class <CLASS> to choose explicitly, e.g. --main-class {}",
+            declarations[0].main_class
+        ))
+        .emit();
+}
+
+/// Check the selected entry class, and the bytecode around it.
+///
+/// Two questions, one scan:
+///
+/// - is the selected class actually on the classpath being embedded?
+/// - does any class need a newer Java than `--min-java` says?
+///
+/// The scan reads the eight-byte version header of every class, which
+/// is cheap enough to cover the whole archive — so unlike the
+/// method-table scan, this one has no coverage caveat to report.
+///
+/// The entry class is an **error** when it needs a newer Java: the
+/// build would produce an executable that cannot start. Every other
+/// class is a **warning**: optional code may never load, and a fat JAR
+/// routinely carries classes for newer releases than the one it runs
+/// on.
+///
+/// The check is multi-release aware. An archive that declares itself
+/// multi-release serves the highest overlay at or below the configured
+/// release, so an overlay for a *newer* Java never raises the minimum.
+fn check_entry_class(
+    cli: &Cli,
+    jars: &[EmbeddedFile],
+    labels: &[String],
+    main_class: Option<&str>,
+    reporter: &mut Reporter,
+) {
+    let min_java = cli.min_java;
+    // The class-file major version for a given Java release: major 45 is
+    // Java 1, so Java 25 is major 69.
+    let limit = min_java.saturating_add(44);
+
+    let mut entry_found = false;
+    let mut entry_version: Option<ClassVersion> = None;
+    let mut too_new: Vec<(String, ClassVersion)> = Vec::new();
+    let mut preview: Vec<(String, ClassVersion)> = Vec::new();
+    let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut scanned_any = false;
+    // A manifest `Class-Path` names classes that live *outside* the
+    // supplied JARs. Snug does not resolve them, so the entry class may
+    // legitimately be absent — and saying it is missing would be wrong.
+    let mut declares_class_path = false;
+
+    for (file, _label) in jars.iter().zip(labels.iter()) {
+        let Ok(mut scan) = classfile::scan_class_versions_in_bytes(&file.bytes) else {
+            continue;
+        };
+        scanned_any = true;
+        // The manifest is what says whether the overlays are live.
+        if let Ok(section) = crate::manifest::read_main_section_from_bytes(&file.bytes) {
+            scan.multi_release = section.multi_release;
+            if section.class_path.is_some() {
+                declares_class_path = true;
+            }
+        }
+        for (name, version) in scan.effective_classes(min_java) {
+            if main_class == Some(name.as_str()) {
+                entry_found = true;
+                entry_version = Some(version);
+            }
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            if version.major > limit {
+                too_new.push((name.clone(), version));
+            }
+            if version.is_preview() {
+                preview.push((name.clone(), version));
+            }
+        }
+    }
+
+    // If no archive could be scanned at all, say nothing: a check that
+    // could not run must not report a class as missing.
+    if !scanned_any {
+        return;
+    }
+
+    reporter.set_stage("entry point");
+    if let Some(class) = main_class
+        && !entry_found
+    {
+        if declares_class_path {
+            reporter
+                .warning(
+                    codes::MAIN_ABSENT,
+                    "entry point",
+                    format!(
+                        "the selected class `{class}` is not in any of the supplied JARs, \
+                         but a manifest declares a Class-Path, so it may be provided \
+                         externally"
+                    ),
+                )
+                .hint(
+                    "snug does not resolve manifest Class-Path entries; make sure the \
+                     class is on the runtime classpath",
+                )
+                .emit();
+        } else {
+            reporter
+                .error(
+                    codes::MAIN_ABSENT,
+                    "entry point",
+                    format!("the selected class `{class}` is not in any of the supplied JARs"),
+                )
+                .hint(
+                    "check the spelling, and check that the JAR containing it was \
+                     included in the input",
+                )
+                .emit();
+        }
+    }
+
+    reporter.set_stage("bytecode");
+    if let (Some(class), Some(version)) = (main_class, entry_version)
+        && version.major > limit
+    {
+        reporter
+            .error(
+                codes::JAVA_TOO_NEW,
+                "bytecode",
+                format!(
+                    "`{class}` needs Java {}, but --min-java is {min_java}",
+                    version.java_release()
+                ),
+            )
+            .hint(format!(
+                "build with --min-java {} or lower, or supply a JAR compiled \
+                 for Java {min_java} or older",
+                version.java_release()
+            ))
+            .emit();
+    }
+
+    // The other classes are a warning, not an error, and they are
+    // aggregated: a fat JAR can carry hundreds of classes for a newer
+    // release, and one diagnostic per class would bury the build report.
+    let others: Vec<&(String, ClassVersion)> = too_new
+        .iter()
+        .filter(|(name, _)| Some(name.as_str()) != main_class)
+        .collect();
+    if !others.is_empty() {
+        let mut message = format!(
+            "{} class(es) need a newer Java than --min-java {min_java}:",
+            others.len()
+        );
+        for (name, version) in others.iter().take(10) {
+            message.push_str(&format!("\n  {name} (Java {})", version.java_release()));
+        }
+        if others.len() > 10 {
+            message.push_str(&format!("\n  ... and {} more", others.len() - 10));
+        }
+        reporter
+            .warning(codes::JAVA_TOO_NEW, "bytecode", message)
+            .hint(
+                "these classes may never load at this Java release; the build is \
+                 allowed to proceed",
+            )
+            .emit();
+    }
+
+    if !preview.is_empty() {
+        let mut message = format!(
+            "{} class(es) are preview bytecode and need --enable-preview:",
+            preview.len()
+        );
+        for (name, _) in preview.iter().take(10) {
+            message.push_str(&format!("\n  {name}"));
+        }
+        if preview.len() > 10 {
+            message.push_str(&format!("\n  ... and {} more", preview.len() - 10));
+        }
+        reporter
+            .warning(codes::JAVA_PREVIEW, "bytecode", message)
+            .hint(
+                "pass --jvm-arg=--enable-preview to run preview classes; snug does \
+                 not add it for you",
+            )
+            .emit();
+    }
 }
 
 fn default_name_from_input(path: &std::path::Path) -> Option<String> {
@@ -530,7 +809,7 @@ pub fn output_path(cli: &Cli) -> PathBuf {
 /// resolve yet (an output being created) falls back to itself, which is
 /// what makes a non-existent default output compare equal to itself and
 /// correctly *not* collide.
-pub fn guard_output_collision(cli: &Cli) -> Result<()> {
+pub fn guard_output_collision(cli: &Cli, extra_inputs: &[PathBuf]) -> Result<()> {
     let canonical = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
     let output = output_path(cli);
     let output_key = canonical(&output);
@@ -558,6 +837,48 @@ pub fn guard_output_collision(cli: &Cli) -> Result<()> {
             );
         }
     }
+
+    // The options files, the localisation files and the build log are
+    // inputs too. The log is the dangerous one: it is *truncated* when
+    // it opens, so a log that is also the output would destroy the
+    // artefact it is supposed to describe.
+    for input in extra_inputs {
+        if canonical(input) == output_key {
+            anyhow::bail!(
+                "-o {} is also one of this build's input files.\n\
+                 snug reads every input into memory before writing anything, so \
+                 proceeding would destroy it with no backup.\n\
+                 hint: pass a different output path, e.g. -o {}",
+                output.display(),
+                output.with_extension(DEFAULT_OUTPUT_EXT).display()
+            );
+        }
+    }
+
+    // A directory input's JARs are never path-valued CLI arguments, so
+    // the loops above cannot see them: `-o build/libs/app.jar mylibs/`
+    // would overwrite a JAR that is about to be embedded.
+    if let Some(dir) = cli
+        .input
+        .as_ref()
+        .or(cli.jar.as_ref())
+        .filter(|p| p.is_dir())
+    {
+        let mut reporter = Reporter::new(BuildLog::none());
+        for jar in jar_paths_in(dir, &mut reporter).unwrap_or_default() {
+            if canonical(&jar) == output_key {
+                anyhow::bail!(
+                    "-o {} is one of the JARs this build embeds.\n\
+                     snug reads every input into memory before writing anything, so \
+                     proceeding would destroy it with no backup.\n\
+                     hint: pass a different output path, e.g. -o {}",
+                    output.display(),
+                    output.with_extension(DEFAULT_OUTPUT_EXT).display()
+                );
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -801,7 +1122,7 @@ mod tests {
         let jar = dir.join("demo.jar");
         write_fake_jar(&jar, Some("com.example.Main"));
         let cli = Cli::parse_from(["snug", jar.to_str().unwrap(), "-o", jar.to_str().unwrap()]);
-        let err = guard_output_collision(&cli).unwrap_err().to_string();
+        let err = guard_output_collision(&cli, &[]).unwrap_err().to_string();
         assert!(err.contains("input files"), "unhelpful error: {err}");
         assert!(err.contains("demo.jar"), "error omits the path: {err}");
     }
@@ -829,7 +1150,7 @@ mod tests {
             argv.extend(extra.clone());
             let cli = Cli::parse_from(argv);
             assert!(
-                guard_output_collision(&cli).is_err(),
+                guard_output_collision(&cli, &[]).is_err(),
                 "-o {target} should be refused as it is also {extra:?}"
             );
         }
@@ -851,7 +1172,7 @@ mod tests {
             spelled.to_str().unwrap(),
         ]);
         assert!(
-            guard_output_collision(&cli).is_err(),
+            guard_output_collision(&cli, &[]).is_err(),
             "an equivalent spelling of the input must still be refused"
         );
     }
@@ -872,7 +1193,7 @@ mod tests {
             dir.join("demo.exe").to_str().unwrap(),
         ]);
         assert!(
-            guard_output_collision(&plain).is_ok(),
+            guard_output_collision(&plain, &[]).is_ok(),
             "distinct output refused"
         );
 
@@ -880,7 +1201,7 @@ mod tests {
         let implicit = Cli::parse_from(["snug", jar.to_str().unwrap()]);
         assert_eq!(output_path(&implicit), jar.with_extension("exe"));
         assert!(
-            guard_output_collision(&implicit).is_ok(),
+            guard_output_collision(&implicit, &[]).is_ok(),
             "default output refused"
         );
     }

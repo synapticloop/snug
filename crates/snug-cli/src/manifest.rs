@@ -31,14 +31,26 @@ pub fn read_main_class_from_bytes(bytes: &[u8]) -> Result<Option<String>> {
         .context("reading Main-Class from an in-memory JAR")
 }
 
+/// Read the main section of a JAR's manifest, from bytes already in
+/// memory.
+pub fn read_main_section_from_bytes(bytes: &[u8]) -> Result<MainSection> {
+    read_main_section_from(std::io::Cursor::new(bytes))
+        .context("reading the manifest of an in-memory JAR")
+}
+
 /// Shared implementation. `zip::ZipArchive` needs `Read + Seek`, which
 /// both `File` and `Cursor<&[u8]>` provide.
 fn read_main_class_from<R: Read + Seek>(reader: R) -> Result<Option<String>> {
+    Ok(read_main_section_from(reader)?.main_class)
+}
+
+/// Shared implementation of the main-section read.
+fn read_main_section_from<R: Read + Seek>(reader: R) -> Result<MainSection> {
     let mut archive = zip::ZipArchive::new(reader).context("reading JAR as zip")?;
 
     let mut manifest = match archive.by_name("META-INF/MANIFEST.MF") {
         Ok(m) => m,
-        Err(zip::result::ZipError::FileNotFound) => return Ok(None),
+        Err(zip::result::ZipError::FileNotFound) => return Ok(MainSection::default()),
         Err(e) => return Err(e).context("locating META-INF/MANIFEST.MF in the JAR"),
     };
 
@@ -56,7 +68,7 @@ fn read_main_class_from<R: Read + Seek>(reader: R) -> Result<Option<String>> {
         .context("reading manifest contents")?;
     let buf = String::from_utf8_lossy(&bytes);
 
-    Ok(parse_main_class(&buf))
+    Ok(parse_main_section(&buf))
 }
 
 /// One JAR's `Main-Class` declaration, if it makes one.
@@ -68,6 +80,23 @@ pub struct MainClassDeclaration {
 
     /// The declared `Main-Class` value.
     pub main_class: String,
+}
+
+/// The attributes of a manifest's **main section**.
+///
+/// The main section is the one at the top of the file. Everything after
+/// the first blank line belongs to a per-entry section, and a
+/// `Main-Class:` in one of those belongs to *that entry* — not to the
+/// archive. Reading it anyway is how a JAR ends up launching a class
+/// that has nothing to do with the application.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MainSection {
+    /// The declared `Main-Class`, if the section has one.
+    pub main_class: Option<String>,
+    /// The declared `Class-Path`, if the section has one.
+    pub class_path: Option<String>,
+    /// Whether the manifest declares the archive multi-release.
+    pub multi_release: bool,
 }
 
 /// Survey every JAR for a `Main-Class` declaration.
@@ -82,20 +111,25 @@ pub struct MainClassDeclaration {
 /// Individual failures are skipped rather than propagated: a JAR that
 /// isn't a readable zip can't contribute a `Main-Class` anyway, and the
 /// build path will report the real problem separately.
-pub fn survey_main_classes<F>(labels_and_bytes: F) -> Vec<MainClassDeclaration>
+///
+/// The bytes are borrowed rather than taken by value. The caller
+/// already holds every JAR in memory — it is about to embed them — and
+/// cloning a 200 MB archive to read one small entry out of it was pure
+/// waste.
+pub fn survey_main_classes<'a, F>(labels_and_bytes: F) -> Vec<MainClassDeclaration>
 where
-    F: IntoIterator<Item = (String, Vec<u8>)>,
+    F: IntoIterator<Item = (String, &'a [u8])>,
 {
     let mut found = Vec::new();
     for (jar, bytes) in labels_and_bytes {
-        if let Ok(Some(main_class)) = read_main_class_from_bytes(&bytes) {
+        if let Ok(Some(main_class)) = read_main_class_from_bytes(bytes) {
             found.push(MainClassDeclaration { jar, main_class });
         }
     }
     found
 }
 
-/// Parse a `Main-Class:` line out of a manifest body.
+/// Parse the main section of a manifest body.
 ///
 /// Manifest values wrap at 72 bytes, with continuation lines starting with a
 /// single space — and a long package name can push `Main-Class` past that.
@@ -111,32 +145,68 @@ where
 ///
 /// Contrary to what the previous comment claimed, continuations *are* legal
 /// for `Main-Class` — the 72-byte limit applies to every line in the file.
-pub fn parse_main_class(manifest: &str) -> Option<String> {
-    let mut lines = manifest.lines();
-    while let Some(line) = lines.next() {
-        // Manifest headers are ASCII; non-UTF-8 is impossible by spec.
+///
+/// Attribute names are matched case-insensitively, as the JAR
+/// specification requires, and only the main section is read: a
+/// `Main-Class:` after the first blank line belongs to a per-entry
+/// section and is not the archive's entry point.
+pub fn parse_main_section(manifest: &str) -> MainSection {
+    let mut section = MainSection::default();
+    let lines: Vec<&str> = manifest.lines().collect();
+    let mut index = 0;
+
+    while index < lines.len() {
+        let line = lines[index];
+        index += 1;
+
+        // A blank line ends the main section. Everything after it
+        // belongs to a named section.
+        if line.trim().is_empty() {
+            break;
+        }
+
         let Some((key, value)) = line.split_once(':') else {
             continue;
         };
-        if key.trim() != "Main-Class" {
-            continue;
-        }
-        let mut v = value.trim_start().to_owned();
+        let key = key.trim().to_ascii_lowercase();
+
         // Join continuation lines: each begins with a single space and
-        // carries the rest of the value.
-        for next in lines.by_ref() {
-            let Some(continuation) = next.strip_prefix(' ') else {
+        // carries the rest of the value. The walk is index-based so the
+        // line that *ends* the continuation is not swallowed with it.
+        let mut value = value.trim_start().to_owned();
+        while index < lines.len() {
+            let Some(continuation) = lines[index].strip_prefix(' ') else {
                 break;
             };
-            v.push_str(continuation);
+            value.push_str(continuation);
+            index += 1;
         }
-        let v = v.trim();
-        if v.is_empty() {
-            return None;
+        let value = value.trim();
+
+        match key.as_str() {
+            "main-class" => {
+                if !value.is_empty() && section.main_class.is_none() {
+                    section.main_class = Some(value.to_owned());
+                }
+            }
+            "class-path" => {
+                if !value.is_empty() && section.class_path.is_none() {
+                    section.class_path = Some(value.to_owned());
+                }
+            }
+            "multi-release" => {
+                section.multi_release = value.eq_ignore_ascii_case("true");
+            }
+            _ => {}
         }
-        return Some(v.to_owned());
     }
-    None
+
+    section
+}
+
+/// Parse a `Main-Class:` line out of a manifest body.
+pub fn parse_main_class(manifest: &str) -> Option<String> {
+    parse_main_section(manifest).main_class
 }
 
 #[cfg(test)]

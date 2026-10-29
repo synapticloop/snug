@@ -256,6 +256,13 @@ fn write_fake_jar(path: &Path) {
     zip.start_file("META-INF/MANIFEST.MF", opts).unwrap();
     zip.write_all(b"Manifest-Version: 1.0\nMain-Class: com.example.Main\n")
         .unwrap();
+    // The class the manifest names, so the JAR is one that could
+    // actually start.
+    zip.start_file("com/example/Main.class", opts).unwrap();
+    let mut class = vec![0u8; 16];
+    class[0..4].copy_from_slice(&[0xCA, 0xFE, 0xBA, 0xBE]);
+    class[6..8].copy_from_slice(&61u16.to_be_bytes());
+    zip.write_all(&class).unwrap();
     zip.finish().unwrap();
 }
 
