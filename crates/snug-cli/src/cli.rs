@@ -556,6 +556,8 @@ pub struct Cli {
     ///
     /// If the path names an existing directory, the log is written as snug.build.log inside it. Any other path is used as the file name.
     ///
+    /// The parent directory has to exist already. Snug does not create directories, so a --build-log whose parent is missing is an error rather than a directory that appears.
+    ///
     /// The log records the options the build actually used and where each one came from, every diagnostic raised along the way, and where the output was written.
     ///
     /// Example:

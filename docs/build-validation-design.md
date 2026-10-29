@@ -20,7 +20,7 @@ settled, not proposals.
 | D1 | Every build writes diagnostics and progress to **both** the console and a log. |
 | D2 | Default log destination is `snug.build.log` in the current working directory. Each build overwrites the previous log. |
 | D3 | `--build-log <PATH>` overrides the destination and works in `snug.options` under normal precedence. |
-| D4 | An existing directory means `snug.build.log` inside it; a file path means that filename; a **nonexistent** path is treated as a file (no extension guessing). The actual location is always reported. |
+| D4 | An existing directory means `snug.build.log` inside it; a file path means that filename; a **nonexistent** path is treated as a file (no extension guessing). The parent directory must already exist: snug does not create directories. The actual location is always reported. |
 | D5 | The build log shows the effective options **and their origins**. Provenance is retained through loading and merging, not reconstructed afterwards. Repeatable options carry a source per value. |
 | D6 | Option origins are captured by a **side-channel alongside the merged argv**, leaving clap's parsing behaviour untouched. |
 | D7 | Class-version checking: the **selected entry class** exceeding `--min-java` is an **error**; any other class exceeding it is a **warning**. |
@@ -206,6 +206,7 @@ log open before the full clap parse, so parse errors land in the log.
    - existing file → that file
    - nonexistent path → that path, used as a file
    - no `--build-log` → `<cwd>/snug.build.log`
+   - a path whose **parent directory does not exist** → `SNUG-LOG-002`. Snug does not create directories, so the open fails rather than making one.
 3. Resolve the final path against the working directory.
 4. Validate the destination, then open it. **Validate before truncating** — a log that
    cannot be written must not destroy the previous one.

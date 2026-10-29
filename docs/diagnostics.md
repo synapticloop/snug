@@ -298,9 +298,13 @@ rather than claiming a complete log was saved.
 #### `SNUG-LOG-002` — The log destination could not be opened
 
 **Cause.** The requested `--build-log` path could not be opened for
-writing, or it names one of the build's own input files.
+writing, or it names one of the build's own input files. A path whose
+parent directory does not exist is the common case: snug does not create
+directories, so the open fails with the operating system's own "path not
+found" rather than making the directory first.
 
-**Remedy.** Point `--build-log` somewhere writable. Snug stops before
+**Remedy.** Point `--build-log` somewhere writable, and make sure the parent
+directory exists. Snug stops before
 creating the executable: a build whose report nobody can read is not a
 build worth shipping. The reason is written to a temporary log when one
 can be made.
