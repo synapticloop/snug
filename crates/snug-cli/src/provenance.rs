@@ -245,6 +245,20 @@ impl Merged {
             .collect()
     }
 
+    /// The clap argument id for a canonical long name.
+    ///
+    /// The inverse of [`Merged::canonical_for`]. The overridden-value
+    /// records name the flag the way the user wrote it (`update-url`),
+    /// while clap knows the argument by its field name (`update_url`), so
+    /// finding the winner of an overridden flag means going back the other
+    /// way.
+    pub fn id_for(&self, canonical: &str) -> Option<&str> {
+        self.id_to_canonical
+            .iter()
+            .find(|(_, name)| name.as_str() == canonical)
+            .map(|(id, _)| id.as_str())
+    }
+
     /// The canonical long name for a clap argument id.
     fn canonical_for(&self, id: &str) -> String {
         self.id_to_canonical

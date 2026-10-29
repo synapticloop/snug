@@ -160,14 +160,42 @@ pub fn find_main_classes(jar_path: &Path) -> Result<MainScan> {
 /// [`MAX_CLASS_PREFIX`]) parses as far as it can and then reports
 /// `false` — never a panic, never a false positive.
 pub fn has_public_static_main(bytes: &[u8]) -> bool {
-    let Some(methods) = parse_method_table(bytes) else {
+    let Some(header) = parse_class_header(bytes) else {
         return false;
     };
+    declares_main(&header.methods)
+}
+
+/// Does this method table declare `public static void main(String[])`?
+fn declares_main(methods: &[Method]) -> bool {
     methods.iter().any(|m| {
         m.access_flags & ACC_PUBLIC != 0
             && m.access_flags & ACC_STATIC != 0
             && m.name == MAIN_NAME
             && m.descriptor == MAIN_DESCRIPTOR
+    })
+}
+
+/// The superclass of a class, and whether it declares a `main`.
+#[derive(Debug)]
+pub struct ClassInfo {
+    /// The internal name of the superclass, e.g. `java/lang/Object`.
+    ///
+    /// `None` for `java/lang/Object` itself, which has no superclass.
+    pub super_class: Option<String>,
+    /// Whether the class declares `public static void main(String[])`.
+    pub has_main: bool,
+}
+
+/// Read a class file's superclass and main-method status.
+///
+/// `None` means "not a class file I could read" — the same condition
+/// [`has_public_static_main`] treats as "no main".
+pub fn read_class_info(bytes: &[u8]) -> Option<ClassInfo> {
+    let header = parse_class_header(bytes)?;
+    Some(ClassInfo {
+        super_class: header.super_class,
+        has_main: declares_main(&header.methods),
     })
 }
 
@@ -184,7 +212,20 @@ struct Method {
 /// `None` means "not a class file I could read" — wrong magic,
 /// truncated, or a constant-pool tag from a newer class-file version
 /// we don't know. All are non-fatal for a diagnostic scan.
-fn parse_method_table(bytes: &[u8]) -> Option<Vec<Method>> {
+/// The parts of a class file a header walk needs.
+struct ClassHeader {
+    /// The internal name of the superclass, e.g. `java/lang/Object`.
+    super_class: Option<String>,
+    /// The method table.
+    methods: Vec<Method>,
+}
+
+/// Parse forward to the method table, keeping the superclass on the way.
+///
+/// `None` means "not a class file I could read" — wrong magic,
+/// truncated, or a constant-pool tag from a newer class-file version
+/// we don't know. All are non-fatal for a diagnostic scan.
+fn parse_class_header(bytes: &[u8]) -> Option<ClassHeader> {
     let mut cur = Cursor::new(bytes);
 
     if cur.u4()? != CLASS_MAGIC {
@@ -193,33 +234,69 @@ fn parse_method_table(bytes: &[u8]) -> Option<Vec<Method>> {
     let _minor_version = cur.u2()?;
     let _major_version = cur.u2()?;
 
-    let utf8 = parse_constant_pool(&mut cur)?;
+    let pool = parse_constant_pool(&mut cur)?;
 
     let _access_flags = cur.u2()?;
     let _this_class = cur.u2()?;
-    let _super_class = cur.u2()?;
+    let super_class = cur.u2()? as usize;
 
     let interface_count = cur.u2()? as usize;
     cur.skip(interface_count.checked_mul(2)?)?;
 
     // Fields come first and have the same shape as methods, so they
     // have to be walked to reach the methods. We parse and discard.
-    let _fields = parse_members(&mut cur, &utf8)?;
+    let _fields = parse_members(&mut cur, &pool)?;
 
-    parse_members(&mut cur, &utf8)
+    let methods = parse_members(&mut cur, &pool)?;
+
+    Some(ClassHeader {
+        super_class: pool.class_name(super_class),
+        methods,
+    })
 }
 
-/// Parse the constant pool, keeping only `CONSTANT_Utf8` payloads.
+/// The constant pool, keeping what a class header needs.
+///
+/// The `CONSTANT_Utf8` payloads are what the method table names. The
+/// `CONSTANT_Class` entries are what the header's `super_class` points at:
+/// that field is a pool index holding a `CONSTANT_Class`, whose own payload
+/// is the index of a Utf8. Everything else is skipped by its fixed size.
+#[derive(Default)]
+struct ConstantPool {
+    /// Utf8 payloads, indexed by constant-pool index.
+    utf8: Vec<String>,
+    /// For each pool index, the name index of a `CONSTANT_Class` entry.
+    /// Zero for every other kind of constant.
+    class_name_index: Vec<u16>,
+}
+
+impl ConstantPool {
+    /// The internal name of the class at `index`, if it is a Class entry.
+    ///
+    /// `java/lang/Object`-style, with slashes.
+    fn class_name(&self, index: usize) -> Option<String> {
+        let name_index = *self.class_name_index.get(index)? as usize;
+        if name_index == 0 {
+            return None;
+        }
+        self.utf8.get(name_index).cloned()
+    }
+}
+
+/// Parse the constant pool, keeping the Utf8 payloads and the Class entries.
 ///
 /// Every other constant type is skipped by its fixed size. The two
 /// 8-byte types (`Long`, `Double`) occupy **two** constant-pool slots
 /// per JVMS §4.4, which is the one place a naive parser silently
 /// desynchronises and then reports nonsense — so it's called out here.
-fn parse_constant_pool(cur: &mut Cursor<'_>) -> Option<Vec<String>> {
+fn parse_constant_pool(cur: &mut Cursor<'_>) -> Option<ConstantPool> {
     let count = cur.u2()? as usize;
-    // Index 0 is unused by the spec; allocate one spare so the vector
-    // is directly indexable by constant-pool index.
-    let mut utf8 = vec![String::new(); count.max(1)];
+    // Index 0 is unused by the spec; allocate one spare so the vectors
+    // are directly indexable by constant-pool index.
+    let mut pool = ConstantPool {
+        utf8: vec![String::new(); count.max(1)],
+        class_name_index: vec![0; count.max(1)],
+    };
 
     let mut index = 1usize;
     while index < count {
@@ -229,10 +306,14 @@ fn parse_constant_pool(cur: &mut Cursor<'_>) -> Option<Vec<String>> {
             1 => {
                 let len = cur.u2()? as usize;
                 let bytes = cur.take(len)?;
-                utf8[index] = String::from_utf8_lossy(bytes).into_owned();
+                pool.utf8[index] = String::from_utf8_lossy(bytes).into_owned();
             }
-            // Class(7) String(8) MethodType(16) Module(19) Package(20): u2
-            7 | 8 | 16 | 19 | 20 => {
+            // Class(7): u2 name_index
+            7 => {
+                pool.class_name_index[index] = cur.u2()?;
+            }
+            // String(8) MethodType(16) Module(19) Package(20): u2
+            8 | 16 | 19 | 20 => {
                 cur.skip(2)?;
             }
             // MethodHandle(15): u1 reference_kind + u2 reference_index
@@ -255,11 +336,11 @@ fn parse_constant_pool(cur: &mut Cursor<'_>) -> Option<Vec<String>> {
         index += 1;
     }
 
-    Some(utf8)
+    Some(pool)
 }
 
 /// Parse a `field_info[]` or `method_info[]` table.
-fn parse_members(cur: &mut Cursor<'_>, utf8: &[String]) -> Option<Vec<Method>> {
+fn parse_members(cur: &mut Cursor<'_>, pool: &ConstantPool) -> Option<Vec<Method>> {
     let count = cur.u2()? as usize;
     let mut members = Vec::with_capacity(count.min(1024));
 
@@ -273,8 +354,8 @@ fn parse_members(cur: &mut Cursor<'_>, utf8: &[String]) -> Option<Vec<Method>> {
 
         members.push(Method {
             access_flags,
-            name: utf8.get(name_index).cloned().unwrap_or_default(),
-            descriptor: utf8.get(descriptor_index).cloned().unwrap_or_default(),
+            name: pool.utf8.get(name_index).cloned().unwrap_or_default(),
+            descriptor: pool.utf8.get(descriptor_index).cloned().unwrap_or_default(),
         });
     }
 

@@ -96,14 +96,32 @@ fn run() -> Result<Outcome> {
     let cwd = std::env::current_dir().context("reading current working directory")?;
     let options_paths = options_file::resolve_all(&raw_args, &cwd, std::env::consts::OS)
         .context("resolving which options files apply")?;
+    // A file that does not parse is a build failure like any other: it
+    // needs a code, and it needs to reach the log. The error is kept
+    // rather than propagated so the log can be opened first and carry it —
+    // otherwise a typo in `snug.options` loses the one record of what went
+    // wrong, which is the whole point of writing one.
     let mut layers = Vec::with_capacity(options_paths.len());
+    let mut layer_error: Option<anyhow::Error> = None;
     for p in &options_paths {
-        layers.push(
-            options_file::load_layer(p)
-                .with_context(|| format!("loading options file {}", p.display()))?,
-        );
+        match options_file::load_layer(p)
+            .with_context(|| format!("loading options file {}", p.display()))
+        {
+            Ok(layer) => layers.push(layer),
+            Err(err) => {
+                // Keep the first failure: it is the one that stops the build,
+                // and a later one would only bury it.
+                if layer_error.is_none() {
+                    layer_error = Some(err);
+                }
+            }
+        }
     }
 
+    // The merged argv comes from the files that parsed plus the command line.
+    // The broken file contributes nothing: its tokens are unknown, so a
+    // `--build-log` line in it cannot be honoured, and honouring one could
+    // point the log at the broken file itself.
     let merged = options_file::merge(&raw_args, layers);
 
     // `--find-main` and `--list-tokens` are diagnostics, not builds, so
@@ -147,6 +165,21 @@ fn run() -> Result<Outcome> {
             err.exit();
         }
     };
+
+    // A file that did not parse is reported like any other failure: with a
+    // code, and in the log. The build never starts, so there is no effective
+    // configuration to show — but the log's location still has to be
+    // reported, or the record of the failure is a file the user was never
+    // told about.
+    if let Some(err) = layer_error {
+        reporter.set_stage("options");
+        reporter
+            .error(codes::CFG_PARSE, "options", format!("{err:?}"))
+            .hint("fix the syntax error in the options file and run snug again")
+            .emit();
+        finish(&mut reporter, &cli, None, false);
+        return Ok(Outcome::Reported);
+    }
 
     for p in &options_paths {
         reporter.write_line(&format!("snug: loaded options from {}", p.display()));
@@ -200,6 +233,7 @@ fn run() -> Result<Outcome> {
     // as the file having been ignored. `--help` remains one flag away
     // for anyone who does want the full usage.
     if cli.jar.is_none() && cli.input.is_none() {
+        reporter.set_stage("input");
         reporter
             .error(
                 codes::CFG_INVALID,
@@ -208,6 +242,7 @@ fn run() -> Result<Outcome> {
             )
             .hint(MISSING_INPUT_HINT)
             .emit();
+        finish(&mut reporter, &cli, None, false);
         return Ok(Outcome::Reported);
     }
 
@@ -227,9 +262,11 @@ fn run() -> Result<Outcome> {
         protected.push(log.to_path_buf());
     }
     if let Err(err) = guard_output_collision(&cli, &protected) {
+        reporter.set_stage("output");
         reporter
             .error(codes::OUTPUT_COLLISION, "output", format!("{err}"))
             .emit();
+        finish(&mut reporter, &cli, None, false);
         return Ok(Outcome::Reported);
     }
 
@@ -237,9 +274,26 @@ fn run() -> Result<Outcome> {
     let payload = match build_payload_with(&cli, &mut reporter) {
         Ok(payload) => payload,
         Err(err) => {
-            reporter
-                .error(codes::INTERNAL, "payload", format!("{err:?}"))
-                .emit();
+            // A failure the user can act on is not a snug bug — and
+            // `SNUG-INTERNAL-001` tells the user to report a bug. The
+            // problem carries its own code and stage: `SNUG-INPUT-001` for
+            // a path that cannot be used, `SNUG-MANIFEST-001` for a manifest
+            // that cannot be read, and so on.
+            match err.downcast::<snug_cli::build::UserProblem>() {
+                Ok(problem) => {
+                    let mut diagnostic =
+                        reporter.error(problem.code, problem.stage, problem.message);
+                    if let Some(hint) = problem.hint {
+                        diagnostic = diagnostic.hint(hint);
+                    }
+                    diagnostic.emit();
+                }
+                Err(err) => {
+                    reporter
+                        .error(codes::INTERNAL, "payload", format!("{err:?}"))
+                        .emit();
+                }
+            }
             finish(&mut reporter, &cli, None, false);
             return Ok(Outcome::Reported);
         }
@@ -612,6 +666,12 @@ fn dry_run(_cli: &Cli, embedded: &SnugEmbedded, reporter: &mut Reporter) {
 /// The closing summary: what happened, how many problems, and where
 /// everything is.
 fn finish(reporter: &mut Reporter, cli: &Cli, output: Option<&Path>, succeeded: bool) {
+    // A log that could not be written completely is reported rather than left
+    // for the user to discover. It carries a code, which is the point: the log
+    // is what a bug report quotes, and "the log was incomplete" has to be one
+    // of the things it says about itself.
+    reporter.report_log_write_failure();
+
     let output_path = output_path(cli);
     let mut lines = Vec::new();
     if succeeded {
@@ -631,15 +691,6 @@ fn finish(reporter: &mut Reporter, cli: &Cli, output: Option<&Path>, succeeded: 
     match reporter.log_path() {
         Some(path) => lines.push(format!("  Log:      {}", path.display())),
         None => lines.push("  Log:      (none)".to_string()),
-    }
-    if reporter.log_write_failed() {
-        lines.push(format!(
-            "  Note:     the log at {} could not be written completely.",
-            reporter
-                .log_path()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default()
-        ));
     }
     for line in lines {
         reporter.write_line(&line);

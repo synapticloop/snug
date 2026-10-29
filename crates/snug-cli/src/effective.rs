@@ -23,27 +23,39 @@ use crate::report::redact_jvm_arg;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
     /// The option's name, as the user knows it.
-    pub label: &'static str,
+    pub label: String,
     /// The value that was used.
     pub value: String,
     /// Where that value came from.
     pub origin: Origin,
     /// Whether the value was masked for display.
     pub masked: bool,
+    /// The origin that beat this value, when this value lost.
+    ///
+    /// A row that carries one is an *overridden* value: it never reached
+    /// the build, and this says what reached it instead.
+    pub superseded_by: Option<Origin>,
 }
 
 impl Row {
-    fn new(label: &'static str, value: impl Into<String>, origin: Origin) -> Self {
+    fn new(label: impl Into<String>, value: impl Into<String>, origin: Origin) -> Self {
         Self {
-            label,
+            label: label.into(),
             value: value.into(),
             origin,
             masked: false,
+            superseded_by: None,
         }
     }
 
     fn masked(mut self) -> Self {
         self.masked = true;
+        self
+    }
+
+    /// Mark this row as a value that lost to another origin.
+    fn superseded_by(mut self, winner: Origin) -> Self {
+        self.superseded_by = Some(winner);
         self
     }
 }
@@ -269,7 +281,71 @@ pub fn rows(
         },
     ));
 
-    rows
+    // --- overridden values -------------------------------------------------
+    //
+    // The values that lost. They never reached the build, so they are not
+    // part of the effective configuration — but a user asking "why did snug
+    // ignore my `snug.options`?" needs to see what was ignored and what beat
+    // it, and the merge has already done the work of working that out.
+    //
+    // The winner's origin is read back out of the merged argv rather than
+    // carried along in the record, because the record is made while the loser's
+    // layer is being processed and the winner may not have been seen yet.
+    let mut losers: Vec<(String, Vec<Row>)> = Vec::new();
+    for lost in &merged.overridden {
+        // The winner's origin is the one already computed for the winner's
+        // own row, so the two cannot disagree about where the value came
+        // from. Asking the merged argv instead would answer "not set" for
+        // `--input` when the command line's *positional* is what beat it:
+        // the two are the same setting, but only one of them is a flag.
+        let winner = rows
+            .iter()
+            .find(|row| row.label == lost.flag)
+            .map(|row| row.origin.clone())
+            .unwrap_or_else(|| {
+                merged
+                    .id_for(&lost.flag)
+                    .map(|id| merged.origin_of(matches, id))
+                    .unwrap_or(Origin::CommandLine)
+            });
+        let row = Row::new(
+            lost.flag.clone(),
+            lost.value.clone().unwrap_or_else(|| "(unset)".to_string()),
+            lost.origin.clone(),
+        )
+        .superseded_by(winner);
+        match losers
+            .iter_mut()
+            .find(|(flag, _)| flag.as_str() == lost.flag.as_str())
+        {
+            Some((_, rows)) => rows.push(row),
+            None => losers.push((lost.flag.clone(), vec![row])),
+        }
+    }
+
+    // Each loser sits directly under the value that beat it, so the two read as
+    // a pair rather than as two unrelated lines.
+    let mut table: Vec<Row> = Vec::with_capacity(rows.len() + losers.len());
+    let mut placed = vec![false; losers.len()];
+    for row in rows {
+        let label = row.label.clone();
+        table.push(row);
+        for (index, (flag, extra)) in losers.iter().enumerate() {
+            if flag == &label && !placed[index] {
+                placed[index] = true;
+                table.extend(extra.iter().cloned());
+            }
+        }
+    }
+    // A loser whose flag has no row of its own still belongs in the log: it was
+    // a setting the user wrote, and it was ignored.
+    for (index, (_, extra)) in losers.iter().enumerate() {
+        if !placed[index] {
+            table.extend(extra.iter().cloned());
+        }
+    }
+
+    table
 }
 
 impl Row {
@@ -303,6 +379,9 @@ pub fn render(rows: &[Row], cwd: &Path) -> String {
             row.value,
             origin
         );
+        if let Some(winner) = &row.superseded_by {
+            line.push_str(&format!("  — overridden by {}", winner.label(cwd)));
+        }
         if row.masked {
             line.push_str("  (masked)");
         }

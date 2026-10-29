@@ -7,9 +7,12 @@
 //! binary fixtures, and no dependency on what any particular fat JAR
 //! happens to contain.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use common::{ACC_PUBLIC, MAIN_DESCRIPTOR, PUBLIC_STATIC};
 use zip::CompressionMethod;
 use zip::write::SimpleFileOptions;
 
@@ -18,86 +21,11 @@ fn snug_bin() -> PathBuf {
 }
 
 // ---------------------------------------------------------------------------
-// Minimal class-file writer
+// Class-file fixtures
 // ---------------------------------------------------------------------------
 
-/// A method to encode: `(access_flags, name, descriptor)`.
-type MethodSpec = (u16, &'static str, &'static str);
-
-const ACC_PUBLIC: u16 = 0x0001;
-const ACC_STATIC: u16 = 0x0008;
-const PUBLIC_STATIC: u16 = ACC_PUBLIC | ACC_STATIC;
-const MAIN_DESCRIPTOR: &str = "([Ljava/lang/String;)V";
-
-/// Encode a syntactically valid class file declaring `methods`.
-///
-/// Only what `classfile::has_public_static_main` reads is emitted:
-/// magic, version, a constant pool, no interfaces, no fields, the
-/// method table, and no attributes. Method attribute blobs are
-/// omitted entirely, which is fine — the parser skips them by length
-/// and a count of zero is a valid encoding of "none".
-fn build_class(internal_name: &str, methods: &[MethodSpec]) -> Vec<u8> {
-    let mut pool: Vec<Vec<u8>> = Vec::new();
-
-    let utf8 = |pool: &mut Vec<Vec<u8>>, value: &str| -> u16 {
-        let index = pool.len() as u16 + 1;
-        let mut entry = vec![1u8];
-        entry.extend_from_slice(&(value.len() as u16).to_be_bytes());
-        entry.extend_from_slice(value.as_bytes());
-        pool.push(entry);
-        index
-    };
-
-    let this_name = utf8(&mut pool, internal_name);
-    let this_class = {
-        let index = pool.len() as u16 + 1;
-        let mut entry = vec![7u8];
-        entry.extend_from_slice(&this_name.to_be_bytes());
-        pool.push(entry);
-        index
-    };
-    let super_name = utf8(&mut pool, "java/lang/Object");
-    let super_class = {
-        let index = pool.len() as u16 + 1;
-        let mut entry = vec![7u8];
-        entry.extend_from_slice(&super_name.to_be_bytes());
-        pool.push(entry);
-        index
-    };
-
-    let mut method_refs = Vec::new();
-    for (_, name, descriptor) in methods {
-        let name_index = utf8(&mut pool, name);
-        let descriptor_index = utf8(&mut pool, descriptor);
-        method_refs.push((name_index, descriptor_index));
-    }
-
-    let mut out = Vec::new();
-    out.extend_from_slice(&0xCAFE_BABEu32.to_be_bytes());
-    out.extend_from_slice(&0u16.to_be_bytes()); // minor
-    out.extend_from_slice(&65u16.to_be_bytes()); // major
-    out.extend_from_slice(&((pool.len() + 1) as u16).to_be_bytes());
-    for entry in &pool {
-        out.extend_from_slice(entry);
-    }
-    out.extend_from_slice(&ACC_PUBLIC.to_be_bytes());
-    out.extend_from_slice(&this_class.to_be_bytes());
-    out.extend_from_slice(&super_class.to_be_bytes());
-    out.extend_from_slice(&0u16.to_be_bytes()); // interfaces_count
-    out.extend_from_slice(&0u16.to_be_bytes()); // fields_count
-    out.extend_from_slice(&(method_refs.len() as u16).to_be_bytes());
-    for (spec, (name_index, descriptor_index)) in methods.iter().zip(&method_refs) {
-        out.extend_from_slice(&spec.0.to_be_bytes());
-        out.extend_from_slice(&name_index.to_be_bytes());
-        out.extend_from_slice(&descriptor_index.to_be_bytes());
-        out.extend_from_slice(&0u16.to_be_bytes()); // attributes_count
-    }
-    out.extend_from_slice(&0u16.to_be_bytes()); // class attributes_count
-    out
-}
-
 fn class_with_main(internal_name: &str) -> Vec<u8> {
-    build_class(internal_name, &[(PUBLIC_STATIC, "main", MAIN_DESCRIPTOR)])
+    common::build_class(internal_name, &[(PUBLIC_STATIC, "main", MAIN_DESCRIPTOR)])
 }
 
 /// A JavaFX-style `Application` subclass: a constructor and `start`,
@@ -105,7 +33,7 @@ fn class_with_main(internal_name: &str) -> Vec<u8> {
 /// `assets/snug-javafx-demo-windows.jar`'s `HelloApplication`, and is the case
 /// that makes a naive "Main-Class must have a main method" check wrong.
 fn javafx_application_class(internal_name: &str) -> Vec<u8> {
-    build_class(
+    common::build_class(
         internal_name,
         &[
             (ACC_PUBLIC, "<init>", "()V"),
@@ -205,7 +133,7 @@ fn lists_every_main_class_and_marks_the_cli_match() {
             ("j/g/h/Third.class", class_with_main("j/g/h/Third")),
             (
                 "j/g/h/NotAMain.class",
-                build_class("j/g/h/NotAMain", &[(ACC_PUBLIC, "run", "()V")]),
+                common::build_class("j/g/h/NotAMain", &[(ACC_PUBLIC, "run", "()V")]),
             ),
         ],
     );
@@ -437,7 +365,7 @@ fn ignores_module_info_and_non_class_entries() {
         &jar,
         Some("a.b.c.First"),
         &[
-            ("module-info.class", build_class("module-info", &[])),
+            ("module-info.class", common::build_class("module-info", &[])),
             ("a/b/c/First.class", class_with_main("a/b/c/First")),
             ("readme.txt", b"not a class".to_vec()),
             ("logo.png", vec![0x89, b'P', b'N', b'G']),

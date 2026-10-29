@@ -1,5 +1,7 @@
 //! End-to-end smoke tests for the `snug.options` file feature.
 
+mod common;
+
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -57,25 +59,27 @@ fn write_jar(path: &PathBuf) {
     // that fails on the user's machine.
     zip.start_file("com/example/Main.class", opts)
         .expect("start_file");
-    zip.write_all(&class_file_header(61)).expect("write class");
+    zip.write_all(&main_class(61)).expect("write class");
     zip.finish().expect("finish zip");
 }
 
-/// A class-file header: the magic, then major version 61 (Java 17).
+/// A class file declaring `public static void main(String[])`.
 ///
-/// Only the header is written. Snug reads the version from these eight
-/// bytes and never looks further into a class it was not asked to
-/// inspect.
+/// A *whole* class file, not just a header: snug reads the superclass and
+/// the method table for the entry-point check, so a header-only fixture would
+/// make every test report an unreadable entry point.
 ///
 /// Java 17 is deliberate: it satisfies every `--min-java` these tests
 /// use — 17, 21 and the default 25 — so the class-version check stays
 /// out of their way. A fixture compiled for the newest Java would fail
 /// the build wherever a test set a lower minimum.
-fn class_file_header(major: u16) -> Vec<u8> {
-    let mut class = vec![0u8; 16];
-    class[0..4].copy_from_slice(&[0xCA, 0xFE, 0xBA, 0xBE]);
-    class[6..8].copy_from_slice(&major.to_be_bytes());
-    class
+fn main_class(major: u16) -> Vec<u8> {
+    common::build_class_with(
+        "com/example/Main",
+        "java/lang/Object",
+        major,
+        &[(common::PUBLIC_STATIC, "main", common::MAIN_DESCRIPTOR)],
+    )
 }
 
 #[test]

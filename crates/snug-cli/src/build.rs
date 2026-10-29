@@ -1,6 +1,7 @@
 //! Assemble a [`SnugPayload`] from parsed CLI args + loaded inputs, and
 //! turn it into the final Windows `.exe`.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -21,6 +22,53 @@ use snug_format::{
     SplashConfig, SplashImage, embedded_file, encode,
 };
 use snug_payload::PAYLOAD_RESOURCE_NAME;
+
+/// A failure the user can act on.
+///
+/// A distinct error type so the reporter can say what is wrong — and under
+/// which code — rather than "something went wrong inside snug"
+/// (`SNUG-INTERNAL-001`, which tells the user to file a bug). A missing JAR
+/// is the most ordinary failure there is, and it is not a snug bug.
+#[derive(Debug)]
+pub struct UserProblem {
+    /// The stable diagnostic code.
+    pub code: &'static str,
+    /// The build stage the problem belongs to.
+    pub stage: &'static str,
+    /// What went wrong.
+    pub message: String,
+    /// What to do about it.
+    pub hint: Option<String>,
+}
+
+impl std::fmt::Display for UserProblem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for UserProblem {}
+
+/// A failure the user can act on.
+fn user_problem(
+    code: &'static str,
+    stage: &'static str,
+    message: impl Into<String>,
+    hint: Option<&str>,
+) -> anyhow::Error {
+    UserProblem {
+        code,
+        stage,
+        message: message.into(),
+        hint: hint.map(str::to_owned),
+    }
+    .into()
+}
+
+/// An input that cannot be used.
+fn input_unavailable(message: impl Into<String>, hint: Option<&str>) -> anyhow::Error {
+    user_problem(codes::INPUT_UNAVAILABLE, "input", message, hint)
+}
 
 /// Build the full [`SnugPayload`] that the launcher will consume.
 ///
@@ -57,18 +105,51 @@ pub fn build_payload_with(cli: &Cli, reporter: &mut Reporter) -> Result<SnugPayl
     // succeed and the application would fail at runtime, with the cause
     // sitting in a file the user never looked at.
     reporter.set_stage("archives");
+    let mut readable: Vec<bool> = Vec::with_capacity(jars.len());
     for (file, label) in jars.iter().zip(labels.iter()) {
-        if zip::ZipArchive::new(std::io::Cursor::new(file.bytes.as_slice())).is_err() {
+        let archive = match zip::ZipArchive::new(std::io::Cursor::new(file.bytes.as_slice())) {
+            Ok(archive) => archive,
+            Err(_) => {
+                reporter
+                    .error(
+                        codes::JAR_INVALID,
+                        "archives",
+                        format!("{label} is not a readable ZIP archive"),
+                    )
+                    .location(label.clone())
+                    .hint(
+                        "a JAR that cannot be opened cannot be embedded; re-export it, \
+                         or remove it from the input",
+                    )
+                    .emit();
+                readable.push(false);
+                continue;
+            }
+        };
+        readable.push(true);
+
+        // A nested JAR is a JAR inside a JAR. snug embeds the outer one
+        // verbatim and does not resolve the inner ones, so a launcher built
+        // from it will not find the classes they carry. Worth saying; not
+        // worth refusing the build over.
+        let nested = archive
+            .file_names()
+            .filter(|name| {
+                let bytes = name.as_bytes();
+                bytes.len() >= 4 && bytes[bytes.len() - 4..].eq_ignore_ascii_case(b".jar")
+            })
+            .count();
+        if nested > 0 {
             reporter
-                .error(
-                    codes::JAR_INVALID,
+                .info(
+                    codes::DEP_NESTED,
                     "archives",
-                    format!("{label} is not a readable ZIP archive"),
+                    format!("{label} contains {nested} nested JAR(s)"),
                 )
                 .location(label.clone())
                 .hint(
-                    "a JAR that cannot be opened cannot be embedded; re-export it, \
-                     or remove it from the input",
+                    "snug does not resolve nested JARs; bundle their contents into the \
+                     supplied JARs, or point --main-class at a class that is inside them",
                 )
                 .emit();
         }
@@ -88,8 +169,32 @@ pub fn build_payload_with(cli: &Cli, reporter: &mut Reporter) -> Result<SnugPayl
             let first = jars.first().ok_or_else(|| {
                 anyhow::anyhow!("at least one JAR is required to read Main-Class")
             })?;
-            read_main_class_from_bytes(&first.bytes)
-                .context("reading Main-Class from JAR manifest")?
+            // A JAR that is not a readable ZIP has already been reported as
+            // `SNUG-JAR-001`. The manifest check depends on it, so it is
+            // skipped rather than reported a second time — and the entry
+            // point cannot be named, which `SNUG-MAIN-002` would report
+            // misleadingly.
+            if !readable.first().copied().unwrap_or(false) {
+                None
+            } else {
+                match read_main_class_from_bytes(&first.bytes) {
+                    Ok(main_class) => main_class,
+                    // A manifest that cannot be read is the user's JAR, not a
+                    // snug bug: `SNUG-MANIFEST-001` names it, where
+                    // `SNUG-INTERNAL-001` would tell the user to report one.
+                    Err(err) => {
+                        let label = labels.first().cloned().unwrap_or_default();
+                        return Err(user_problem(
+                            codes::MANIFEST_UNUSABLE,
+                            "entry point",
+                            format!("the manifest of {label} could not be read: {err:#}"),
+                            Some(
+                                "re-export the JAR, or set --main-class to name the entry point directly",
+                            ),
+                        ));
+                    }
+                }
+            }
         }
     };
 
@@ -106,7 +211,10 @@ pub fn build_payload_with(cli: &Cli, reporter: &mut Reporter) -> Result<SnugPayl
     // has nothing to call: neither a `main` method nor the JavaFX
     // `Application.launch` fallback can be reached without a class name,
     // so the EXE would be built and then fail on the user's machine.
-    if main_class.is_none() {
+    // An unreadable first JAR is *why* the entry point is unknown, and it has
+    // already been reported as `SNUG-JAR-001`. Saying "no JAR declares a
+    // Main-Class" would be a different claim, and a wrong one.
+    if main_class.is_none() && readable.first().copied().unwrap_or(true) {
         reporter
             .error(
                 codes::MAIN_NONE,
@@ -276,17 +384,18 @@ pub fn resolve_input_path(cli: &Cli) -> Result<(PathBuf, bool)> {
         // specified. (os error 2)" — accurate, and useless to someone
         // trying to work out which half of that is the problem. Any
         // other error kind (permission denied, path too long) keeps the
-        // context chain, where the OS text is the useful part.
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => bail!(
-            "input path does not exist: {}\n\
-             hint: a JAR file, or a directory of JARs, that exists on the \
-             machine running snug",
-            input_path.display()
-        ),
+        // OS text, which is the useful part.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(input_unavailable(
+                format!("input path does not exist: {}", input_path.display()),
+                Some("a JAR file, or a directory of JARs, that exists on the machine running snug"),
+            ));
+        }
         Err(e) => {
-            return Err(
-                anyhow::Error::new(e).context(format!("stat-ing input {}", input_path.display()))
-            );
+            return Err(input_unavailable(
+                format!("could not read input {}: {e}", input_path.display()),
+                Some("check the path, and that snug has permission to read it"),
+            ));
         }
     };
 
@@ -295,10 +404,13 @@ pub fn resolve_input_path(cli: &Cli) -> Result<(PathBuf, bool)> {
     } else if meta.is_file() {
         false
     } else {
-        bail!(
-            "{} is neither a regular file nor a directory",
-            input_path.display()
-        );
+        return Err(input_unavailable(
+            format!(
+                "{} is neither a regular file nor a directory",
+                input_path.display()
+            ),
+            Some("point --input at a JAR file, or at a directory of JARs"),
+        ));
     };
 
     Ok((input_path, is_dir))
@@ -314,7 +426,12 @@ pub fn resolve_input_path(cli: &Cli) -> Result<(PathBuf, bool)> {
 /// directory held.
 pub fn jar_paths_in(dir: &Path, reporter: &mut Reporter) -> Result<Vec<PathBuf>> {
     let mut jar_paths: Vec<PathBuf> = std::fs::read_dir(dir)
-        .with_context(|| format!("reading directory {}", dir.display()))?
+        .map_err(|e| {
+            input_unavailable(
+                format!("could not read directory {}: {e}", dir.display()),
+                Some("check the path, and that snug has permission to read it"),
+            )
+        })?
         .filter_map(|entry| match entry {
             Ok(entry) => {
                 let path = entry.path();
@@ -346,13 +463,10 @@ pub fn jar_paths_in(dir: &Path, reporter: &mut Reporter) -> Result<Vec<PathBuf>>
         .collect();
     jar_paths.sort();
 
-    if jar_paths.is_empty() {
-        bail!(
-            "no *.jar files found in {} (--input directory must contain at least one JAR)",
-            dir.display()
-        );
-    }
-
+    // An empty directory is not an error here. The caller decides what an
+    // empty result means: the build wants to say "no JARs found" and be
+    // wrong about the path, while the log-collision guard wants to know
+    // only that there is nothing there to truncate.
     Ok(jar_paths)
 }
 
@@ -367,10 +481,17 @@ fn resolve_input(
 
     if !is_dir {
         // Single-JAR input.
-        let bytes = std::fs::read(&input_path)
-            .with_context(|| format!("reading JAR {}", input_path.display()))?;
+        let bytes = std::fs::read(&input_path).map_err(|e| {
+            input_unavailable(
+                format!("could not read JAR {}: {e}", input_path.display()),
+                Some("check the file's permissions, and that it is not locked by another process"),
+            )
+        })?;
         if bytes.is_empty() {
-            bail!("{} is empty", input_path.display());
+            return Err(input_unavailable(
+                format!("{} is empty", input_path.display()),
+                Some("an empty file cannot be a JAR; check that the right file was passed"),
+            ));
         }
         let label = file_name_of(&input_path);
         Ok((input_path, vec![embedded_file(bytes)], vec![label]))
@@ -378,6 +499,15 @@ fn resolve_input(
         // Multi-JAR input: scan the directory for `*.jar`, sort by
         // filename for determinism.
         let jar_paths = jar_paths_in(&input_path, reporter)?;
+        if jar_paths.is_empty() {
+            return Err(input_unavailable(
+                format!(
+                    "no *.jar files found in {} (--input directory must contain at least one JAR)",
+                    input_path.display()
+                ),
+                Some("point --input at a directory that holds at least one .jar file"),
+            ));
+        }
 
         let mut jars = Vec::with_capacity(jar_paths.len());
         let mut labels = Vec::with_capacity(jar_paths.len());
@@ -509,6 +639,133 @@ fn warn_on_ambiguous_manifests(
         .emit();
 }
 
+/// The internal name of the JavaFX base class the launcher falls back to.
+///
+/// A JavaFX application has no `main` method: the launcher starts it with
+/// `javafx.application.Application.launch` instead, and the application says
+/// so by extending `Application`.
+const JAVAFX_APPLICATION: &str = "javafx/application/Application";
+
+/// What the build could learn about the selected entry point's `main`.
+enum EntryPointMethod {
+    /// The class, or one of its ancestors, declares a `main`.
+    DeclaresMain,
+    /// The class extends `javafx.application.Application`, which the launcher
+    /// starts through `Application.launch` instead.
+    JavaFx,
+    /// No `main` was found in the class or any of its ancestors.
+    NoMain,
+    /// The class could not be read, so nothing could be said about it.
+    Unreadable,
+}
+
+/// Check that the selected entry class can actually be started.
+///
+/// The launcher resolves `main(String[])` through the JVM, and the JVM
+/// searches superclasses — so a class that *inherits* a main launches fine.
+/// This walks the same chain, so the build does not call an inherited main a
+/// missing one.
+///
+/// A JavaFX application has no `main` at all, and the launcher's fallback
+/// starts it through `Application.launch`. That is not a missing main either.
+fn check_entry_point_method(jars: &[EmbeddedFile], main_class: &str, reporter: &mut Reporter) {
+    match inspect_entry_point(jars, main_class) {
+        EntryPointMethod::DeclaresMain | EntryPointMethod::JavaFx => {}
+        EntryPointMethod::Unreadable => {
+            reporter
+                .warning(
+                    codes::MAIN_UNVERIFIED,
+                    "entry point",
+                    format!(
+                        "the entry point `{main_class}` could not be read, so its `main` could not be verified"
+                    ),
+                )
+                .hint(
+                    "the class file may be truncated, or use a class-file version snug does not know",
+                )
+                .emit();
+        }
+        EntryPointMethod::NoMain => {
+            reporter
+                .warning(
+                    codes::MAIN_UNVERIFIED,
+                    "entry point",
+                    format!("`{main_class}` does not declare `public static void main(String[])`"),
+                )
+                .hint(
+                    "the launcher needs one to start the application; an inherited main, or a JavaFX Application, still works",
+                )
+                .emit();
+        }
+    }
+}
+
+/// Walk the entry class and its ancestors, looking for a `main`.
+fn inspect_entry_point(jars: &[EmbeddedFile], main_class: &str) -> EntryPointMethod {
+    let mut archives: Vec<zip::ZipArchive<std::io::Cursor<&[u8]>>> = jars
+        .iter()
+        .filter_map(|file| zip::ZipArchive::new(std::io::Cursor::new(file.bytes.as_slice())).ok())
+        .collect();
+
+    let mut current = main_class.to_string();
+    let mut seen: Vec<String> = Vec::new();
+
+    loop {
+        // A malformed class file could name itself as its own ancestor.
+        if seen.iter().any(|name| name == &current) {
+            return EntryPointMethod::NoMain;
+        }
+        seen.push(current.clone());
+
+        let Some(bytes) = find_class_bytes(&mut archives, &current) else {
+            // The chain has left the supplied JARs. The JDK's own classes are
+            // not in them either, and neither are JavaFX's.
+            return EntryPointMethod::NoMain;
+        };
+        let Some(info) = classfile::read_class_info(&bytes) else {
+            return EntryPointMethod::Unreadable;
+        };
+        if info.has_main {
+            return EntryPointMethod::DeclaresMain;
+        }
+        let Some(super_class) = info.super_class else {
+            // `java/lang/Object`: no ancestors left.
+            return EntryPointMethod::NoMain;
+        };
+        if super_class == JAVAFX_APPLICATION {
+            return EntryPointMethod::JavaFx;
+        }
+        current = super_class.replace('/', ".");
+    }
+}
+
+/// Find a class's bytes in the supplied JARs.
+///
+/// Only a bounded prefix is read: the superclass and the method table both
+/// live in the first few kilobytes of a class file, and the `Code`
+/// attributes — the part that is large — are not read at all.
+fn find_class_bytes(
+    archives: &mut [zip::ZipArchive<std::io::Cursor<&[u8]>>],
+    binary_name: &str,
+) -> Option<Vec<u8>> {
+    let entry_name = format!("{}.class", binary_name.replace('.', "/"));
+    for archive in archives.iter_mut() {
+        let Ok(mut entry) = archive.by_name(&entry_name) else {
+            continue;
+        };
+        let mut buf = Vec::new();
+        if entry
+            .by_ref()
+            .take(classfile::MAX_CLASS_PREFIX as u64)
+            .read_to_end(&mut buf)
+            .is_ok()
+        {
+            return Some(buf);
+        }
+    }
+    None
+}
+
 /// Check the selected entry class, and the bytecode around it.
 ///
 /// Two questions, one scan:
@@ -548,8 +805,10 @@ fn check_entry_class(
     let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut scanned_any = false;
     // A manifest `Class-Path` names classes that live *outside* the
-    // supplied JARs. Snug does not resolve them, so the entry class may
-    // legitimately be absent — and saying it is missing would be wrong.
+    // supplied JARs. Snug does not resolve them, so an entry class that
+    // only a `Class-Path` could supply is absent from the build — and
+    // saying so is right, because the launcher would not find it either.
+    // The flag is carried so the warning below can say that as well.
     let mut declares_class_path = false;
     let mut entry_sources: Vec<String> = Vec::new();
 
@@ -621,6 +880,12 @@ fn check_entry_class(
             )
             .hint("remove unintended duplicate entry classes")
             .emit();
+    }
+    // The entry class is present. Now check that it can be started.
+    if let Some(class) = main_class
+        && entry_found
+    {
+        check_entry_point_method(jars, class, reporter);
     }
     if declares_class_path {
         reporter
@@ -762,7 +1027,7 @@ fn check_splash_dimensions(width: u32, height: u32, max_value: &str, reporter: &
                 ),
             )
             .hint(
-                "the launcher renders at native pixel size; use --splash-max off                  to silence this warning or --splash-max <WxH> to customise it",
+                "the launcher renders at native pixel size; use --splash-max off to silence this warning or --splash-max <WxH> to customise it",
             )
             .emit();
     }

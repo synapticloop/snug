@@ -76,6 +76,12 @@ pub mod codes {
     pub const RESOURCE_INVALID: &str = "SNUG-RESOURCE-001";
     /// The splash image is larger than recommended.
     pub const RESOURCE_OVERSIZED: &str = "SNUG-RESOURCE-002";
+    /// A localisation bundle is incomplete, or has drifted from the baseline.
+    ///
+    /// Its own code rather than `SNUG-RESOURCE-001`: that one is about an icon
+    /// or a manifest that could not be prepared at all, and a translation that
+    /// is missing a key is a different kind of problem with a different fix.
+    pub const LOCALISATION_INVALID: &str = "SNUG-LOCALISATION-001";
     /// The output and the log, or the output and an input, are the same file.
     pub const OUTPUT_COLLISION: &str = "SNUG-OUTPUT-001";
     /// The output could not be written.
@@ -216,6 +222,30 @@ impl Reporter {
     /// Whether a write to the log failed.
     pub fn log_write_failed(&self) -> bool {
         self.log.write_failed()
+    }
+
+    /// Report a log that could not be written completely.
+    ///
+    /// A partial log is worse than no log if the user is not told, so this is
+    /// raised rather than left for the user to discover. It carries a code so a
+    /// bug report can quote it — which is the whole point of writing a log.
+    pub fn report_log_write_failure(&mut self) {
+        if !self.log_write_failed() {
+            return;
+        }
+        let path = self
+            .log_path()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default();
+        self.warning(
+            codes::LOG_WRITE,
+            "log",
+            format!("the build log at {path} could not be written completely"),
+        )
+        .hint(
+            "the build's own result is unaffected; check the disk space and whether the file is locked",
+        )
+        .emit();
     }
 
     /// Every diagnostic raised so far.
@@ -389,6 +419,29 @@ pub fn redact_jvm_arg(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_log_that_could_not_be_written_is_reported() {
+        let mut reporter = Reporter::new(BuildLog::none());
+        reporter.report_log_write_failure();
+        assert_eq!(
+            reporter.warning_count(),
+            0,
+            "a log that never existed is not a failed write"
+        );
+
+        let mut reporter = Reporter::new(BuildLog::none());
+        reporter.log.fail_writes();
+        reporter.report_log_write_failure();
+        assert_eq!(reporter.warning_count(), 1);
+        assert!(
+            reporter
+                .diagnostics()
+                .iter()
+                .any(|d| d.code == codes::LOG_WRITE),
+            "the failure should carry its code"
+        );
+    }
 
     #[test]
     fn harmless_jvm_arguments_are_left_alone() {

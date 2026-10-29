@@ -303,15 +303,15 @@ analysis is attempted.
 
 | Check | Outcome | Notes |
 |---|---|---|
-| Input missing / unreadable / not a JAR | Error | `resolve_input_path` (`build.rs:190`) |
-| Directory entry could not be read | Error | Currently discarded at `build.rs:243-251` (`.filter_map(\|entry\| { let entry = entry.ok()?; … })`) |
-| `.JAR` files skipped by the case-sensitive filter | Warning | The extension test at `build.rs:246` excludes uppercase `.JAR` |
-| Supplied JAR cannot be opened as a ZIP | Error | **Including with a `--main-class` override**, which today skips the manifest read at `build.rs:341-343` |
-| Empty JAR | Error | Already enforced at `build.rs:290-292` |
+| Input missing / unreadable / not a JAR | Error | `resolve_input_path` (`build.rs:367`) |
+| Directory entry could not be read | Warning | Reported as `SNUG-INPUT-002`; the entry is skipped, and the build says so (`build.rs:444-462`) |
+| `.JAR` files skipped by the case-sensitive filter | Not reported | The extension test at `build.rs:438` excludes uppercase `.JAR`; the file is skipped silently |
+| Supplied JAR cannot be opened as a ZIP | Error | **Including with a `--main-class` override**, which today skips the manifest read at `build.rs:116-125` (`build.rs:117`) |
+| Empty JAR | Error | Already enforced at `build.rs:492` |
 | Manifest attributes unusable | Error | `SNUG-MANIFEST-001` |
 | No usable selected entry point | Error | Suggests `--find-main` or `--main-class` |
 | Selected class absent from the supplied classpath | Error | Multi-release aware |
-| Entry-point method cannot be verified | **Warning** | Preserves the JavaFX `Application` fallback and inherited mains |
+| Entry-point method cannot be verified | **Warning** | Preserves the JavaFX `Application` fallback and inherited mains; the ancestor chain is walked (`build.rs:671`) |
 | Conflicting main declarations | Warning | First-JAR selection preserved |
 | Duplicate entry class across JARs | Warning | Names the winning JAR |
 | Manifest `Class-Path` reference | Warning | Advisory; no automatic resolving or bundling |
@@ -467,6 +467,7 @@ Stable across wording changes. Severity is a separate axis.
 | `SNUG-JAVA-002` | Preview bytecode. |
 | `SNUG-RESOURCE-001` | Invalid supplied resource. |
 | `SNUG-RESOURCE-002` | Oversized splash. |
+| `SNUG-LOCALISATION-001` | Localisation bundle incomplete, or drifted from the baseline. |
 | `SNUG-OUTPUT-001` | Output or log path collision. |
 | `SNUG-OUTPUT-002` | Output write or install failure. |
 | `SNUG-LOG-001` | Log write failure. |

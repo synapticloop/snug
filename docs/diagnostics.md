@@ -83,6 +83,20 @@ as a ZIP archive.
 archive that cannot be read into one that is silently embedded: the
 build would succeed and the application would fail at runtime.
 
+#### `SNUG-MANIFEST-001` — The manifest could not be read
+
+**Cause.** A JAR's `META-INF/MANIFEST.MF` could not be read: the entry is
+there, but reading it failed — a corrupted archive, most often.
+
+**Remedy.** Re-export the JAR, or pass `--main-class <CLASS>` to name the
+entry point directly. The manifest is only read when snug has to find the
+entry point itself.
+
+**Covers.** A JAR that is not a readable ZIP is reported as `SNUG-JAR-001`
+instead, and the manifest check is skipped rather than reported twice.
+This is the user's archive, not a snug bug, so it never arrives as
+`SNUG-INTERNAL-001`.
+
 ---
 
 ### Entry point
@@ -114,15 +128,19 @@ absent.
 
 #### `SNUG-MAIN-003` — The entry-point method could not be verified
 
-**Cause.** Snug could not confirm that the selected class declares
-`public static void main(String[])`. A class whose method table lies
-beyond the scan window, or one whose method is inherited, cannot be
-confirmed.
+**Cause.** Snug could not confirm that the selected class — or one of its
+ancestors — declares `public static void main(String[])`. The class file
+may not have been readable, or the chain may have left the supplied JARs.
 
 **Why it is a warning.** The Windows launcher supports the JavaFX
 `Application.launch` fallback, and a main method can be inherited. A
 blanket requirement for a *declared* method would reject working
 applications.
+
+**Covers.** The ancestors are walked, so an inherited `main` is confirmed
+rather than reported. A class that extends `javafx.application.Application`
+is left alone too: the launcher starts it through `Application.launch`
+rather than through `main`.
 
 #### `SNUG-MAIN-004` — Several JARs declare different entry points
 
@@ -159,6 +177,9 @@ the application as a fat JAR instead.
 
 **Remedy.** Snug does not resolve nested JARs. Unpack them first, or use
 a fat JAR that has them flattened.
+
+**Covers.** One note per supplied JAR that holds them, so a Spring Boot
+fat JAR does not produce a line per dependency.
 
 ---
 
@@ -226,6 +247,23 @@ what the launcher actually activates.
 so it will be scaled at runtime.
 
 **Remedy.** Shrink the image. The build proceeds.
+
+---
+
+### Localisation
+
+#### `SNUG-LOCALISATION-001` — A localisation bundle is incomplete, or has drifted
+
+**Cause.** A supplied translation bundle does not cover every key in the
+built-in English baseline, or it uses different placeholders than the
+baseline does.
+
+**Why it is a warning and not an error.** A missing key falls back to the
+built-in English text, so the launcher still runs and the build is not
+worth refusing. A drifted placeholder is reported rather than repaired.
+
+**Remedy.** Copy the missing keys across from the baseline, and run
+`snug --list-tokens` for the placeholder contract.
 
 ---
 

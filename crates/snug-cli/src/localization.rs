@@ -246,7 +246,7 @@ fn warn_on_missing_keys(bundles: &[Localization], reporter: &mut Reporter) {
         missing.sort_unstable();
         reporter
             .warning(
-                codes::RESOURCE_INVALID,
+                codes::LOCALISATION_INVALID,
                 "localisations",
                 format!(
                     "localisation `{}` is missing {} key(s):\n  {}",
@@ -328,7 +328,7 @@ fn warn_on_placeholder_drift(bundles: &[Localization], reporter: &mut Reporter) 
         }
         reporter
             .warning(
-                codes::RESOURCE_INVALID,
+                codes::LOCALISATION_INVALID,
                 "localisations",
                 format!(
                     "localisation `{}` has different placeholders on {} key(s):\n  {}",

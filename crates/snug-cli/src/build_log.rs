@@ -100,6 +100,17 @@ impl BuildLog {
         self.write_failed
     }
 
+    /// Pretend every write fails.
+    ///
+    /// The only ways a log write fails in the field are a full disk and a
+    /// revoked handle, and neither is reproducible in a test. This stands in
+    /// for both, so the *reporting* of a failed write can be tested even though
+    /// the failure itself cannot.
+    #[cfg(test)]
+    pub fn fail_writes(&mut self) {
+        self.write_failed = true;
+    }
+
     /// Write one line, appending a newline.
     ///
     /// A failed write is recorded rather than propagated: the build's own

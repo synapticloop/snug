@@ -41,7 +41,14 @@ pub fn run(cli: &Cli) -> Result<()> {
 
     let mut reporter = Reporter::new(BuildLog::none());
     let jar_paths: Vec<PathBuf> = if is_dir {
-        jar_paths_in(&input_path, &mut reporter)?
+        let paths = jar_paths_in(&input_path, &mut reporter)?;
+        if paths.is_empty() {
+            anyhow::bail!(
+                "no *.jar files found in {} (--input directory must contain at least one JAR)",
+                input_path.display()
+            );
+        }
+        paths
     } else {
         vec![input_path.clone()]
     };

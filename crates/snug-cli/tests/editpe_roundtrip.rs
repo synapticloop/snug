@@ -9,6 +9,8 @@
 //! pure-Rust cross-platform PE parser, which means the Mac/Linux dev loop
 //! can now roundtrip a real stamped EXE without Wine.
 
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -259,10 +261,16 @@ fn write_fake_jar(path: &Path) {
     // The class the manifest names, so the JAR is one that could
     // actually start.
     zip.start_file("com/example/Main.class", opts).unwrap();
-    let mut class = vec![0u8; 16];
-    class[0..4].copy_from_slice(&[0xCA, 0xFE, 0xBA, 0xBE]);
-    class[6..8].copy_from_slice(&61u16.to_be_bytes());
-    zip.write_all(&class).unwrap();
+    // A whole class file: snug reads the superclass and the method table for
+    // the entry-point check, so a header-only fixture would make the build
+    // report an unreadable entry point.
+    zip.write_all(&common::build_class_with(
+        "com/example/Main",
+        "java/lang/Object",
+        61,
+        &[(common::PUBLIC_STATIC, "main", common::MAIN_DESCRIPTOR)],
+    ))
+    .unwrap();
     zip.finish().unwrap();
 }
 
