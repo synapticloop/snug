@@ -75,7 +75,7 @@
 --name "Snug JavaFX Demo"
 --company "SynapticLoop"
 --description "Snug JavaFX demo launcher"
---copyright "© SynapticLoop"
+--copyright "© Synapticloop"
 --version 1.0.0
 --min-java 25
 --main-class synapticloop.snug.demo.javafx.Launcher
