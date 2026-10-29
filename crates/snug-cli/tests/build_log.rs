@@ -386,7 +386,6 @@ fn a_build_log_that_is_also_an_input_is_refused() {
     );
 }
 
-
 #[test]
 fn log_cannot_truncate_an_existing_executable() {
     let tmp = tempdir();

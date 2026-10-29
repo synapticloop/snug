@@ -38,10 +38,10 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, bail};
-use snug_format::Localization;
 use crate::build_log::BuildLog;
 use crate::report::{Reporter, codes};
+use anyhow::{Context, Result, bail};
+use snug_format::Localization;
 
 /// Canonical BCP 47 tag for the built-in English baseline bundle.
 ///
@@ -138,7 +138,10 @@ pub fn collect(user_paths: &[PathBuf]) -> Result<Vec<Localization>> {
 }
 
 /// Collect translations while recording validation warnings in the build log.
-pub fn collect_with_reporter(user_paths: &[PathBuf], reporter: &mut Reporter) -> Result<Vec<Localization>> {
+pub fn collect_with_reporter(
+    user_paths: &[PathBuf],
+    reporter: &mut Reporter,
+) -> Result<Vec<Localization>> {
     // The English baseline always occupies slot 0 so it stays the
     // lowest priority in the launcher's merge chain. A user-supplied
     // `en` bundle takes that slot over (see below) rather than being
@@ -310,10 +313,18 @@ fn warn_on_placeholder_drift(bundles: &[Localization], reporter: &mut Reporter) 
                 if slots.is_empty() {
                     "(none)".to_string()
                 } else {
-                    slots.iter().map(|v| format!("{{{v}}}")).collect::<Vec<_>>().join(" ")
+                    slots
+                        .iter()
+                        .map(|v| format!("{{{v}}}"))
+                        .collect::<Vec<_>>()
+                        .join(" ")
                 }
             };
-            details.push(format!("{key}: baseline {}, bundle {}", display(want), display(got)));
+            details.push(format!(
+                "{key}: baseline {}, bundle {}",
+                display(want),
+                display(got)
+            ));
         }
         reporter
             .warning(

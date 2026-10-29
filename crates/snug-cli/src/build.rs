@@ -238,7 +238,10 @@ pub fn build_payload_with(cli: &Cli, reporter: &mut Reporter) -> Result<SnugPayl
 /// matters because `snug.options` accumulates `--localisation` lines
 /// in arbitrary order, and a `--localisation X` on the CLI vs. one
 /// in the file shouldn't reorder the rest of the chain.
-fn collect_localizations(cli: &Cli, reporter: &mut Reporter) -> Result<Vec<snug_format::Localization>> {
+fn collect_localizations(
+    cli: &Cli,
+    reporter: &mut Reporter,
+) -> Result<Vec<snug_format::Localization>> {
     let mut paths: Vec<std::path::PathBuf> = cli.localizations.clone();
     paths.sort();
     let bundles = localization::collect_with_reporter(&paths, reporter)?;
@@ -1023,7 +1026,6 @@ pub fn build_exe(cli: &Cli, embedded: &SnugEmbedded) -> Result<PathBuf> {
         return Err(anyhow::Error::new(e))
             .with_context(|| format!("installing the EXE at {}", output.display()));
     }
-
 
     Ok(output)
 }
