@@ -600,7 +600,7 @@ fn check_entry_class(
                 format!("the selected class `{class}` is not in any of the supplied JARs"),
             )
             .hint(
-                "check the spelling and include the JAR containing the selected class;                  external manifest Class-Path entries are not bundled",
+                "check the spelling and include the JAR containing the selected class; external manifest Class-Path entries are not bundled",
             )
             .emit();
     }
