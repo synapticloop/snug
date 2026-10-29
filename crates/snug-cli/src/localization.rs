@@ -40,6 +40,8 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use snug_format::Localization;
+use crate::build_log::BuildLog;
+use crate::report::{Reporter, codes};
 
 /// Canonical BCP 47 tag for the built-in English baseline bundle.
 ///
@@ -131,6 +133,12 @@ pub fn validate_localization_path(s: &str) -> Result<PathBuf, String> {
 /// being appended as a second `en`; see the module docs. A *second*
 /// `en` is left in the list so [`ensure_unique_tags`] rejects it.
 pub fn collect(user_paths: &[PathBuf]) -> Result<Vec<Localization>> {
+    let mut reporter = Reporter::new(BuildLog::none());
+    collect_with_reporter(user_paths, &mut reporter)
+}
+
+/// Collect translations while recording validation warnings in the build log.
+pub fn collect_with_reporter(user_paths: &[PathBuf], reporter: &mut Reporter) -> Result<Vec<Localization>> {
     // The English baseline always occupies slot 0 so it stays the
     // lowest priority in the launcher's merge chain. A user-supplied
     // `en` bundle takes that slot over (see below) rather than being
@@ -191,8 +199,8 @@ pub fn collect(user_paths: &[PathBuf]) -> Result<Vec<Localization>> {
     //    we couldn't find. Don't fail the build — the launcher falls
     //    back to the built-in English for those — but make it loud so
     //    the user notices.
-    warn_on_missing_keys(&out);
-    warn_on_placeholder_drift(&out);
+    warn_on_missing_keys(&out, reporter);
+    warn_on_placeholder_drift(&out, reporter);
 
     Ok(out)
 }
@@ -212,7 +220,7 @@ fn expand_user_paths(user_paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
 /// baseline that no user-supplied bundle covers. The launcher's
 /// fallback chain will use English for the gap, so this is advisory
 /// rather than fatal.
-fn warn_on_missing_keys(bundles: &[Localization]) {
+fn warn_on_missing_keys(bundles: &[Localization], reporter: &mut Reporter) {
     let baseline = &bundles[0];
     let baseline_keys: std::collections::HashSet<&str> =
         baseline.entries.iter().map(|(k, _)| k.as_str()).collect();
@@ -233,23 +241,19 @@ fn warn_on_missing_keys(bundles: &[Localization]) {
         // Sort for stable, easy-to-diff output.
         let mut missing = missing;
         missing.sort_unstable();
-        eprintln!(
-            "snug: warning: localization file `{}` (tag `{}`) is missing {} key(s) compared to the built-in English baseline:",
-            bundle
-                .entries
-                .first()
-                .map(|_| bundle.tag.as_str())
-                .unwrap_or("?"),
-            bundle.tag,
-            missing.len(),
-        );
-        for key in missing {
-            eprintln!("snug:   - {key}");
-        }
-        eprintln!(
-            "snug:   (end users will see the built-in English text for these keys; \
-             update the bundle to localise them)"
-        );
+        reporter
+            .warning(
+                codes::RESOURCE_INVALID,
+                "localisations",
+                format!(
+                    "localisation `{}` is missing {} key(s):\n  {}",
+                    bundle.tag,
+                    missing.len(),
+                    missing.join("\n  ")
+                ),
+            )
+            .hint("missing keys use the built-in English text; update the translation bundle")
+            .emit();
     }
 }
 
@@ -275,7 +279,7 @@ fn warn_on_missing_keys(bundles: &[Localization]) {
 /// reorders or repeats its slots is not flagged. Keys the bundle does
 /// not define are skipped here — [`warn_on_missing_keys`] already
 /// covers those, and reporting them twice would just be noise.
-fn warn_on_placeholder_drift(bundles: &[Localization]) {
+fn warn_on_placeholder_drift(bundles: &[Localization], reporter: &mut Reporter) {
     let baseline = &bundles[0];
     let user_bundles = &bundles[1..];
     if user_bundles.is_empty() {
@@ -300,65 +304,30 @@ fn warn_on_placeholder_drift(bundles: &[Localization]) {
         if drift.is_empty() {
             continue;
         }
-        eprintln!(
-            "snug: warning: localization file `{}` (tag `{}`) uses different placeholders \
-             than the built-in English baseline on {} key(s):",
-            bundle
-                .entries
-                .first()
-                .map(|_| bundle.tag.as_str())
-                .unwrap_or("?"),
-            bundle.tag,
-            drift.len(),
-        );
+        let mut details = Vec::new();
         for (key, want, got) in &drift {
-            let format = |set: &BTreeSet<&str>| {
-                if set.is_empty() {
+            let display = |slots: &BTreeSet<&str>| {
+                if slots.is_empty() {
                     "(none)".to_string()
                 } else {
-                    set.iter()
-                        .map(|s| format!("{{{s}}}"))
-                        .collect::<Vec<_>>()
-                        .join(" ")
+                    slots.iter().map(|v| format!("{{{v}}}")).collect::<Vec<_>>().join(" ")
                 }
             };
-            let (extra, dropped): (Vec<&&str>, Vec<&&str>) = (
-                got.difference(want).collect(),
-                want.difference(got).collect(),
-            );
-            let mut notes: Vec<String> = Vec::new();
-            if !extra.is_empty() {
-                notes.push(format!(
-                    "not in the baseline, so nothing will fill them and they print literally: \
-                     {}",
-                    extra
-                        .iter()
-                        .map(|s| format!("{{{s}}}"))
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                ));
-            }
-            if !dropped.is_empty() {
-                notes.push(format!(
-                    "present in the baseline but missing here, so the translated sentence \
-                     silently loses that value: {}",
-                    dropped
-                        .iter()
-                        .map(|s| format!("{{{s}}}"))
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                ));
-            }
-            eprintln!(
-                "snug:   - {key}: baseline {}, bundle {}",
-                format(want),
-                format(got)
-            );
-            for note in notes {
-                eprintln!("snug:       {note}");
-            }
+            details.push(format!("{key}: baseline {}, bundle {}", display(want), display(got)));
         }
-        eprintln!("snug:   (run `snug --list-tokens` for the full baseline contract)");
+        reporter
+            .warning(
+                codes::RESOURCE_INVALID,
+                "localisations",
+                format!(
+                    "localisation `{}` has different placeholders on {} key(s):\n  {}",
+                    bundle.tag,
+                    drift.len(),
+                    details.join("\n  ")
+                ),
+            )
+            .hint("run snug --list-tokens for the baseline placeholder contract")
+            .emit();
     }
 }
 
