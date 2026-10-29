@@ -130,14 +130,15 @@ Copy-Item target\release\snug-launcher.exe bin\launcher-stub-windows-x86_64.exe
 `target\` is the largest thing in a working copy, and cargo never throws
 any of it away on its own: measured here, 5.4 GB, of which `target\debug\`
 alone was 4.3 GB (deps 2.1 GB, incremental 1.8 GB, build 0.3 GB).
-`scripts\windows\clean.cmd` reclaims it, by `cargo clean` granularity —
-the whole tree, the dev profile, the release profile, or the three
-workspace crates — and by a separate staging pass for `release\` and the
-gitignored demo outputs in `assets\`. The staging pass asks git before
-it deletes a file and refuses if the answer is yes, so `release\.gitignore`
-and the tracked `assets\*.jar` source assets are safe;
-`bin\launcher-stub-*.exe` is never in a swept path. `--DryRun` reports
-what would go and deletes nothing.
+`scripts\windows\clean.cmd` reclaims it, and it is a thin wrapper around
+`cargo clean` — the script anchors itself to the repo root with
+`--manifest-path` rather than by changing directory, so it leaves the
+caller's working directory alone, and it hands any arguments straight to
+cargo so `--profile dev`, `-p snug-cli` and `--dry-run` all work. Cargo
+reports the size it freed, so the script measures nothing itself. The
+`release\` staging tree and the gitignored demo outputs in `assets\` are not
+touched: together they are about 1% of what `target\` holds, and they are
+not cargo's to remove.
 
 ### The `snug` CLI also builds and runs natively on macOS / Linux
 
