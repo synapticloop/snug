@@ -405,12 +405,18 @@ mod tests {
 
     /// A unique temp directory per test, so the suite never collides
     /// with a real user cache or with a parallel test.
+    ///
+    /// The counter is load-bearing: pid + nanos is not unique when tests
+    /// run in parallel on a coarse clock -- on macOS *and* on Windows --
+    /// and the label alone is not enough either: two tests may share one.
     fn temp_root(label: &str) -> PathBuf {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("snug-si-{label}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!("snug-si-{label}-{n}-{nanos}"));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

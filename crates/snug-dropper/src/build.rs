@@ -150,6 +150,13 @@ pub fn invocation(snug_exe: &Path, input: &Path) -> Invocation {
 /// (`eprintln!("snug: built {path}")` in `snug-cli/src/main.rs`).
 const BUILT_PREFIX: &str = "snug: built ";
 
+/// The prefix `snug` uses to state the working directory it ran in.
+///
+/// It is the first line of `snug`'s output — the base every path after
+/// it is relative to — and it is not a reason for anything to have gone
+/// wrong, so the summary must not mistake it for one.
+const WORKING_DIRECTORY_PREFIX: &str = "snug: working directory ";
+
 /// Pull the output path out of `snug`'s own success line.
 ///
 /// Read from the child's output rather than re-derived from
@@ -161,6 +168,30 @@ pub fn parse_built_line(output: &str) -> Option<PathBuf> {
         .lines()
         .find_map(|line| line.trim().strip_prefix(BUILT_PREFIX))
         .map(PathBuf::from)
+}
+
+/// Resolve a path `snug` reported against the directory it ran in.
+///
+/// `snug` writes its paths relative to its working directory, because
+/// that directory is what its log states on its first line. The dialog
+/// wants the whole path, so a relative one is resolved here — against
+/// the same working directory the child was given.
+fn resolve_against(path: &Path, cwd: &Path) -> PathBuf {
+    if is_rooted_or_drive_qualified(path) {
+        return path.to_path_buf();
+    }
+    // The child's working directory can itself be relative — a dropped
+    // bare filename gives `.` — so it is made absolute before the path
+    // is joined to it. The dialog names a file, and a file has one
+    // address.
+    let base = if cwd.is_absolute() {
+        cwd.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(cwd)
+    };
+    base.join(path)
 }
 
 /// Longest one-line summary shown in a dialog before it defers to the log.
@@ -203,7 +234,7 @@ pub fn summarise(output: &str) -> String {
         .or_else(|| {
             lines
                 .iter()
-                .find(|l| l.starts_with("snug: "))
+                .find(|l| l.starts_with("snug: ") && !l.starts_with(WORKING_DIRECTORY_PREFIX))
                 .map(|l| l.strip_prefix("snug: ").unwrap_or(l))
         })
         .or_else(|| lines.last().copied())
@@ -303,7 +334,9 @@ pub fn run(inv: &Invocation, log: &Path) -> Outcome {
     }
 
     Outcome::Built {
-        output: parse_built_line(&combined).unwrap_or_else(|| inv.output.clone()),
+        output: parse_built_line(&combined)
+            .map(|path| resolve_against(&path, &inv.cwd))
+            .unwrap_or_else(|| inv.output.clone()),
     }
 }
 
@@ -445,6 +478,50 @@ mod tests {
     fn parses_the_built_line() {
         let out = "snug: loaded options from C:\\p\\snug.options\nsnug: built C:\\p\\App.exe\n";
         assert_eq!(parse_built_line(out), Some(PathBuf::from(r"C:\p\App.exe")));
+    }
+
+    #[test]
+    fn a_relative_built_path_is_resolved_against_the_child_directory() {
+        // `snug` writes its paths relative to the directory it ran in, so
+        // the dialog has to put the directory back.
+        let cwd = p(&["C:", "work"]);
+        assert_eq!(
+            resolve_against(Path::new("App.exe"), &cwd),
+            cwd.join("App.exe")
+        );
+    }
+
+    #[test]
+    fn a_relative_child_directory_is_made_absolute_first() {
+        // A dropped bare filename gives a `.` working directory, and a
+        // dialog that names `./App.exe` has not told the user where the
+        // file is.
+        let resolved = resolve_against(Path::new("App.exe"), Path::new("."));
+        assert!(
+            resolved.is_absolute(),
+            "the resolved path should be absolute: {resolved:?}"
+        );
+        assert!(
+            resolved.ends_with("App.exe"),
+            "the resolved path should name the file: {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn an_absolute_built_path_is_left_alone() {
+        let path = p(&["C:", "work", "App.exe"]);
+        assert_eq!(resolve_against(&path, &p(&["C:", "elsewhere"])), path);
+    }
+
+    #[test]
+    fn the_working_directory_is_not_reported_as_the_reason() {
+        // The working directory is the first line of `snug`'s output, and
+        // it says where the build ran — not why it failed.
+        let stderr = "snug: working directory C:\\work\nsnug: error SNUG-INPUT-001: input path does not exist: app.jar\n";
+        assert_eq!(
+            summarise(stderr),
+            "error SNUG-INPUT-001: input path does not exist: app.jar"
+        );
     }
 
     #[test]

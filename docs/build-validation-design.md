@@ -28,6 +28,7 @@ settled, not proposals.
 | D9 | When Quick Build runs, the authoritative build log lives in the **dropper's own folder**; the dropper passes `--build-log` explicitly. |
 | D10 | The dropper's existing `snug-build.log` transcript is **kept** alongside the CLI's richer report. |
 | D11 | Redaction masks **credential-shaped** `--jvm-arg` values only. Harmless flags stay visible. |
+| D12 | The log's **first line** states the working directory, and every path after it is written **relative to that directory**. A path outside the working directory stays absolute. |
 
 Adopted as stated in the requirements document, without further discussion:
 
@@ -251,9 +252,18 @@ Effective build options:
   min-java:    25                       [default]
   icon:        assets/app.ico           [snug.windows.options:8]
   splash:      (not set)                [not set]
+  cache-dir:   %LOCALAPPDATA%\snug\My Company\My Application  [default]
   jvm-arg:     -Xmx2g                   [command line]
   jvm-arg:     -Dapi.token=***          [snug.options:9]  (masked)
 ```
+
+A default that is a *path* is shown as a **template**, not as a resolved
+path: the launcher resolves the per-user cache directory at runtime, on
+the machine the app runs on, and that machine's `%LOCALAPPDATA%` is not
+the builder's. The table names the platform's convention and the app's
+namespace — the parts of the answer that are the same everywhere — and
+the launcher fills in the base when the app first runs. The namespace
+rules themselves live in `snug-format`, so the two cannot drift apart.
 
 Label vocabulary:
 
@@ -385,14 +395,45 @@ output.
 `snug: built <path>` stays on stderr (`main.rs:185` for Windows, `main.rs:163` for
 macOS) because Quick Build parses it (`dropper/src/build.rs:133-138`).
 
+### Paths are relative to the working directory
+
+The log's **first line** states the working directory:
+
+```text
+snug: working directory C:\Projects\Demo
+```
+
+Every path after it is written **relative to that directory**, so the absolute prefix
+appears once instead of on every line:
+
+```text
+snug: working directory C:\Projects\Demo
+snug: loaded options from snug.options
+  input:   Demo.jar  [command line]
+  Output:   Demo.exe
+  Log:      snug.build.log
+```
+
+A path **outside** the working directory stays absolute: there is no relative form of
+it that is not a guess about where the reader is standing.
+
+The relativising happens on the text of a finished line
+(`crates/snug-cli/src/paths.rs`), not on `Path` values, because most of what a build
+prints is assembled from several sources — a diagnostic's message, a location, a hint
+— and a path reaches the log relative whether it was formatted by snug or by a library
+snug called.
+
+`snug: built <path>` is relative for the same reason, so Quick Build resolves it
+against the child's working directory before naming it in its dialog.
+
 Completion block, success:
 
 ```text
 Build succeeded.
   Errors:   0
   Warnings: 2
-  Output:   C:\Projects\Demo\Demo.exe
-  Log:      C:\Projects\Demo\snug.build.log
+  Output:   Demo.exe
+  Log:      snug.build.log
 ```
 
 Completion block, failure:
@@ -401,8 +442,8 @@ Completion block, failure:
 Build failed during resource validation.
   Errors:   1
   Warnings: 2
-  Output:   C:\Projects\Demo\Demo.exe (not written)
-  Log:      C:\Projects\Demo\snug.build.log
+  Output:   Demo.exe (not written)
+  Log:      snug.build.log
 ```
 
 The dry-run wording changes from `snug: dry-run — no files written`

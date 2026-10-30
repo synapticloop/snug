@@ -3214,6 +3214,46 @@ mod tests {
     }
 
     #[test]
+    fn the_temp_dir_name_carries_a_counter() {
+        // The uniqueness of a temp directory must not depend on the
+        // clock: two threads reading the clock in the same tick get the
+        // same nanosecond, they share a directory, and one test's file
+        // becomes another's "non-matching file". That is how a sibling
+        // test's `not-an-image.png` ended up in a localisation directory
+        // and failed `a_directory_contributes_every_bundle_then_english`,
+        // which had nothing to do with images.
+        //
+        // So the name carries a per-process counter, and this pins it.
+        // The collision it prevents is timing-dependent -- measured at 35
+        // duplicates in 1600 parallel names on Windows -- so a test that
+        // tried to *catch* the collision would itself be flaky, and a
+        // flaky test is worse than none: it teaches people to ignore
+        // failures. The counter is the invariant; this is its guard.
+        let first = tmpdir_name();
+        let second = tmpdir_name();
+        assert_ne!(
+            first, second,
+            "two temp directory names must differ: {first} and {second}"
+        );
+        assert_eq!(
+            counter_of(&second),
+            counter_of(&first) + 1,
+            "the counter must advance: {first} then {second}"
+        );
+    }
+
+    /// The counter out of a temp directory name.
+    ///
+    /// The name is `snug-preview-i18n-<pid>-<counter>-<nanos>`, and only
+    /// the counter is the part that has to advance.
+    fn counter_of(name: &str) -> u64 {
+        let parts: Vec<&str> = name.split('-').collect();
+        parts[parts.len() - 2]
+            .parse()
+            .unwrap_or_else(|_| panic!("no counter in the temp dir name {name:?}"))
+    }
+
+    #[test]
     fn a_file_that_is_neither_png_nor_ico_is_rejected() {
         // Both decoders must be tried before giving up, and the error
         // has to name `--icon` so it is obvious which flag failed.
@@ -3239,15 +3279,33 @@ mod tests {
     // Registry construction
     // ------------------------------------------------------------------
 
-    fn tmpdir() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "snug-preview-i18n-{}-{:?}",
+    /// The name a temporary directory gets.
+    ///
+    /// Split out from [`tmpdir`] so the uniqueness guard can look at the
+    /// name itself rather than at a directory on disk.
+    fn tmpdir_name() -> String {
+        // Counter is load-bearing: pid + nanos is not unique when tests
+        // run in parallel on a coarse clock -- on macOS *and* on Windows.
+        // Two tests handed the same directory write their files into each
+        // other's, and one test's file becomes another's "non-matching
+        // file". Observed as an intermittent failure of
+        // `a_directory_contributes_every_bundle_then_english`, which
+        // found a sibling's `not-an-image.png` in its own directory.
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        format!(
+            "snug-preview-i18n-{}-{}-{}",
             std::process::id(),
+            n,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
-        ));
+                .as_nanos(),
+        )
+    }
+
+    fn tmpdir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(tmpdir_name());
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

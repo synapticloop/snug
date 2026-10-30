@@ -416,8 +416,12 @@ fn options_file_next_to_executable_is_ignored() {
         !stderr.contains(&tool_dir.join("snug.options").display().to_string()),
         "the exe-dir options file must not be loaded: {stderr}"
     );
+    // The log states the working directory once and writes every path
+    // after it relative to that, so the CWD file is named by its bare
+    // name. The exe-dir file would be outside the working directory and
+    // would still be absolute — which is what the check above pins.
     assert!(
-        stderr.contains(&cwd.join("snug.options").display().to_string()),
+        stderr.contains("loaded options from snug.options"),
         "the CWD options file is the one that should load: {stderr}"
     );
     assert!(
@@ -593,12 +597,17 @@ fn os_options_file_overrides_the_generic_one() {
     // print plus the two loaded-file lines, which together prove the
     // OS file was both read and ranked above the generic one.
     let stderr = String::from_utf8_lossy(&output.stderr);
+    let os_file_name = host_os_file(&tmp)
+        .file_name()
+        .expect("the OS file has a name")
+        .to_string_lossy()
+        .into_owned();
     assert!(
-        stderr.contains(&host_os_file(&tmp).display().to_string()),
+        stderr.contains(&format!("loaded options from {os_file_name}")),
         "both files should be reported as loaded: {stderr}"
     );
     assert!(
-        stderr.contains(&tmp.join("snug.options").display().to_string()),
+        stderr.contains("loaded options from snug.options"),
         "both files should be reported as loaded: {stderr}"
     );
     // Inherited from the generic file, proving this is a partial
@@ -768,8 +777,15 @@ fn explicit_options_flag_ignores_the_os_file() {
         "--options should mean that file only"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
+    // The paths in the output are relative to the working directory, so
+    // the OS file would be named by its bare name if it were consulted.
+    let os_file_name = host_os_file(&tmp)
+        .file_name()
+        .expect("the OS file has a name")
+        .to_string_lossy()
+        .into_owned();
     assert!(
-        !stderr.contains(&host_os_file(&tmp).display().to_string()),
+        !stderr.contains(&os_file_name),
         "the OS file must not be consulted alongside --options: {stderr}"
     );
 }

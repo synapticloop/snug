@@ -338,8 +338,16 @@ Effective build options:
   name:        Snug JavaFX Demo                     [snug.options:75]
   min-java:    25                                   [snug.options:80]
   jvm-arg:     --enable-native-access=ALL-UNNAMED   [snug.options:112]
+  cache-dir:   %LOCALAPPDATA%\snug\SynapticLoop\Snug JavaFX Demo  [default]
   allow-multiple-instances: false                   [default]
 ```
+
+A default that is a *path* is shown as a **template**, not as a
+resolved path: the launcher resolves the per-user cache directory at
+runtime, on the machine the app runs on, and that machine's
+`%LOCALAPPDATA%` is not the builder's. So the table names the platform's
+convention and the app's namespace, which are the same everywhere, and
+the launcher fills in the base when the app first runs.
 
 | Origin | Meaning |
 |---|---|

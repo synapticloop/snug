@@ -22,6 +22,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_debug_implementations)]
 
+pub mod cache;
 pub mod codec;
 pub mod config;
 pub mod embedded;
@@ -30,6 +31,7 @@ pub mod localization;
 pub mod payload;
 pub mod tokens;
 
+pub use cache::{SNUG_SUBDIR, cache_root_segments, sanitize_component};
 pub use codec::{decode, decode_payload, embedded_file, encode, encode_payload, sha256};
 pub use config::{
     AppMetadata, DownloadJdkMode, JvmDiscovery, LauncherBehavior, LauncherConfig, SplashConfig,

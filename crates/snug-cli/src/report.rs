@@ -14,6 +14,7 @@
 use std::path::Path;
 
 use crate::build_log::BuildLog;
+use crate::paths::PathBase;
 
 /// How serious a diagnostic is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -120,6 +121,12 @@ pub struct Reporter {
     /// The closing summary names the stage a failure happened in, which
     /// is the first thing worth knowing about a failed build.
     stage: String,
+    /// The directory the log's paths are relative to.
+    ///
+    /// `None` for a reporter with nothing to anchor paths to — a
+    /// diagnostic mode, or the throwaway sink a build uses to collect
+    /// warnings while it inspects a directory.
+    base: Option<PathBase>,
 }
 
 impl Reporter {
@@ -129,6 +136,43 @@ impl Reporter {
             log,
             diagnostics: Vec::new(),
             stage: "startup".to_string(),
+            base: None,
+        }
+    }
+
+    /// A reporter writing to `log`, with paths relative to `base`.
+    pub fn with_base(log: BuildLog, base: PathBase) -> Self {
+        Self {
+            log,
+            diagnostics: Vec::new(),
+            stage: "startup".to_string(),
+            base: Some(base),
+        }
+    }
+
+    /// State the working directory as the log's first line.
+    ///
+    /// Everything after it is written relative to that directory, so this
+    /// is the one place the absolute path appears. A reporter without a
+    /// base says nothing: it has no directory to state.
+    pub fn write_base_line(&mut self) {
+        let Some(base) = &self.base else {
+            return;
+        };
+        let line = base.headline();
+        eprintln!("{line}");
+        self.log.write_line(&line);
+    }
+
+    /// A path as it should appear in the log.
+    ///
+    /// Paths under the working directory are relative to it; anything
+    /// else is absolute, because a relative form of it would be a guess
+    /// about where the reader is standing.
+    fn shorten(&self, line: &str) -> String {
+        match &self.base {
+            Some(base) => base.shorten(line),
+            None => line.to_string(),
         }
     }
 
@@ -205,8 +249,9 @@ impl Reporter {
     /// effective options block, the completion summary — so the console
     /// and the log always say the same thing.
     pub fn write_line(&mut self, line: &str) {
+        let line = self.shorten(line);
         eprintln!("{line}");
-        self.log.write_line(line);
+        self.log.write_line(&line);
     }
 
     /// Write a line to the log only.
@@ -285,11 +330,13 @@ impl Reporter {
         if let Some(location) = &diagnostic.location {
             line.push_str(&format!(" [{location}]"));
         }
+        let line = self.shorten(&line);
         eprintln!("{line}");
         self.log.write_line(&line);
 
         if let Some(hint) = &diagnostic.hint {
             let hint_line = format!("snug:   hint: {hint}");
+            let hint_line = self.shorten(&hint_line);
             eprintln!("{hint_line}");
             self.log.write_line(&hint_line);
         }

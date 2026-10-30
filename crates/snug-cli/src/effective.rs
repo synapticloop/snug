@@ -10,12 +10,11 @@
 //! than reconstructed, so an explicitly typed `--min-java 25` shows as
 //! `[command line]` while an untouched `--min-java` shows as `[default]`.
 
-use std::path::Path;
-
 use clap::ArgMatches;
 
-use crate::build::output_path;
+use crate::build::{default_name_from_input, input_path_of, output_path, target_platform};
 use crate::cli::Cli;
+use crate::paths::PathBase;
 use crate::provenance::{Merged, Origin};
 use crate::report::redact_jvm_arg;
 
@@ -58,6 +57,45 @@ impl Row {
         self.superseded_by = Some(winner);
         self
     }
+}
+
+/// The cache directory the launcher will use when `--cache-dir` was not
+/// given.
+///
+/// A **template**, not a path, and that is the honest answer rather than
+/// a convenient one. The launcher resolves the default at *runtime*, on
+/// the machine the app runs on: `%LOCALAPPDATA%` is that user's, not
+/// the builder's, and the app is usually shipped to a different machine
+/// entirely. A path the builder resolved would be a path to a
+/// directory that probably does not exist.
+///
+/// So the builder names the platform's convention and the app's
+/// namespace — the parts of the answer that are the same everywhere —
+/// and the launcher fills in the base when the app first runs.
+fn default_cache_dir(cli: &Cli) -> String {
+    let (base, separator) = match target_platform(cli) {
+        crate::build::TargetPlatform::Windows => ("%LOCALAPPDATA%", "\\"),
+        crate::build::TargetPlatform::MacOs => ("~/Library/Caches", "/"),
+    };
+
+    // The namespace is the company and the app name as the payload will
+    // carry them: `--name`, else the input's stem; and `--company`, else
+    // the name. The placeholders are for the case where neither can be
+    // worked out — the build will fail on the missing `--name` anyway,
+    // and this row is written before it does.
+    let name = cli
+        .name
+        .clone()
+        .or_else(|| input_path_of(cli).and_then(default_name_from_input))
+        .unwrap_or_else(|| "<app>".to_string());
+    let company = cli.company.clone().unwrap_or_else(|| name.clone());
+
+    let mut path = base.to_string();
+    for segment in snug_format::cache::cache_root_segments(&company, &name) {
+        path.push_str(separator);
+        path.push_str(&segment);
+    }
+    path
 }
 
 /// Build the effective-options rows.
@@ -241,12 +279,13 @@ pub fn rows(
     ));
     rows.push(Row::new(
         "cache-dir",
-        cli.cache_dir
-            .as_ref()
-            .map_or_else(|| "(not set)".to_string(), |p| p.display().to_string()),
+        match &cli.cache_dir {
+            Some(path) => path.display().to_string(),
+            None => default_cache_dir(cli),
+        },
         match &cli.cache_dir {
             Some(_) => merged.origin_of(matches, "cache_dir"),
-            None => Origin::NotSet,
+            None => Origin::Default,
         },
     ));
     rows.push(Row::new(
@@ -359,28 +398,34 @@ impl Row {
 ///
 /// The origin column is aligned, because a table whose third column
 /// wanders is much harder to scan than one whose values line up.
-pub fn render(rows: &[Row], cwd: &Path) -> String {
+pub fn render(rows: &[Row], base: &PathBase) -> String {
     let mut out = String::from("Effective build options:\n");
     if rows.is_empty() {
         return out;
     }
 
+    // The values are written relative to the working directory, and the
+    // padding has to be measured on what is actually printed: a width
+    // taken from the absolute paths would leave the column ragged once
+    // they are shortened.
+    let values: Vec<String> = rows.iter().map(|row| base.shorten(&row.value)).collect();
+
     // The colon is part of the label, so the width has to include it —
     // otherwise "input:" and "output:" end in different columns and the
     // values below them do not line up.
     let label_width = rows.iter().map(|r| r.label.len() + 1).max().unwrap_or(0);
-    let value_width = rows.iter().map(|r| r.value.len()).max().unwrap_or(0);
+    let value_width = values.iter().map(|v| v.len()).max().unwrap_or(0);
 
-    for row in rows {
-        let origin = row.origin.label(cwd);
+    for (index, row) in rows.iter().enumerate() {
+        let origin = row.origin.label(base.path());
         let mut line = format!(
             "  {:<label_width$}  {:<value_width$}  {}",
             format!("{}:", row.label),
-            row.value,
+            values[index],
             origin
         );
         if let Some(winner) = &row.superseded_by {
-            line.push_str(&format!("  — overridden by {}", winner.label(cwd)));
+            line.push_str(&format!("  — overridden by {}", winner.label(base.path())));
         }
         if row.masked {
             line.push_str("  (masked)");
@@ -395,6 +440,75 @@ pub fn render(rows: &[Row], cwd: &Path) -> String {
 mod tests {
     use super::*;
     use crate::provenance::Origin;
+    use std::path::Path;
+
+    fn cli_for(args: &[&str]) -> Cli {
+        use clap::Parser;
+        Cli::parse_from(args)
+    }
+
+    #[test]
+    fn an_unset_cache_dir_shows_the_windows_default() {
+        let cli = cli_for(&[
+            "snug",
+            "app.jar",
+            "-o",
+            "app.exe",
+            "--name",
+            "Demo",
+            "--company",
+            "Acme",
+        ]);
+        assert_eq!(default_cache_dir(&cli), r"%LOCALAPPDATA%\snug\Acme\Demo");
+    }
+
+    #[test]
+    fn an_unset_cache_dir_shows_the_macos_default() {
+        let cli = cli_for(&[
+            "snug",
+            "app.jar",
+            "-o",
+            "app.app",
+            "--name",
+            "Demo",
+            "--company",
+            "Acme",
+        ]);
+        assert_eq!(default_cache_dir(&cli), "~/Library/Caches/snug/Acme/Demo");
+    }
+
+    #[test]
+    fn the_company_falls_back_to_the_name() {
+        let cli = cli_for(&["snug", "app.jar", "-o", "app.exe", "--name", "Demo"]);
+        assert_eq!(default_cache_dir(&cli), r"%LOCALAPPDATA%\snug\Demo\Demo");
+    }
+
+    #[test]
+    fn the_name_falls_back_to_the_input_stem() {
+        let cli = cli_for(&["snug", "app.jar", "-o", "app.exe"]);
+        assert_eq!(default_cache_dir(&cli), r"%LOCALAPPDATA%\snug\app\app");
+    }
+
+    #[test]
+    fn the_namespace_is_sanitised() {
+        // The launcher sanitises the company and the name into directory
+        // components, so the default shown here has to be sanitised too
+        // -- or it names a path the launcher will never use.
+        let cli = cli_for(&[
+            "snug",
+            "app.jar",
+            "-o",
+            "app.exe",
+            "--name",
+            "My:App",
+            "--company",
+            "Acme/Inc",
+        ]);
+        assert_eq!(
+            default_cache_dir(&cli),
+            r"%LOCALAPPDATA%\snug\Acme_Inc\My_App"
+        );
+    }
 
     #[test]
     fn the_table_aligns_its_columns() {
@@ -408,7 +522,7 @@ mod tests {
                 },
             ),
         ];
-        let rendered = render(&rows, Path::new("/work"));
+        let rendered = render(&rows, &PathBase::new(Path::new("/work")));
         let lines: Vec<&str> = rendered.lines().collect();
         assert_eq!(lines[0], "Effective build options:");
         assert_eq!(lines[1], "  input:   app.jar  [command line]");
@@ -418,7 +532,42 @@ mod tests {
     #[test]
     fn a_masked_row_says_so() {
         let rows = vec![Row::new("jvm-arg", "-Dapi.token=***", Origin::CommandLine).masked()];
-        let rendered = render(&rows, Path::new("/work"));
+        let rendered = render(&rows, &PathBase::new(Path::new("/work")));
         assert!(rendered.contains("(masked)"), "{rendered}");
+    }
+
+    #[test]
+    fn a_path_under_the_working_directory_is_written_relative_to_it() {
+        let rows = vec![
+            Row::new(
+                "input",
+                Path::new("/work/app.jar").display().to_string(),
+                Origin::CommandLine,
+            ),
+            Row::new(
+                "output",
+                Path::new("/work/app.exe").display().to_string(),
+                Origin::CommandLine,
+            ),
+        ];
+        let rendered = render(&rows, &PathBase::new(Path::new("/work")));
+        assert!(rendered.contains("app.jar"), "{rendered}");
+        assert!(rendered.contains("app.exe"), "{rendered}");
+        assert!(
+            !rendered.contains("/work/"),
+            "the absolute prefix should not be repeated: {rendered}"
+        );
+        // The column still lines up: the padding is measured on the
+        // shortened values, not on the absolute ones.
+        let lines: Vec<&str> = rendered.lines().collect();
+        let origin_column = lines
+            .iter()
+            .skip(1)
+            .map(|line| line.find("[command line]").expect("an origin column"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            origin_column[0], origin_column[1],
+            "the origins should line up: {rendered}"
+        );
     }
 }

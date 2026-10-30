@@ -24,6 +24,7 @@ use snug_cli::build_log::BuildLog;
 use snug_cli::cli::Cli;
 use snug_cli::effective;
 use snug_cli::options_file;
+use snug_cli::paths::PathBase;
 use snug_cli::provenance::{Merged, Origin};
 use snug_cli::report::{Reporter, codes};
 use snug_cli::{init_localizations, init_options};
@@ -94,6 +95,11 @@ fn run() -> Result<Outcome> {
     // file is opt-in, so looking for one and finding nothing must stay
     // silent.
     let cwd = std::env::current_dir().context("reading current working directory")?;
+    // The working directory is the base every path in the log is
+    // relative to. It is stated once — on the log's first line — and
+    // never repeated, so the log says where it was written without
+    // every line after it carrying the same prefix.
+    let base = PathBase::new(&cwd);
     let options_paths = options_file::resolve_all(&raw_args, &cwd, std::env::consts::OS)
         .context("resolving which options files apply")?;
     // A file that does not parse is a build failure like any other: it
@@ -144,8 +150,11 @@ fn run() -> Result<Outcome> {
     let mut reporter = if advisory {
         Reporter::new(BuildLog::none())
     } else {
-        open_build_log(&merged, &cwd, &options_paths, early_output.as_deref())?
+        open_build_log(&merged, &base, &options_paths, early_output.as_deref())?
     };
+    // The working directory is the log's first line, and every path
+    // after it is relative to it.
+    reporter.write_base_line();
 
     // Parse fallibly, so an ordinary parse error is reported rather than
     // exiting with clap's own handler before anything was recorded.
@@ -249,7 +258,7 @@ fn run() -> Result<Outcome> {
     // The effective options, and where each one came from. This is the
     // answer to "why did snug do *that*?", and it is printed before the
     // build so it is on screen even when the build fails.
-    write_effective_options(&mut reporter, &cli, &merged, &matches, &cwd);
+    write_effective_options(&mut reporter, &cli, &merged, &matches, &base);
 
     // Before the (potentially slow) payload build, refuse an output that
     // aliases an input. `--dry-run` and `--emit-payload` never reach the
@@ -424,13 +433,16 @@ fn run() -> Result<Outcome> {
 /// reason, so the failure is never silent.
 fn open_build_log(
     merged: &Merged,
-    cwd: &Path,
+    base: &PathBase,
     options_paths: &[PathBuf],
     output: Option<&Path>,
 ) -> Result<Reporter> {
     let requested = options_file::flag_value(&merged.argv, "build-log");
     let requested = requested.map(PathBuf::from);
-    let destination = BuildLog::resolve(requested.as_deref(), cwd);
+    let destination = BuildLog::resolve(requested.as_deref(), base.path());
+    // The destination is written relative to the working directory, like
+    // every other path in the log.
+    let destination_text = base.shorten(&destination.display().to_string());
 
     // The log is truncated when it opens, so it must not be one of the
     // files the build reads. Checking this here matters: the log opens
@@ -440,46 +452,43 @@ fn open_build_log(
     // by the later output guard (which would be too late).
     if output.is_some_and(|path| same_file(path, &destination)) {
         eprintln!(
-            "snug: error {}: the build log {} would overwrite the executable",
+            "snug: error {}: the build log {destination_text} would overwrite the executable",
             codes::OUTPUT_COLLISION,
-            destination.display()
         );
         anyhow::bail!(
-            "the build log and executable output refer to the same file: {}",
-            destination.display()
+            "the build log and executable output refer to the same file: {destination_text}"
         );
     }
 
     for input in protected_paths(merged, options_paths)? {
         if same_file(&input, &destination) {
             eprintln!(
-                "snug: error {}: the build log {} is also one of this build's input files",
+                "snug: error {}: the build log {destination_text} is also one of this build's input files",
                 codes::LOG_UNAVAILABLE,
-                destination.display()
             );
             return Err(anyhow::anyhow!(
-                "the build log would overwrite an input file: {}",
-                destination.display()
+                "the build log would overwrite an input file: {destination_text}"
             ));
         }
     }
 
     match BuildLog::open(&destination) {
-        Ok(log) => Ok(Reporter::new(log)),
+        Ok(log) => Ok(Reporter::with_base(log, base.clone())),
         Err(err) => {
             let fallback = write_fallback_log(&destination, &err);
+            // There is no log to carry this, so the console is the record:
+            // the working directory first, for the same reason the log
+            // would have stated it.
+            eprintln!("{}", base.headline());
             eprintln!(
-                "snug: error {}: cannot write the build log to {}: {}",
+                "snug: error {}: cannot write the build log to {destination_text}: {err}",
                 codes::LOG_UNAVAILABLE,
-                destination.display(),
-                err
             );
             if let Some(path) = &fallback {
                 eprintln!("snug:   the reason was written to {}", path.display());
             }
             Err(anyhow::anyhow!(
-                "the build log could not be opened at {}",
-                destination.display()
+                "the build log could not be opened at {destination_text}"
             ))
         }
     }
@@ -580,7 +589,7 @@ fn write_effective_options(
     cli: &Cli,
     merged: &Merged,
     matches: &clap::ArgMatches,
-    cwd: &Path,
+    base: &PathBase,
 ) {
     let main_class_source = if cli.main_class.is_none() {
         main_class_source_jar(cli).map(|jar| Origin::Manifest { jar })
@@ -588,7 +597,7 @@ fn write_effective_options(
         None
     };
     let rows = effective::rows(cli, merged, matches, main_class_source);
-    let rendered = effective::render(&rows, cwd);
+    let rendered = effective::render(&rows, base);
     for line in rendered.lines() {
         reporter.write_line(line);
     }

@@ -16,6 +16,7 @@ pub mod localization;
 pub mod macos_bundle;
 pub mod manifest;
 pub mod options_file;
+pub mod paths;
 pub mod provenance;
 pub mod report;
 pub mod resources;

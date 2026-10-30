@@ -357,6 +357,16 @@ fn collect_localizations(
     Ok(bundles)
 }
 
+/// The input this build was given, if any.
+///
+/// The positional `[JAR]` and `--input` are mutually exclusive, so
+/// whichever is present is the input. Unlike [`resolve_input_path`]
+/// this touches no filesystem, so it is answerable before the build
+/// has read anything.
+pub fn input_path_of(cli: &Cli) -> Option<&std::path::Path> {
+    cli.jar.as_deref().or(cli.input.as_deref())
+}
+
 /// Resolve `[JAR]` vs `--input <JAR|DIR>` down to a concrete path,
 /// returning it alongside whether it names a directory.
 ///
@@ -967,7 +977,7 @@ fn check_entry_class(
     }
 }
 
-fn default_name_from_input(path: &std::path::Path) -> Option<String> {
+pub(crate) fn default_name_from_input(path: &std::path::Path) -> Option<String> {
     let stem = if path.is_dir() {
         path.file_name()?.to_str()?
     } else {
@@ -1177,6 +1187,30 @@ pub fn wants_app_bundle(cli: &Cli) -> bool {
     output_path(cli)
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("app"))
+}
+
+/// The platform a build targets.
+///
+/// The output extension decides it: `.app` is a macOS bundle, anything
+/// else is a Windows PE. That is the same decision
+/// [`wants_app_bundle`] makes, and it is the platform whose launcher
+/// stub is embedded — so it is also the platform whose conventions the
+/// runtime defaults follow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetPlatform {
+    /// A Windows PE launcher.
+    Windows,
+    /// A macOS `.app` bundle.
+    MacOs,
+}
+
+/// Which platform this build targets.
+pub fn target_platform(cli: &Cli) -> TargetPlatform {
+    if wants_app_bundle(cli) {
+        TargetPlatform::MacOs
+    } else {
+        TargetPlatform::Windows
+    }
 }
 
 /// Where to stage the EXE before renaming it onto the real output path.

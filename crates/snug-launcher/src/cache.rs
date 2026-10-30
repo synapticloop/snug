@@ -31,9 +31,13 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use snug_format::AppMetadata;
+use snug_format::cache::cache_root_segments;
 
 /// Default top-level subdirectory under the per-user data root.
-pub const SNUG_SUBDIR: &str = "snug";
+///
+/// The namespace rules live in `snug-format` because the builder shows
+/// this layout in the build log, and the two cannot drift apart.
+pub use snug_format::cache::SNUG_SUBDIR;
 
 /// Default JAR filename inside a cache entry.
 pub const CACHED_JAR_NAME: &str = "app.jar";
@@ -74,11 +78,12 @@ pub fn cache_root(app: &AppMetadata, override_root: Option<&Path>) -> PathBuf {
         return root.to_path_buf();
     }
 
-    let company = sanitize_component(&app.company);
-    let name = sanitize_component(&app.name);
-
     let base = pick_cache_base(std::env::var_os(ENV_CACHE_DIR), platform_cache_base());
-    base.join(SNUG_SUBDIR).join(&company).join(&name)
+    let mut root = base;
+    for segment in cache_root_segments(&app.company, &app.name) {
+        root = root.join(segment);
+    }
+    root
 }
 
 /// Choose the cache base from the two candidates, falling back when neither
@@ -172,20 +177,6 @@ pub fn cached_log_path(root: &Path, sha256: &[u8; 32]) -> PathBuf {
 /// the encoding.
 pub(crate) fn hex_lower(bytes: &[u8]) -> String {
     hex_lower_impl(bytes)
-}
-
-/// Replace path separators and other characters that are unsafe in a
-/// directory name across the platforms we support.
-fn sanitize_component(s: &str) -> String {
-    s.chars()
-        .map(|c| match c {
-            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0' => '_',
-            c if c.is_control() => '_',
-            c => c,
-        })
-        .collect::<String>()
-        .trim()
-        .to_string()
 }
 
 fn hex_lower_impl(bytes: &[u8]) -> String {
@@ -562,6 +553,7 @@ pub fn fallback_app_support_base() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use snug_format::cache::sanitize_component;
 
     #[cfg(target_os = "macos")]
     #[test]

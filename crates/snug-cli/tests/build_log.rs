@@ -259,6 +259,68 @@ fn a_build_log_is_written_in_the_working_directory() {
 }
 
 #[test]
+fn the_log_states_the_working_directory_once_and_writes_paths_relative_to_it() {
+    let tmp = tempdir();
+    let jar = tmp.join("demo.jar");
+    write_jar(&jar, Some("com.example.Main"));
+
+    let output = Command::new(snug_bin())
+        .current_dir(&tmp)
+        .arg(&jar)
+        .arg("--dry-run")
+        .output()
+        .expect("spawn snug");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let contents = fs::read_to_string(tmp.join("snug.build.log")).expect("read log");
+    let lines: Vec<&str> = contents.lines().collect();
+
+    // The first line states the working directory, in full: that is the
+    // one place the absolute path belongs.
+    let first = lines.first().expect("the log has a first line");
+    let dir = first
+        .strip_prefix("snug: working directory ")
+        .unwrap_or_else(|| panic!("the first line should state the working directory: {first}"));
+    assert!(
+        !dir.is_empty(),
+        "the working directory should be named: {first}"
+    );
+
+    // The console says the same thing.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr
+            .lines()
+            .next()
+            .is_some_and(|line| line.starts_with("snug: working directory ")),
+        "the console should state the working directory too: {stderr}"
+    );
+
+    // Nothing after the first line repeats it.
+    for line in lines.iter().skip(1) {
+        assert!(
+            !line.to_lowercase().contains(&dir.to_lowercase()),
+            "a path should be relative to the working directory: {line}"
+        );
+    }
+
+    // And the paths that are named are relative to it.
+    assert!(
+        contents.contains("demo.jar"),
+        "the input should be named: {contents}"
+    );
+    assert!(
+        !contents.contains(&jar.display().to_string()),
+        "the input should not be named by its absolute path: {contents}"
+    );
+}
+
+#[test]
 fn build_log_flag_redirects_the_log() {
     let tmp = tempdir();
     let jar = tmp.join("demo.jar");
@@ -337,6 +399,70 @@ fn the_log_records_where_each_value_came_from() {
     assert!(
         origin.ends_with("snug.options:1"),
         "the origin should name the file and the line, got {origin}: {stderr}"
+    );
+}
+
+#[test]
+fn an_unset_cache_dir_shows_the_default_not_not_set() {
+    let tmp = tempdir();
+    let jar = tmp.join("demo.jar");
+    write_jar(&jar, Some("com.example.Main"));
+    fs::write(
+        tmp.join("snug.options"),
+        "--name \"Demo\"\n--company \"Acme\"\n",
+    )
+    .expect("write options");
+
+    let output = Command::new(snug_bin())
+        .current_dir(&tmp)
+        .arg(&jar)
+        .arg("--dry-run")
+        .output()
+        .expect("spawn snug");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let cache_dir = field(&stderr, "cache-dir").expect("the cache dir should be reported");
+    assert!(
+        cache_dir.contains("snug") && cache_dir.contains("Acme") && cache_dir.contains("Demo"),
+        "the default should name the namespace: {cache_dir} in {stderr}"
+    );
+    assert!(
+        !cache_dir.contains("not set"),
+        "the cache dir has a default, so it is never unset: {cache_dir}"
+    );
+    let origin = origin(&stderr, "cache-dir").expect("the origin should be reported");
+    assert_eq!(
+        origin, "default",
+        "the default should be labelled as one: {stderr}"
+    );
+}
+
+#[test]
+fn an_explicit_cache_dir_is_shown_as_given() {
+    let tmp = tempdir();
+    let jar = tmp.join("demo.jar");
+    write_jar(&jar, Some("com.example.Main"));
+    let cache = tmp.join("custom-cache");
+
+    let output = Command::new(snug_bin())
+        .current_dir(&tmp)
+        .arg(&jar)
+        .arg("--dry-run")
+        .arg("--cache-dir")
+        .arg(&cache)
+        .output()
+        .expect("spawn snug");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let cache_dir = field(&stderr, "cache-dir").expect("the cache dir should be reported");
+    assert!(
+        cache_dir.contains("custom-cache"),
+        "the given path should be shown: {cache_dir} in {stderr}"
+    );
+    let origin = origin(&stderr, "cache-dir").expect("the origin should be reported");
+    assert_eq!(
+        origin, "command line",
+        "a given path should be labelled as supplied: {stderr}"
     );
 }
 
