@@ -80,7 +80,7 @@ serde_json = "1"
 # Local fork of `editpe` with `set_rcdata` / `get_rcdata` methods (snug
 # slice 4 — payload stored as an `RT_RCDATA` resource entry instead of
 # appended as a binary overlay). Keep in sync with upstream
-# https://github.com/Systemcluster/editpe/releases; the only intended
+# https://crates.io/crates/editpe; the only intended
 # delta is the two new methods plus this comment.
 editpe = { path = "vendor/editpe" }
 
