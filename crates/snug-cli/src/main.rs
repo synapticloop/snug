@@ -26,7 +26,7 @@ use snug_cli::effective;
 use snug_cli::options_file;
 use snug_cli::paths::PathBase;
 use snug_cli::provenance::{Merged, Origin};
-use snug_cli::report::{Reporter, codes};
+use snug_cli::report::{Reporter, Severity, codes, diagnostic_line};
 use snug_cli::{init_localizations, init_options};
 use snug_format::SnugEmbedded;
 
@@ -451,10 +451,12 @@ fn open_build_log(
     // The output must be protected *before* the log is opened, not
     // by the later output guard (which would be too late).
     if output.is_some_and(|path| same_file(path, &destination)) {
-        eprintln!(
-            "snug: error {}: the build log {destination_text} would overwrite the executable",
+        let line = diagnostic_line(
+            Severity::Error,
             codes::OUTPUT_COLLISION,
+            format!("the build log {destination_text} would overwrite the executable"),
         );
+        eprintln!("{line}");
         anyhow::bail!(
             "the build log and executable output refer to the same file: {destination_text}"
         );
@@ -462,10 +464,12 @@ fn open_build_log(
 
     for input in protected_paths(merged, options_paths)? {
         if same_file(&input, &destination) {
-            eprintln!(
-                "snug: error {}: the build log {destination_text} is also one of this build's input files",
+            let line = diagnostic_line(
+                Severity::Error,
                 codes::LOG_UNAVAILABLE,
+                format!("the build log {destination_text} is also one of this build's input files"),
             );
+            eprintln!("{line}");
             return Err(anyhow::anyhow!(
                 "the build log would overwrite an input file: {destination_text}"
             ));
@@ -480,10 +484,12 @@ fn open_build_log(
             // the working directory first, for the same reason the log
             // would have stated it.
             eprintln!("{}", base.headline());
-            eprintln!(
-                "snug: error {}: cannot write the build log to {destination_text}: {err}",
+            let line = diagnostic_line(
+                Severity::Error,
                 codes::LOG_UNAVAILABLE,
+                format!("cannot write the build log to {destination_text}: {err}"),
             );
+            eprintln!("{line}");
             if let Some(path) = &fallback {
                 eprintln!("snug:   the reason was written to {}", path.display());
             }
@@ -556,11 +562,13 @@ fn same_file(a: &Path, b: &Path) -> bool {
 fn write_fallback_log(destination: &Path, error: &std::io::Error) -> Option<PathBuf> {
     let path = std::env::temp_dir().join(format!("snug-build-{}.log", std::process::id()));
     let mut log = BuildLog::open(&path).ok()?;
-    log.write_line(&format!(
-        "snug: error {}: cannot write the build log to {}: {}",
+    log.write_line(&diagnostic_line(
+        Severity::Error,
         codes::LOG_UNAVAILABLE,
-        destination.display(),
-        error
+        format!(
+            "cannot write the build log to {}: {error}",
+            destination.display()
+        ),
     ));
     Some(path)
 }

@@ -59,6 +59,7 @@ use snug_format::SnugPayload;
 
 use crate::build::output_path;
 use crate::cli::Cli;
+use crate::report::{Severity, codes, diagnostic_line};
 
 /// The precompiled launcher for the architecture `snug` itself was built
 /// for.
@@ -140,7 +141,12 @@ pub fn build_app(cli: &Cli, payload: &SnugPayload) -> Result<PathBuf> {
         Ok(true) => true,
         Ok(false) => false,
         Err(e) => {
-            eprintln!("snug: warning: could not build the icon: {e}");
+            let line = diagnostic_line(
+                Severity::Warning,
+                codes::RESOURCE_INVALID,
+                format!("could not build the icon: {e}"),
+            );
+            eprintln!("{line}");
             false
         }
     };

@@ -526,6 +526,10 @@ fn an_error_stops_the_build_and_is_reported() {
         "the diagnostic should carry its stable code: {stderr}"
     );
     assert!(
+        stderr.contains("[ ERROR ] SNUG-MAIN-001: "),
+        "a coded message leads with its severity, then its code: {stderr}"
+    );
+    assert!(
         stderr.contains("Build failed"),
         "the summary should say the build failed: {stderr}"
     );
@@ -685,7 +689,7 @@ fn duplicate_main_class_uses_the_first_jar_version() {
     let stderr = String::from_utf8_lossy(&result.stderr);
     assert!(result.status.success(), "{stderr}");
     assert!(stderr.contains("SNUG-MAIN-005"), "{stderr}");
-    assert!(!stderr.contains("error SNUG-JAVA-001"), "{stderr}");
+    assert!(!stderr.contains("SNUG-JAVA-001"), "{stderr}");
 }
 
 #[test]

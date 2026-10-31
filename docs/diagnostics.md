@@ -19,6 +19,25 @@ way, and where the output went.
 | `warning` | The build proceeds. |
 | `info` | Worth knowing; no effect on the build. |
 
+## How a diagnostic is written
+
+Every coded message has the same shape:
+
+```text
+[ ERROR ] SNUG-INPUT-001: input path does not exist: app.jar
+          hint: a JAR file, or a directory of JARs, that exists on the machine running snug
+```
+
+The severity leads, bracketed and upper-case, because it decides what
+happens next: an error stops the build and a warning does not. The code
+follows, because the code is what you quote in a bug report and what this
+page points at — the wording of the explanation can change without
+breaking either, the code cannot. The explanation comes last, and the
+hint hangs under the code, aligned with it.
+
+A build that fails before it can describe itself — a build log that cannot
+be opened, a file that cannot be read — prints the same shape.
+
 ## The codes
 
 ### Configuration

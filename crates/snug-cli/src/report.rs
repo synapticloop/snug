@@ -28,14 +28,43 @@ pub enum Severity {
 }
 
 impl Severity {
-    /// The word used in the printed diagnostic.
-    pub fn label(&self) -> &'static str {
+    /// The bracketed severity a diagnostic line starts with.
+    ///
+    /// Upper-case and in brackets, so the severity is the first thing
+    /// the eye lands on, and so a diagnostic can be picked out of a log
+    /// by its shape alone:
+    ///
+    /// ```text
+    /// [ ERROR ] SNUG-INPUT-001: the explanation
+    /// ```
+    pub fn prefix(&self) -> &'static str {
         match self {
-            Severity::Info => "info",
-            Severity::Warning => "warning",
-            Severity::Error => "error",
+            Severity::Info => "[ INFO ]",
+            Severity::Warning => "[ WARN ]",
+            Severity::Error => "[ ERROR ]",
         }
     }
+}
+
+/// Format a coded diagnostic.
+///
+/// Every coded message has the same shape:
+///
+/// ```text
+/// [ ERROR ] SNUG-INPUT-001: the explanation
+/// ```
+///
+/// The severity leads, because it decides what happens next: an error
+/// stops the build and a warning does not. The code follows, because
+/// the code is what a user quotes in a bug report and what the
+/// documentation points at — the wording of the explanation can change
+/// without breaking either, the code cannot.
+///
+/// The one function that builds this, so the lines that are printed
+/// outside the reporter — the build-log failures, which happen before
+/// there is a reporter to print them — are formatted the same way.
+pub fn diagnostic_line(severity: Severity, code: &str, message: impl std::fmt::Display) -> String {
+    format!("{} {}: {}", severity.prefix(), code, message)
 }
 
 /// The stable diagnostic codes.
@@ -321,12 +350,7 @@ impl Reporter {
 
     /// Record a diagnostic and print it.
     fn push(&mut self, diagnostic: Diagnostic) {
-        let mut line = format!(
-            "snug: {} {}: {}",
-            diagnostic.severity.label(),
-            diagnostic.code,
-            diagnostic.message
-        );
+        let mut line = diagnostic_line(diagnostic.severity, diagnostic.code, &diagnostic.message);
         if let Some(location) = &diagnostic.location {
             line.push_str(&format!(" [{location}]"));
         }
@@ -335,7 +359,11 @@ impl Reporter {
         self.log.write_line(&line);
 
         if let Some(hint) = &diagnostic.hint {
-            let hint_line = format!("snug:   hint: {hint}");
+            // The hint hangs under its diagnostic, aligned with the code
+            // column, so the two read as one unit rather than as two
+            // unrelated lines.
+            let indent = " ".repeat(diagnostic.severity.prefix().len() + 1);
+            let hint_line = format!("{indent}hint: {hint}");
             let hint_line = self.shorten(&hint_line);
             eprintln!("{hint_line}");
             self.log.write_line(&hint_line);
@@ -466,6 +494,41 @@ pub fn redact_jvm_arg(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_severity_has_a_bracketed_prefix() {
+        assert_eq!(Severity::Info.prefix(), "[ INFO ]");
+        assert_eq!(Severity::Warning.prefix(), "[ WARN ]");
+        assert_eq!(Severity::Error.prefix(), "[ ERROR ]");
+    }
+
+    #[test]
+    fn a_coded_message_leads_with_the_severity_then_the_code() {
+        assert_eq!(
+            diagnostic_line(
+                Severity::Error,
+                codes::INPUT_UNAVAILABLE,
+                "the JAR is missing"
+            ),
+            "[ ERROR ] SNUG-INPUT-001: the JAR is missing"
+        );
+        assert_eq!(
+            diagnostic_line(
+                Severity::Warning,
+                codes::RESOURCE_OVERSIZED,
+                "the splash image is 4 MiB"
+            ),
+            "[ WARN ] SNUG-RESOURCE-002: the splash image is 4 MiB"
+        );
+        assert_eq!(
+            diagnostic_line(
+                Severity::Info,
+                codes::MAIN_DUPLICATE,
+                "the class appears twice"
+            ),
+            "[ INFO ] SNUG-MAIN-005: the class appears twice"
+        );
+    }
 
     #[test]
     fn a_log_that_could_not_be_written_is_reported() {

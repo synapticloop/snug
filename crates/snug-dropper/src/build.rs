@@ -157,6 +157,12 @@ const BUILT_PREFIX: &str = "snug: built ";
 /// wrong, so the summary must not mistake it for one.
 const WORKING_DIRECTORY_PREFIX: &str = "snug: working directory ";
 
+/// The bracketed severity a coded diagnostic starts with.
+///
+/// `snug` prints every coded message as `[ ERROR ] SNUG-INPUT-001: …`,
+/// so this is how the summary recognises one.
+const DIAGNOSTIC_PREFIX: &str = "[ ";
+
 /// Pull the output path out of `snug`'s own success line.
 ///
 /// Read from the child's output rather than re-derived from
@@ -199,8 +205,17 @@ const SUMMARY_MAX: usize = 200;
 
 /// Reduce `snug`'s stderr to a single line a beginner can act on.
 ///
-/// `snug-cli` reports failures as `eprintln!("snug: {err:?}")`, so a
-/// typical failure looks like:
+/// A coded diagnostic reads:
+///
+/// ```text
+/// [ ERROR ] SNUG-INPUT-001: input path does not exist: app.jar
+/// ```
+///
+/// and that is the line the dialog leads with: it names the stable code
+/// the documentation points at, and the explanation beside it.
+///
+/// A failure that never reached the reporter is an `anyhow` chain
+/// instead, and it looks like this:
 ///
 /// ```text
 /// snug: building snug payload
@@ -231,6 +246,15 @@ pub fn summarise(output: &str) -> String {
         .position(|l| *l == "Caused by:")
         .and_then(|i| lines.get(i + 1..).and_then(|chain| chain.last()))
         .map(|l| strip_cause(l))
+        .or_else(|| {
+            // A coded diagnostic. The chain above wins when there is
+            // one, because a failure that never reached the reporter has
+            // no diagnostic to point at.
+            lines
+                .iter()
+                .find(|l| l.starts_with(DIAGNOSTIC_PREFIX) && l.contains("SNUG-"))
+                .copied()
+        })
         .or_else(|| {
             lines
                 .iter()
@@ -517,10 +541,33 @@ mod tests {
     fn the_working_directory_is_not_reported_as_the_reason() {
         // The working directory is the first line of `snug`'s output, and
         // it says where the build ran — not why it failed.
-        let stderr = "snug: working directory C:\\work\nsnug: error SNUG-INPUT-001: input path does not exist: app.jar\n";
+        let stderr = "snug: working directory C:\\work\n[ ERROR ] SNUG-INPUT-001: input path does not exist: app.jar\n";
         assert_eq!(
             summarise(stderr),
-            "error SNUG-INPUT-001: input path does not exist: app.jar"
+            "[ ERROR ] SNUG-INPUT-001: input path does not exist: app.jar"
+        );
+    }
+
+    #[test]
+    fn a_coded_diagnostic_is_the_reason() {
+        // The coded diagnostic is the most actionable line `snug` prints:
+        // it names the stable code the documentation points at.
+        let stderr = "snug: working directory C:\\work\nsnug: loaded options from snug.options\n[ ERROR ] SNUG-MAIN-001: no usable entry point was selected\nBuild failed during entry point.\n";
+        assert_eq!(
+            summarise(stderr),
+            "[ ERROR ] SNUG-MAIN-001: no usable entry point was selected"
+        );
+    }
+
+    #[test]
+    fn an_anyhow_chain_still_wins_over_a_diagnostic() {
+        // A failure that never reached the reporter has no diagnostic to
+        // point at, and the tail of its chain is the thing that actually
+        // went wrong.
+        let stderr = "snug: working directory C:\\work\n[ WARN ] SNUG-RESOURCE-002: the splash image is larger than recommended\nsnug: building snug payload\n\nCaused by:\n    0: reading Main-Class from JAR manifest\n    1: invalid Zip archive: Could not find EOCD\n";
+        assert_eq!(
+            summarise(stderr),
+            "invalid Zip archive: Could not find EOCD"
         );
     }
 

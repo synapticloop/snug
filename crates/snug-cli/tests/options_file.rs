@@ -741,7 +741,7 @@ fn missing_os_options_file_is_silent() {
     // The absence of the OS file must not produce a diagnostic. The check
     // is for snug's own warning line rather than the bare word, because
     // the closing summary reports a warning *count* on every run.
-    for noise in ["not found", "missing", "snug: warning"] {
+    for noise in ["not found", "missing", "[ warn ]"] {
         assert!(
             !stderr.to_lowercase().contains(noise),
             "an absent OS file must be silent, but stderr mentioned `{noise}`: {stderr}"
