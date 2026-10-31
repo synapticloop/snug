@@ -188,6 +188,15 @@ EOF
     cp "$built" "$dest_dir/snug"
     chmod +x "$dest_dir/snug"
 
+    # The licence texts ship beside the binary. MIT requires its notice in
+    # "all copies or substantial portions of the Software", and Apache-2.0
+    # section 4(a) requires a copy of the licence to accompany
+    # redistribution. The macOS release is a bare binary rather than an
+    # archive, so the texts are staged next to it instead.
+    for licence in LICENSE LICENSE-MIT LICENSE-APACHE NOTICE; do
+        cp "$ROOT/$licence" "$dest_dir/$licence"
+    done
+
     echo "    staged: release/$subdir/snug ($(lipo -archs "$dest_dir/snug"), macOS $actual_minos)"
     echo
 done

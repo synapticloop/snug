@@ -25,6 +25,10 @@ edition = "2024"
 rust-version = "1.89"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/synapticloop/snug"
+# snug is distributed as release archives, not as crates on crates.io. Every
+# crate inherits this via `publish.workspace = true`, so `cargo publish`
+# refuses them. The root LICENSE / LICENSE-MIT / LICENSE-APACHE / NOTICE
+# are what ship with a release instead - see "Versioning" in AGENTS.md.
 publish = false
 
 [workspace.dependencies]

@@ -12,7 +12,11 @@
 //! └── snug/
 //!     ├── snug.exe
 //!     ├── snug_preview.exe
-//!     └── Snug Quick Build.exe
+//!     ├── Snug Quick Build.exe
+//!     ├── LICENSE
+//!     ├── LICENSE-MIT
+//!     ├── LICENSE-APACHE
+//!     └── NOTICE
 //! ```
 //!
 //! The inner folder is always `snug`, and the platform lives in the file
@@ -93,7 +97,23 @@ const OUT_DIR: &str = "github";
 /// one and not the other is broken by construction. `snug_preview.exe` is
 /// a dev tool and ships anyway — it is how you read snug's dialogs and
 /// error copy without building and launching an app.
-const SHIPPED: &[&str] = &["snug.exe", "snug_preview.exe", "Snug Quick Build.exe"];
+///
+/// The licence texts travel with them, and that is not a nicety. MIT
+/// requires its notice in "all copies or substantial portions of the
+/// Software", and Apache-2.0 §4(a) requires a copy of the licence to
+/// accompany redistribution. A release ZIP without these is a licence
+/// violation rather than a documentation gap, so they are as load-bearing
+/// as the binaries — which is why `run` refuses to build an archive that
+/// is missing one.
+const SHIPPED: &[&str] = &[
+    "snug.exe",
+    "snug_preview.exe",
+    "Snug Quick Build.exe",
+    "LICENSE",
+    "LICENSE-MIT",
+    "LICENSE-APACHE",
+    "NOTICE",
+];
 
 /// Copied *beside* the archive rather than into it.
 ///
@@ -465,6 +485,9 @@ mod tests {
         fs::write(dir.join("snug_preview.exe"), b"preview").expect("preview");
         fs::write(dir.join("Snug Quick Build.exe"), b"dropper").expect("dropper");
         fs::write(dir.join(SIDECAR), b"demo jar").expect("sidecar");
+        for name in ["LICENSE", "LICENSE-MIT", "LICENSE-APACHE", "NOTICE"] {
+            fs::write(dir.join(name), name.as_bytes()).expect(name);
+        }
     }
 
     #[test]
@@ -491,11 +514,16 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "snug/LICENSE".to_string(),
+                "snug/LICENSE-APACHE".to_string(),
+                "snug/LICENSE-MIT".to_string(),
+                "snug/NOTICE".to_string(),
                 "snug/Snug Quick Build.exe".to_string(),
                 "snug/snug.exe".to_string(),
                 "snug/snug_preview.exe".to_string(),
             ],
-            "the archive should hold exactly the three shipping EXEs under snug/"
+            "the archive should hold exactly the three shipping EXEs and the four \
+             licence texts under snug/"
         );
     }
 

@@ -658,6 +658,20 @@ call :stage "!BUILT_PREVIEW_EXE!" "snug_preview.exe"
 if errorlevel 1 exit /b 1
 call :stage "!DEMO_JAR!" "snug-javafx-demo-windows.jar"
 if errorlevel 1 exit /b 1
+REM The licence texts ship with the binaries. MIT requires its notice in
+REM "all copies or substantial portions of the Software", and Apache-2.0
+REM section 4(a) requires a copy of the licence to accompany
+REM redistribution, so a release without them is a licence violation
+REM rather than a documentation gap. The packager refuses to build an
+REM archive that is missing one, so these have to be staged here.
+call :stage "LICENSE" "LICENSE"
+if errorlevel 1 exit /b 1
+call :stage "LICENSE-MIT" "LICENSE-MIT"
+if errorlevel 1 exit /b 1
+call :stage "LICENSE-APACHE" "LICENSE-APACHE"
+if errorlevel 1 exit /b 1
+call :stage "NOTICE" "NOTICE"
+if errorlevel 1 exit /b 1
 
 goto after_release
 
@@ -679,7 +693,16 @@ REM        snug-<version>-windows-x86_64.zip
 REM        └── snug\
 REM            ├── snug.exe
 REM            ├── snug_preview.exe
-REM            └── Snug Quick Build.exe
+REM            ├── Snug Quick Build.exe
+REM            ├── LICENSE
+REM            ├── LICENSE-MIT
+REM            ├── LICENSE-APACHE
+REM            └── NOTICE
+REM
+REM    The licence texts are inside the archive because MIT requires its
+REM    notice in all copies of the software, and Apache-2.0 section 4(a)
+REM    requires the licence to accompany redistribution. The packager
+REM    refuses to build an archive that is missing one of them.
 REM
 REM    The inner folder is always `snug`, and the platform lives in the file
 REM    name, which is the same convention the staged tree already uses: the
@@ -745,6 +768,10 @@ for %%I in ("!STAGE_DIR!\snug.exe")               do ( if exist "!STAGE_DIR!\snu
 for %%I in ("!STAGE_DIR!\!DROPPER_SHIPPED!")     do ( if exist "!STAGE_DIR!\!DROPPER_SHIPPED!" echo     !DROPPER_SHIPPED!:   !STAGE_DIR!\!DROPPER_SHIPPED! ^(%%~zI bytes^) )
 for %%I in ("!STAGE_DIR!\snug_preview.exe")      do ( if exist "!STAGE_DIR!\snug_preview.exe" echo     snug_preview.exe        !STAGE_DIR!\snug_preview.exe ^(%%~zI bytes^) )
 for %%I in ("!STAGE_DIR!\snug-javafx-demo-windows.jar") do ( if exist "!STAGE_DIR!\snug-javafx-demo-windows.jar" echo     snug-javafx-demo-windows.jar !STAGE_DIR!\snug-javafx-demo-windows.jar ^(%%~zI bytes^) )
+for %%I in ("!STAGE_DIR!\LICENSE")           do ( if exist "!STAGE_DIR!\LICENSE" echo     LICENSE                   !STAGE_DIR!\LICENSE ^(%%~zI bytes^) )
+for %%I in ("!STAGE_DIR!\LICENSE-MIT")       do ( if exist "!STAGE_DIR!\LICENSE-MIT" echo     LICENSE-MIT               !STAGE_DIR!\LICENSE-MIT ^(%%~zI bytes^) )
+for %%I in ("!STAGE_DIR!\LICENSE-APACHE")    do ( if exist "!STAGE_DIR!\LICENSE-APACHE" echo     LICENSE-APACHE            !STAGE_DIR!\LICENSE-APACHE ^(%%~zI bytes^) )
+for %%I in ("!STAGE_DIR!\NOTICE")            do ( if exist "!STAGE_DIR!\NOTICE" echo     NOTICE                    !STAGE_DIR!\NOTICE ^(%%~zI bytes^) )
 REM The archive and the demo JAR copy beside it. The glob is guarded with
 REM `if exist` on the name it produced, because a `for` over a pattern that
 REM matches nothing yields the pattern itself rather than nothing at all.

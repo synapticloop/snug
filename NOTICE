@@ -1,0 +1,35 @@
+Snug
+Copyright (c) 2026 Synapticloop
+
+This product includes software developed by third parties.
+
+--------------------------------------------------------------------------------
+editpe
+--------------------------------------------------------------------------------
+
+Snug vendors a local fork of the `editpe` crate at `vendor/editpe`, patched in
+via `[patch.crates-io]` in the workspace `Cargo.toml`. The fork exists to add
+the `set_rcdata` and `get_rcdata` methods, which upstream `editpe` does not
+provide; they are how the application payload is stored in and read back from a
+Windows PE's `RT_RCDATA` resource.
+
+  editpe — Copyright (c) 2020 Christian Sdunek <me@systemcluster.me> and the
+  editpe contributors
+  Licensed under the BSD 2-Clause License
+  https://github.com/Systemcluster/editpe
+
+The upstream licence text is retained in full at `vendor/editpe/LICENSE`.
+
+--------------------------------------------------------------------------------
+Other dependencies
+--------------------------------------------------------------------------------
+
+Snug's remaining dependencies are declared in the workspace `Cargo.toml` and are
+fetched from crates.io under their own licences. Their licence texts are not
+reproduced here; the versions actually shipped are pinned in `Cargo.lock`, and
+each crate's licence is recorded in its own `Cargo.toml` in the crates.io
+registry.
+
+The crates are not published to crates.io — the workspace sets `publish =
+false` — so the licence texts that travel with a *release* are the ones beside
+this file.

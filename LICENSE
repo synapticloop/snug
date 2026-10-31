@@ -1,0 +1,17 @@
+Snug is dual-licensed under the MIT License or the Apache License, Version 2.0,
+at your option.
+
+    MIT License                    see LICENSE-MIT
+    Apache License, Version 2.0    see LICENSE-APACHE
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in Snug by you, as defined in the Apache-2.0 license, shall be
+under the Apache-2.0 license. That applies to the MIT license as well: the MIT
+license's own terms have no contribution clause, so the Apache-2.0 clause is
+used to settle it.
+
+The full licence texts are in LICENSE-MIT and LICENSE-APACHE. Third-party
+components bundled or vendored in this repository keep their own licences; see
+NOTICE.
+
+Copyright (c) 2026 Synapticloop
