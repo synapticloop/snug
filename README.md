@@ -85,12 +85,40 @@ A Snug-built executable embeds your JAR or JARs and application configuration. W
 
 By default Snug requires Java 25 or newer; you can configure the minimum Java version with `--min-java`. If a compatible runtime is missing, Snug can offer to download Eclipse Temurin, verifying the downloaded archive with SHA-256.
 
+## Build log and diagnostics
+
+Every build writes a log recording the options the build actually used **and where each one came from**, every diagnostic raised along the way, and where the output was written. By default the log is `snug.build.log` in the directory you ran snug from, and each build replaces the one before it. Use `--build-log <PATH>` to write it elsewhere.
+
+The effective-options table is the part worth reading:
+
+```text
+Effective build options:
+  input:       MyApplication.jar                [command line]
+  output:      MyApplication.exe                [inferred from input]
+  min-java:    25                               [default]
+  name:        My Application                   [snug.options:74]
+```
+
+The origin tells you whether a value came from the command line, an options file, a JAR manifest, or a built-in default — so a surprising setting is traceable to its source rather than guessed at.
+
+Diagnostics carry stable codes such as `SNUG-JAVA-001`. The code is what you quote in a bug report, and it does not change when the wording does. An error stops the build; a warning does not. [The full code reference](docs/diagnostics.md) explains what each one means — and, just as usefully, what each check does *not* cover.
+
+A few flags worth knowing alongside it:
+
+- `--dry-run` — validate the inputs and show what would be built, without writing an executable.
+- `--find-main` — list the classes in your JARs that declare a `main` method.
+- `--list-tokens` — list the launcher message keys and the placeholders each one accepts, for translation.
+
+Run `snug.exe --help` for the authoritative reference to every option.
+
 ## Learn more
 
 - [Releases](https://github.com/synapticloop/snug/releases) - available builds.
 - [Command-line options](https://github.com/synapticloop/snug/blob/main/crates/snug-cli/src/cli.rs) - source definitions; `snug.exe --help` is the authoritative reference for your build.
+- [Build diagnostics](docs/diagnostics.md) - what each diagnostic code means, and how to read the build log.
 - [Localisation token reference](REPLACEMENT_TOKENS.md) - placeholders available in translated launcher messages.
 - [Repository development notes](AGENTS.md) - implementation details and contributor context.
+- [Build validation design](docs/build-validation-design.md) - how the diagnostics and build log were designed, for contributors.
 - *Say Hello to Snug* - the companion guide to building, branding, and sharing your first executable.
 
 ## Building from source
