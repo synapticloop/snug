@@ -70,6 +70,17 @@ fn input_unavailable(message: impl Into<String>, hint: Option<&str>) -> anyhow::
     user_problem(codes::INPUT_UNAVAILABLE, "input", message, hint)
 }
 
+/// A supplied resource that could not be prepared.
+///
+/// An icon, a splash image, a Windows manifest or a localisation bundle
+/// that the user pointed snug at, and that snug could not turn into
+/// something embeddable. The user can fix this by naming a different
+/// file, so it is *their* problem and not a snug bug — the internal code
+/// would tell them to report a bug they cannot cause.
+fn resource_invalid(message: impl Into<String>, hint: Option<&str>) -> anyhow::Error {
+    user_problem(codes::RESOURCE_INVALID, "resources", message, hint)
+}
+
 /// Build the full [`SnugPayload`] that the launcher will consume.
 ///
 /// Resolves the input source from either the positional `[JAR]`
@@ -246,13 +257,31 @@ pub fn build_payload_with(cli: &Cli, reporter: &mut Reporter) -> Result<SnugPayl
     // doesn't need an image decoder.
     let splash = match &cli.splash {
         Some(path) => {
-            let png_bytes = std::fs::read(path)
-                .with_context(|| format!("reading splash PNG {}", path.display()))?;
+            // A splash image the user named and snug could not turn into
+            // pixels is the user's problem, not a snug bug: the remedy is
+            // to name a different file.
+            let png_bytes = std::fs::read(path).map_err(|e| {
+                resource_invalid(
+                    format!("the splash PNG {} could not be read: {e}", path.display()),
+                    Some("check the path, and that the file is a readable PNG"),
+                )
+            })?;
             if png_bytes.is_empty() {
-                bail!("{} is empty", path.display());
+                return Err(resource_invalid(
+                    format!("the splash PNG {} is empty", path.display()),
+                    Some("a PNG the launcher can display; an empty file has no pixels to show"),
+                ));
             }
             let img = image::load_from_memory_with_format(&png_bytes, image::ImageFormat::Png)
-                .map_err(|e| anyhow::anyhow!("decode splash PNG {}: {e}", path.display()))?;
+                .map_err(|e| {
+                    resource_invalid(
+                        format!(
+                            "the splash PNG {} could not be decoded: {e}",
+                            path.display()
+                        ),
+                        Some("check that the file really is a PNG image"),
+                    )
+                })?;
             let (width, height) = img.dimensions();
             check_splash_dimensions(width, height, &cli.splash_max, reporter);
             let rgba = img.to_rgba8();
@@ -352,8 +381,24 @@ fn collect_localizations(
 ) -> Result<Vec<snug_format::Localization>> {
     let mut paths: Vec<std::path::PathBuf> = cli.localizations.clone();
     paths.sort();
-    let bundles = localization::collect_with_reporter(&paths, reporter)?;
-    localization::ensure_unique_tags(&bundles).context("validating localization bundle tags")?;
+    // A localisation directory that holds a stray file, or two bundles
+    // claiming the same tag, is something the user can fix by renaming a
+    // file — so it carries the resource code rather than the internal one.
+    let bundles = localization::collect_with_reporter(&paths, reporter).map_err(|err| {
+        resource_invalid(
+            format!("the localisation bundles could not be loaded: {err:#}"),
+            Some(
+                "every file in a --localisation directory must be named \
+                 snug-localisations.<tag>.txt, and no two bundles may share a tag",
+            ),
+        )
+    })?;
+    localization::ensure_unique_tags(&bundles).map_err(|err| {
+        resource_invalid(
+            format!("the localisation bundles could not be loaded: {err:#}"),
+            Some("no two bundles may claim the same locale tag"),
+        )
+    })?;
     Ok(bundles)
 }
 
@@ -522,13 +567,66 @@ fn resolve_input(
         let mut jars = Vec::with_capacity(jar_paths.len());
         let mut labels = Vec::with_capacity(jar_paths.len());
         for jar_path in &jar_paths {
-            let bytes = std::fs::read(jar_path)
-                .with_context(|| format!("reading JAR {}", jar_path.display()))?;
-            if bytes.is_empty() {
-                bail!("{} is empty", jar_path.display());
-            }
+            // A JAR in the directory that cannot be read — or that is
+            // empty, and so carries nothing to embed — is left out of the
+            // build, and the build says so.
+            //
+            // This used to abort the whole build with an untyped error,
+            // which surfaced as `SNUG-INTERNAL-001` — "this is a snug bug,
+            // please report it". It is not: it is one unreadable file in a
+            // directory of otherwise good ones, and the documented policy
+            // for `SNUG-INPUT-002` is exactly this — warn, skip, and carry
+            // on with the JARs that could be read.
+            let label = file_name_of(jar_path);
+            let bytes = match std::fs::read(jar_path) {
+                Ok(bytes) if !bytes.is_empty() => bytes,
+                Ok(_) => {
+                    reporter
+                        .warning(
+                            codes::INPUT_ENTRY_UNREADABLE,
+                            "input",
+                            format!("{label} is empty, so it was left out of the build"),
+                        )
+                        .location(label.clone())
+                        .hint(
+                            "the JAR holds nothing to embed; check that the right file was \
+                             supplied, and that the others in the directory are the ones you \
+                             meant",
+                        )
+                        .emit();
+                    continue;
+                }
+                Err(err) => {
+                    reporter
+                        .warning(
+                            codes::INPUT_ENTRY_UNREADABLE,
+                            "input",
+                            format!(
+                                "{label} could not be read, so it was left out of the build: {err}"
+                            ),
+                        )
+                        .location(label.clone())
+                        .hint(
+                            "check the file's permissions, and that it is not locked by \
+                             another process",
+                        )
+                        .emit();
+                    continue;
+                }
+            };
             jars.push(embedded_file(bytes));
-            labels.push(file_name_of(jar_path));
+            labels.push(label);
+        }
+        if jars.is_empty() {
+            return Err(input_unavailable(
+                format!(
+                    "no readable *.jar files in {} (every JAR in the directory was skipped)",
+                    input_path.display()
+                ),
+                Some(
+                    "check the directory's contents and permissions, and that the JARs in it are not empty",
+                ),
+            ));
         }
         reporter.write_line(&format!(
             "snug: indexed {} JAR(s) from {}",

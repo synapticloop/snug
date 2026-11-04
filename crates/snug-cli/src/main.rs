@@ -287,22 +287,9 @@ fn run() -> Result<Outcome> {
             // `SNUG-INTERNAL-001` tells the user to report a bug. The
             // problem carries its own code and stage: `SNUG-INPUT-001` for
             // a path that cannot be used, `SNUG-MANIFEST-001` for a manifest
-            // that cannot be read, and so on.
-            match err.downcast::<snug_cli::build::UserProblem>() {
-                Ok(problem) => {
-                    let mut diagnostic =
-                        reporter.error(problem.code, problem.stage, problem.message);
-                    if let Some(hint) = problem.hint {
-                        diagnostic = diagnostic.hint(hint);
-                    }
-                    diagnostic.emit();
-                }
-                Err(err) => {
-                    reporter
-                        .error(codes::INTERNAL, "payload", format!("{err:?}"))
-                        .emit();
-                }
-            }
+            // that cannot be read, and so on. The mapping is shared with
+            // the tests so the catch-all is exercised too.
+            snug_cli::report::report_payload_error(&mut reporter, &err);
             finish(&mut reporter, &cli, None, false);
             return Ok(Outcome::Reported);
         }

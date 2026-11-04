@@ -315,10 +315,10 @@ analysis is attempted.
 | Check | Outcome | Notes |
 |---|---|---|
 | Input missing / unreadable / not a JAR | Error | `resolve_input_path` (`build.rs:367`) |
-| Directory entry could not be read | Warning | Reported as `SNUG-INPUT-002`; the entry is skipped, and the build says so (`build.rs:444-462`) |
+| Directory entry could not be read | Warning | Reported as `SNUG-INPUT-002`; the entry is skipped, and the build says so. Covers an entry that cannot be opened *and* an entry that is empty — both mean the same thing to the user: that JAR is not in this build. A directory in which every JAR was skipped reports `SNUG-INPUT-001`, because there is nothing left to build |
 | `.JAR` files skipped by the case-sensitive filter | Not reported | The extension test at `build.rs:438` excludes uppercase `.JAR`; the file is skipped silently |
 | Supplied JAR cannot be opened as a ZIP | Error | **Including with a `--main-class` override**, which today skips the manifest read at `build.rs:116-125` (`build.rs:117`) |
-| Empty JAR | Error | Already enforced at `build.rs:492` |
+| Empty JAR | Error as the direct input, Warning inside a directory input | The direct input has nowhere to fall back to, so an empty file is `SNUG-INPUT-001`. Inside a directory input it is one bad entry among others, so it is `SNUG-INPUT-002` and is skipped |
 | Manifest attributes unusable | Error | `SNUG-MANIFEST-001` |
 | No usable selected entry point | Error | Suggests `--find-main` or `--main-class` |
 | Selected class absent from the supplied classpath | Error | Multi-release aware |
@@ -327,7 +327,7 @@ analysis is attempted.
 | Duplicate entry class across JARs | Warning | Names the winning JAR |
 | Manifest `Class-Path` reference | Warning | Advisory; no automatic resolving or bundling |
 | Nested JAR | Info | No recursive dependency resolution; not a rejection |
-| Invalid icon / splash / Windows manifest | Error | Via shared preparation |
+| Invalid icon / splash / Windows manifest / localisation bundle | Error | `SNUG-RESOURCE-001` via shared preparation. A *file* that cannot be read is the same code as one that cannot be decoded: the user's remedy is to name a different file, so it is their problem and not a snug bug |
 | Oversized splash | Warning | |
 | Class file requires a newer Java than `--min-java` | Error for the entry class, Warning otherwise | §5.2 |
 | Preview bytecode | Warning | Reported separately; `--enable-preview` is never injected |
@@ -489,6 +489,16 @@ project-local `snug.options` beside the JAR is preserved.
 ## 8. Diagnostic codes
 
 Stable across wording changes. Severity is a separate axis.
+
+The registry is `report::codes::ALL` — every code, in one list — and it is
+**load-bearing**: `crates/snug-cli/tests/diagnostics.rs` drives one real
+build per code and fails if any declared code cannot be raised. A code
+that no build can produce is a code the table below describes and no
+user will ever see, which is the failure mode this guards against. Two
+of them cannot be produced from the command line and are reached through
+the library instead: `SNUG-LOG-001` (a log write that fails mid-run needs
+a full disk) and `SNUG-INTERNAL-001` (the catch-all for snug's own bugs,
+which has no input that reaches it on purpose).
 
 | Code | Meaning |
 |---|---|

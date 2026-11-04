@@ -122,6 +122,72 @@ pub mod codes {
     pub const LOG_UNAVAILABLE: &str = "SNUG-LOG-002";
     /// Something unexpected went wrong.
     pub const INTERNAL: &str = "SNUG-INTERNAL-001";
+
+    /// Every code, in the order [`docs/diagnostics.md`](../../../docs/diagnostics.md)
+    /// lists them.
+    ///
+    /// The registry exists so a test can ask the only question that
+    /// matters about a code: *can a build raise it at all?* A code no
+    /// build can reach is a code no user will ever see, and the
+    /// documentation would then describe a message that never appears.
+    ///
+    /// It is deliberately a list rather than a macro-generated set: the
+    /// coverage test compares this list against the codes it actually
+    /// observed, and a hand-written list is what that comparison reads.
+    pub const ALL: &[&str] = &[
+        CFG_PARSE,
+        CFG_INVALID,
+        INPUT_UNAVAILABLE,
+        INPUT_ENTRY_UNREADABLE,
+        JAR_INVALID,
+        MANIFEST_UNUSABLE,
+        MAIN_NONE,
+        MAIN_ABSENT,
+        MAIN_UNVERIFIED,
+        MAIN_CONFLICT,
+        MAIN_DUPLICATE,
+        DEP_CLASSPATH,
+        DEP_NESTED,
+        JAVA_TOO_NEW,
+        JAVA_PREVIEW,
+        RESOURCE_INVALID,
+        RESOURCE_OVERSIZED,
+        LOCALISATION_INVALID,
+        OUTPUT_COLLISION,
+        OUTPUT_WRITE,
+        LOG_WRITE,
+        LOG_UNAVAILABLE,
+        INTERNAL,
+    ];
+}
+
+/// Report a failure that stopped the payload build.
+///
+/// A failure the user can act on is not a snug bug — and
+/// `SNUG-INTERNAL-001` tells the user to report a bug. The problem
+/// carries its own code and stage: `SNUG-INPUT-001` for a path that
+/// cannot be used, `SNUG-MANIFEST-001` for a manifest that cannot be
+/// read, and so on. Anything that arrives without such a code is
+/// something snug did not anticipate, and it gets the internal code.
+///
+/// The mapping lives here rather than in the binary so it can be
+/// tested on its own: the internal code is the catch-all for bugs, and
+/// a catch-all that is never exercised is a catch-all that has rotted.
+pub fn report_payload_error(reporter: &mut Reporter, err: &anyhow::Error) {
+    match err.downcast_ref::<crate::build::UserProblem>() {
+        Some(problem) => {
+            let mut diagnostic = reporter.error(problem.code, problem.stage, &problem.message);
+            if let Some(hint) = &problem.hint {
+                diagnostic = diagnostic.hint(hint);
+            }
+            diagnostic.emit();
+        }
+        None => {
+            reporter
+                .error(codes::INTERNAL, "payload", format!("{err:?}"))
+                .emit();
+        }
+    }
 }
 
 /// One diagnostic.

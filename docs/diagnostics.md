@@ -38,6 +38,21 @@ hint hangs under the code, aligned with it.
 A build that fails before it can describe itself — a build log that cannot
 be opened, a file that cannot be read — prints the same shape.
 
+## Every code is reachable
+
+Every code on this page is raised by a real build, and a test says so.
+`crates/snug-cli/tests/diagnostics.rs` drives one build per code and
+fails if a code on this page cannot be produced, if a produced code is
+not on this page, or if the two drift apart.
+
+The same test writes the **catalogue** — the message each diagnostic
+actually renders, as the console shows it — to
+`target/tmp/diagnostics-catalogue.md`:
+
+```bash
+cargo test -p snug-cli --test diagnostics -- --nocapture
+```
+
 ## The codes
 
 ### Configuration
@@ -76,12 +91,20 @@ argument) does not exist, cannot be read, or is not a JAR.
 #### `SNUG-INPUT-002` — A directory entry could not be read
 
 **Cause.** A directory listed as the input contained an entry that could
-not be read, so it was left out of the build.
+not be read — it could not be opened, or it was empty — so it was left
+out of the build.
 
 **Why it is a warning and not an error.** The build carries on with the
 JARs it *could* read. This used to be a silent skip — a failed read was
 discarded and the build carried on with fewer JARs than the directory
-held, with nothing on screen to say so.
+held, with nothing on screen to say so. It used to be worse than silent:
+the read failure aborted the whole build as `SNUG-INTERNAL-001`, which
+tells the user to report a snug bug they did not cause.
+
+**Covers.** The entry is named, and the build says what it did about
+it. A directory in which *every* JAR was skipped is a different
+problem — there is nothing left to build — and is reported as
+`SNUG-INPUT-001`.
 
 **Remedy.** Check the directory's permissions if a JAR you expected is
 missing from the build.
@@ -250,15 +273,22 @@ every other class in the application too.
 
 #### `SNUG-RESOURCE-001` — A supplied resource is invalid
 
-**Cause.** An icon, splash image or Windows manifest could not be
-prepared: the image would not decode, or the manifest is not
-well-formed XML.
+**Cause.** An icon, splash image, Windows manifest or localisation bundle
+could not be prepared: the file could not be read, the image would not
+decode, the manifest is not well-formed XML, or a localisation
+directory holds a file that does not follow the naming convention.
 
 **Remedy.** The message names the file.
 
 **Covers.** The Windows manifest check is XML **well-formedness** only.
 It is not a schema check, and it does not validate the manifest against
 what the launcher actually activates.
+
+**Does not cover.** An *icon* that cannot be read is reported as
+`SNUG-OUTPUT-002` in a real build, because the icon is read while the
+executable is being stamped rather than while the payload is being
+assembled. A `--dry-run` reports it as `SNUG-RESOURCE-001`, because a
+dry run does the same checks without the write.
 
 #### `SNUG-RESOURCE-002` — The splash image is larger than recommended
 
@@ -338,6 +368,12 @@ can be made.
 underlying error.
 
 **Remedy.** This is a bug. Please report it with the build log.
+
+**Covers.** Only failures that arrive *without* a code of their own. A
+problem the user can act on — a path that does not exist, a file that
+cannot be read, a bundle that does not parse — carries that problem's
+own code instead, because telling someone to report a bug they cannot
+cause is worse than useless.
 
 ---
 

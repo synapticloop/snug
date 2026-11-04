@@ -106,9 +106,20 @@ impl BuildLog {
     /// revoked handle, and neither is reproducible in a test. This stands in
     /// for both, so the *reporting* of a failed write can be tested even though
     /// the failure itself cannot.
-    #[cfg(test)]
     pub fn fail_writes(&mut self) {
         self.write_failed = true;
+    }
+
+    /// A log whose every write fails.
+    ///
+    /// The same stand-in as [`BuildLog::fail_writes`], as a value rather
+    /// than a mutation — so the reporting of a failed write can be
+    /// exercised from outside the crate, where the `#[cfg(test)]` hook
+    /// this grew out of is not compiled.
+    pub fn failing() -> Self {
+        let mut log = Self::none();
+        log.fail_writes();
+        log
     }
 
     /// Write one line, appending a newline.

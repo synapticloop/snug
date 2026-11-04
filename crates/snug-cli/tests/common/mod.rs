@@ -44,6 +44,22 @@ pub fn build_class_with(
     major: u16,
     methods: &[MethodSpec],
 ) -> Vec<u8> {
+    build_class_with_minor(internal_name, super_class, major, 0, methods)
+}
+
+/// Encode a class file with an explicit *minor* version as well.
+///
+/// The minor version is what marks preview bytecode: `0xFFFF` is the
+/// marker the JVM uses, and snug reports it as `SNUG-JAVA-002`. The
+/// major version alone cannot express that, so the minor is a parameter
+/// of its own.
+pub fn build_class_with_minor(
+    internal_name: &str,
+    super_class: &str,
+    major: u16,
+    minor: u16,
+    methods: &[MethodSpec],
+) -> Vec<u8> {
     let mut pool: Vec<Vec<u8>> = Vec::new();
 
     let utf8 = |pool: &mut Vec<Vec<u8>>, value: &str| -> u16 {
@@ -81,8 +97,8 @@ pub fn build_class_with(
 
     let mut out = Vec::new();
     out.extend_from_slice(&0xCAFE_BABEu32.to_be_bytes());
-    out.extend_from_slice(&0u16.to_be_bytes()); // minor
-    out.extend_from_slice(&major.to_be_bytes()); // major
+    out.extend_from_slice(&minor.to_be_bytes());
+    out.extend_from_slice(&major.to_be_bytes());
     out.extend_from_slice(&((pool.len() + 1) as u16).to_be_bytes());
     for entry in &pool {
         out.extend_from_slice(entry);
