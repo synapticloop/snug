@@ -8,6 +8,17 @@
 //! <platform cache base>\snug\<company>\<app>\
 //! ```
 //!
+//! Beside those per-application roots sits a **shared JAR store**:
+//!
+//! ```text
+//! <platform cache base>\snug\jars\<jar-sha256>\app.jar
+//! ```
+//!
+//! One copy of each distinct JAR, shared by every application that uses
+//! it. Two applications built from the same library stack would otherwise
+//! each write their own copy of the same bytes, and the copy that is
+//! saved is the one that is deleted twice.
+//!
 //! Two things about that layout are *contract*, not implementation, and
 //! both sides have to agree on them: the `snug` namespace segment, and
 //! the rules for turning a company or application name into something
@@ -24,6 +35,13 @@
 
 /// Default top-level subdirectory under the per-user data root.
 pub const SNUG_SUBDIR: &str = "snug";
+
+/// The shared JAR store, a sibling of the per-application cache roots.
+///
+/// A reserved name inside the `snug` namespace: the launcher walks that
+/// namespace to find every application's cache root, and must not mistake
+/// the store for one.
+pub const STORE_SUBDIR: &str = "jars";
 
 /// Replace path separators and other characters that are unsafe in a
 /// directory name across the platforms we support.
@@ -54,6 +72,16 @@ pub fn cache_root_segments(company: &str, name: &str) -> Vec<String> {
         sanitize_component(company),
         sanitize_component(name),
     ]
+}
+
+/// The path segments of the shared JAR store, relative to the platform's
+/// per-user cache base.
+///
+/// Segments for the same reason [`cache_root_segments`] returns segments:
+/// the builder can be on one platform and the launcher on another, and
+/// `Path::join` would use the *host's* separator.
+pub fn store_segments() -> Vec<String> {
+    vec![SNUG_SUBDIR.to_string(), STORE_SUBDIR.to_string()]
 }
 
 #[cfg(test)]
@@ -90,5 +118,18 @@ mod tests {
     fn the_segments_are_sanitised() {
         let segments = cache_root_segments("Acme/Inc", "My:App");
         assert_eq!(segments, ["snug", "Acme_Inc", "My_App"]);
+    }
+
+    #[test]
+    fn the_store_sits_beside_the_application_roots() {
+        // Same namespace, one level shallower than an application root:
+        // the launcher walks the namespace to find every application's
+        // root, so the store has to be recognisable as not being one.
+        assert_eq!(store_segments(), ["snug", "jars"]);
+        assert_ne!(
+            store_segments()[1],
+            cache_root_segments("Acme", "Demo")[1],
+            "the store must not be mistakable for a company name"
+        );
     }
 }

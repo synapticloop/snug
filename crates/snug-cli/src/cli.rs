@@ -489,7 +489,9 @@ pub struct Cli {
     ///
     /// Use an absolute path. The directory need not exist when building; the launcher creates it when the application runs.
     ///
-    /// Useful for storing large application files on another drive.
+    /// Useful for storing large application files on another drive. Note that
+    /// a relocated cache disables the shared JAR store: the store is linked to
+    /// the application's own directory, and a link cannot cross a drive.
     #[arg(
         long = "cache-dir",
         value_name = "DIR",

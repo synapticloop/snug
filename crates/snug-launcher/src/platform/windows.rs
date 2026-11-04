@@ -62,6 +62,11 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
 
     let cache_root = cache::cache_root(&config.app, config.behavior.cache_dir.as_deref());
 
+    // The shared JAR store. `None` when the cache root was explicitly
+    // overridden, because a hard link only works within one volume and
+    // the store would then be a second copy on a different disk.
+    let store = cache::store_root(config.behavior.cache_dir.as_deref());
+
     // 0. Single-instance gate.
     //
     //    Deliberately the *first* thing, before extraction, before the
@@ -101,6 +106,10 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
     //    collisions-free filenames and the launcher can reuse cached
     //    entries when only some of the JARs change.
     //
+    //    Where the shared store is in use, the bytes live there and the
+    //    entry here is a hard link to them, so two applications built
+    //    from the same library stack hold them once between them.
+    //
     //    Every JAR is then *touched*, not just the primary. The mtime is
     //    the launcher's only record of when an entry was last needed, and
     //    the periodic sweep evicts anything stale — so touching only
@@ -109,7 +118,7 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
     let mut cached_paths: Vec<PathBuf> = Vec::with_capacity(jars.len());
     for jar in jars {
         let dest = cache::cached_jar_path(&cache_root, &jar.sha256);
-        ensure_cached(&dest, &jar.bytes)?;
+        ensure_cached(store.as_deref(), &jar.sha256, &dest, &jar.bytes)?;
         if let Err(e) = cache::touch(&dest) {
             // Non-fatal: the JAR is on disk and usable. It just won't be
             // protected from the sweep, so it may be re-extracted later.
@@ -140,22 +149,39 @@ pub fn run(_self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherEr
         let root = cache_root.clone();
         let current: std::collections::HashSet<String> =
             jars.iter().map(|j| cache::hex_lower(&j.sha256)).collect();
-        let build_bytes: u64 = jars.iter().map(|j| j.bytes.len() as u64).sum();
+        let shared_store = store.clone();
         std::thread::spawn(move || {
             let now = std::time::SystemTime::now();
-            if !cache::should_sweep(&root, now) {
-                return;
+            if cache::should_sweep(&root, now) {
+                let report = cache::sweep(&root, &current, now);
+                log::log(&format!(
+                    "cache sweep: kept {}, removed {} ({} MB), {} error(s)",
+                    report.kept,
+                    report.removed.len(),
+                    report.bytes_freed / (1024 * 1024),
+                    report.errors.len()
+                ));
+                for e in &report.errors {
+                    log::log(&format!("cache sweep error: {e}"));
+                }
             }
-            let report = cache::sweep(&root, &current, build_bytes, now);
-            log::log(&format!(
-                "cache sweep: kept {}, removed {} ({} MB), {} error(s)",
-                report.kept,
-                report.removed.len(),
-                report.bytes_freed / (1024 * 1024),
-                report.errors.len()
-            ));
-            for e in &report.errors {
-                log::log(&format!("cache sweep error: {e}"));
+            // The store is shared, so its sweep is a separate pass with
+            // its own rate limit. It keeps what is still referenced and
+            // ages out the rest.
+            if let Some(shared_store) = shared_store
+                && cache::should_sweep_store(&shared_store, now)
+            {
+                let report = cache::sweep_store(&shared_store, now);
+                log::log(&format!(
+                    "store sweep: kept {}, removed {} ({} MB), {} error(s)",
+                    report.kept,
+                    report.removed.len(),
+                    report.bytes_freed / (1024 * 1024),
+                    report.errors.len()
+                ));
+                for e in &report.errors {
+                    log::log(&format!("store sweep error: {e}"));
+                }
             }
         });
     }
@@ -677,16 +703,22 @@ fn locate_jvm_dll(java_home: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Copy `bytes` to `dest` (and create parents) unless a correct copy is
+/// Put `bytes` at `dest` (and create parents) unless a correct copy is
 /// already there.
 ///
-/// Delegates to [`crate::cache::ensure_cached_atomic`], which is where the
-/// atomicity and truncation-repair rules live. `platform/macos.rs` still
-/// carries its own copy of the old truncate-in-place version; it is
-/// byte-identical to what this replaced and should adopt the shared helper
-/// in one line whenever macOS is back in scope.
-fn ensure_cached(dest: &Path, bytes: &[u8]) -> Result<(), LauncherError> {
-    crate::cache::ensure_cached_atomic(dest, bytes)?;
+/// Delegates to [`crate::cache::ensure_cached_shared`], which is where the
+/// atomicity, truncation-repair and shared-store rules live.
+/// `platform/macos.rs` still carries its own copy of the old
+/// truncate-in-place version; it is byte-identical to what this replaced
+/// and should adopt the shared helper in one line whenever macOS is back
+/// in scope.
+fn ensure_cached(
+    store: Option<&Path>,
+    sha256: &[u8; 32],
+    dest: &Path,
+    bytes: &[u8],
+) -> Result<(), LauncherError> {
+    crate::cache::ensure_cached_shared(store, sha256, dest, bytes)?;
     Ok(())
 }
 

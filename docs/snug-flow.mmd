@@ -7,7 +7,7 @@
   Scan --> Decode
 
   Decode["<b>decode payload</b> postcard<br/>localize::init bundles"] --> CacheStep
-  CacheStep["<b>cache::ensure_cached</b><br/>extract every JAR to<br/>%LOCALAPPDATA%\snug\CO\APP\SHA256\app.jar"] -->|io error| E_Io
+  CacheStep["<b>cache::ensure_cached_shared</b><br/>extract every JAR to<br/>%LOCALAPPDATA%\snug\CO\APP\SHA256\app.jar<br/>(hard link to snug\jars\SHA256\)"] -->|io error| E_Io
   CacheStep --> LogStep
   LogStep["<b>log::init</b><br/>open snug.log next to JAR<br/>(best-effort)"] --> MainClassStep
 

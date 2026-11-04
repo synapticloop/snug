@@ -4,6 +4,7 @@
 //!
 //! ```text
 //! %LOCALAPPDATA%\snug\<company>\<app>\<jar-sha256>\app.jar
+//! %LOCALAPPDATA%\snug\jars\<jar-sha256>\app.jar
 //! ```
 //!
 //! All snug-managed data lives under a top-level `snug\` namespace so
@@ -15,14 +16,37 @@
 //! so multi-JAR builds can have collision-free filenames and unchanged
 //! JARs stay cached across rebuilds.
 //!
+//! # The shared store
+//!
+//! The second path is the **shared JAR store**: one copy of each
+//! distinct JAR, under the same namespace as the per-application roots.
+//! An application's entry is a *hard link* to the store's, so two
+//! applications built from the same library stack hold the bytes once
+//! between them. On a filesystem without hard links (FAT32, exFAT)
+//! the link degrades to a copy, which is exactly the old behaviour.
+//!
+//! The store has to be on the same volume as the application's root for
+//! a link to work at all, so it lives under the same cache base. It is
+//! disabled outright when the application's cache root was explicitly
+//! overridden — see [`store_root`].
+//!
 //! # Retention
 //!
 //! Entries expire. [`touch`] stamps a cached JAR's mtime on every
-//! launch that uses it, and [`sweep`] periodically deletes the ones no
-//! longer wanted, so the cache cannot grow without bound across
-//! rebuilds. The policy keeps the most recently used [`KEEP_RECENT`]
-//! entries, up to a per-application byte budget, and evicts anything
-//! untouched for [`MAX_UNUSED_AGE`] regardless of rank.
+//! launch that uses it, and [`sweep`] deletes the ones the application
+//! no longer needs, so the cache cannot grow without bound across
+//! rebuilds.
+//!
+//! The application's own root keeps **one generation**: the running
+//! build's JARs, and nothing else. A previous build's JARs are not
+//! worth a second copy of the application on disk, and everything the
+//! application might still want is recoverable from the store or from
+//! the payload.
+//!
+//! The store keeps entries for [`MAX_UNUSED_AGE`] after they were last
+//! used, which is what makes switching back to a previous build cheap:
+//! its JARs are still in the store, so the launch re-links them rather
+//! than copying a few hundred megabytes again.
 
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -38,6 +62,12 @@ use snug_format::cache::cache_root_segments;
 /// The namespace rules live in `snug-format` because the builder shows
 /// this layout in the build log, and the two cannot drift apart.
 pub use snug_format::cache::SNUG_SUBDIR;
+
+/// The shared JAR store's name inside the `snug` namespace.
+///
+/// A reserved name: the launcher walks that namespace to find every
+/// application's cache root, and the store is not one.
+pub use snug_format::cache::STORE_SUBDIR;
 
 /// Default JAR filename inside a cache entry.
 pub const CACHED_JAR_NAME: &str = "app.jar";
@@ -78,12 +108,51 @@ pub fn cache_root(app: &AppMetadata, override_root: Option<&Path>) -> PathBuf {
         return root.to_path_buf();
     }
 
-    let base = pick_cache_base(std::env::var_os(ENV_CACHE_DIR), platform_cache_base());
-    let mut root = base;
+    let mut root = cache_base();
     for segment in cache_root_segments(&app.company, &app.name) {
         root = root.join(segment);
     }
     root
+}
+
+/// The per-user cache base, without the `snug` namespace.
+///
+/// Resolution is the same as for [`cache_root`] minus the application's
+/// own segments: `$SNUG_CACHE_DIR` if it is an absolute path, else the
+/// platform's own answer, else `$HOME/.cache` and the temp directory.
+fn cache_base() -> PathBuf {
+    pick_cache_base(std::env::var_os(ENV_CACHE_DIR), platform_cache_base())
+}
+
+/// The shared JAR store, or `None` when the store cannot be used.
+///
+/// `None` means the application's cache root was explicitly overridden
+/// (`--cache-dir`). That override names the application's own directory,
+/// wherever the user put it, and a hard link only works within one
+/// volume — so a store on the platform's base could be on a different
+/// volume from the application, and every "shared" copy would silently
+/// be a second copy on disk. Better to keep the old behaviour for an
+/// explicitly relocated cache than to double the space it uses.
+///
+/// The store shares the application's cache base, so the two are always
+/// on the same volume and a link between them always works.
+pub fn store_root(override_root: Option<&Path>) -> Option<PathBuf> {
+    if override_root.is_some() {
+        return None;
+    }
+    let mut root = cache_base();
+    for segment in snug_format::cache::store_segments() {
+        root = root.join(segment);
+    }
+    Some(root)
+}
+
+/// The store's path for one JAR's bytes.
+///
+/// The same shape as [`cached_jar_path`], under the store instead of an
+/// application root, so the digest names the entry in both.
+pub fn store_entry_path(store: &Path, sha256: &[u8; 32]) -> PathBuf {
+    store.join(hex_lower(sha256)).join(CACHED_JAR_NAME)
 }
 
 /// Choose the cache base from the two candidates, falling back when neither
@@ -144,12 +213,25 @@ pub fn temp_sibling(path: &Path) -> PathBuf {
 /// here -- `sweep` owns the cache's retention policy, and this is a single
 /// bounded file rather than an entry.
 pub fn ensure_cached_atomic(dest: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let already_correct = std::fs::metadata(dest)
-        .map(|m| m.len() == bytes.len() as u64)
-        .unwrap_or(false);
-    if already_correct {
+    if is_correct_len(dest, bytes.len()) {
         return Ok(());
     }
+    write_atomic(dest, bytes)
+}
+
+/// True when `path` is a file of exactly `len` bytes.
+///
+/// The length is the whole test, deliberately: `exists()` says nothing
+/// about *which* file, and a truncated entry accepted as correct is
+/// permanent breakage (see [`ensure_cached_atomic`]).
+fn is_correct_len(path: &Path, len: usize) -> bool {
+    std::fs::metadata(path)
+        .map(|m| m.len() == len as u64)
+        .unwrap_or(false)
+}
+
+/// Write `bytes` to `dest` atomically, replacing whatever was there.
+fn write_atomic(dest: &Path, bytes: &[u8]) -> std::io::Result<()> {
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -162,6 +244,206 @@ pub fn ensure_cached_atomic(dest: &Path, bytes: &[u8]) -> std::io::Result<()> {
             Err(e)
         }
     }
+}
+
+/// Put `src`'s bytes at `dest`, as a hard link where the filesystem
+/// allows one.
+///
+/// The link is made through a staging name and renamed into place, so a
+/// reader at `dest` sees either the old file or the new one, never a
+/// half-made mixture — the same atomicity [`write_atomic`] buys, with
+/// the bytes shared rather than copied.
+///
+/// A hard link cannot cross a volume, and FAT32 and exFAT have none at
+/// all. Both cases fall back to a copy, which is the old behaviour:
+/// correct, and no worse than before. [`store_supports_links`] normally
+/// keeps the store out of the way on such a filesystem.
+fn link_over(src: &Path, dest: &Path) -> std::io::Result<()> {
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = temp_sibling(dest);
+    let _ = std::fs::remove_file(&tmp);
+    if std::fs::hard_link(src, &tmp).is_err() {
+        std::fs::copy(src, &tmp)?;
+    }
+    match std::fs::rename(&tmp, dest) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            Err(e)
+        }
+    }
+}
+
+/// Whether the store's filesystem can hold hard links.
+///
+/// Probed once per process, by linking two files in the store itself.
+///
+/// FAT32 and exFAT have no hard links, and a store that fell back to
+/// copying would be *worse* than no store: the JAR would be written
+/// twice, and copied again on every launch, because the two copies
+/// would never be the same file. So a filesystem that cannot link does
+/// not get a store at all.
+///
+/// The answer is cached for the process. There is one store per launch,
+/// so one answer per process is the right granularity.
+fn store_supports_links(store: &Path) -> bool {
+    static PROBED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *PROBED.get_or_init(|| probe_hard_links(store))
+}
+
+/// Try to link two files in `dir`, and say whether it worked.
+fn probe_hard_links(dir: &Path) -> bool {
+    if std::fs::create_dir_all(dir).is_err() {
+        return false;
+    }
+    let source = temp_sibling(&dir.join("link-probe-a"));
+    let target = temp_sibling(&dir.join("link-probe-b"));
+    let _ = std::fs::remove_file(&source);
+    let _ = std::fs::remove_file(&target);
+    let ok =
+        std::fs::write(&source, b"probe").is_ok() && std::fs::hard_link(&source, &target).is_ok();
+    let _ = std::fs::remove_file(&source);
+    let _ = std::fs::remove_file(&target);
+    ok
+}
+
+/// True when two paths name the same file.
+///
+/// The difference between "the application's copy is already the shared
+/// one" and "the application has a private copy" — which is the
+/// difference between one copy of a JAR on the disk and two.
+#[cfg(windows)]
+fn same_file(a: &Path, b: &Path) -> bool {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+
+    /// (volume serial number, file index) — the pair Windows treats as a
+    /// file's identity, and the only thing a hard link preserves.
+    fn identity(path: &Path) -> Option<(u32, u64)> {
+        let file = std::fs::File::open(path).ok()?;
+        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle() as HANDLE, &mut info) };
+        if ok == 0 {
+            return None;
+        }
+        let index = ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64;
+        Some((info.dwVolumeSerialNumber, index))
+    }
+
+    match (identity(a), identity(b)) {
+        (Some(x), Some(y)) => x == y,
+        _ => false,
+    }
+}
+
+/// True when two paths name the same file.
+#[cfg(unix)]
+fn same_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::metadata(a), std::fs::metadata(b)) {
+        (Ok(x), Ok(y)) => x.dev() == y.dev() && x.ino() == y.ino(),
+        _ => false,
+    }
+}
+
+/// True when two paths name the same file.
+///
+/// Unknown platforms cannot answer, so the answer is "no" — which makes
+/// the caller re-link rather than assume the copy is already shared.
+/// Re-linking is wasteful, never wrong.
+#[cfg(not(any(windows, unix)))]
+fn same_file(_a: &Path, _b: &Path) -> bool {
+    false
+}
+
+/// Ensure `dest` holds `bytes`, sharing them with the store when there
+/// is one.
+///
+/// With a store, the bytes live in the store and `dest` is a hard link
+/// to them; without one, this is [`ensure_cached_atomic`] and the
+/// application's root holds the only copy.
+///
+/// The two paths are made to agree in both directions, because either
+/// can be the one that already exists:
+///
+/// * The store entry missing but the application's copy good — the
+///   application's copy is *adopted* as the shared one. A hard link
+///   costs a directory entry, not the bytes, so this shares what is
+///   already on disk instead of writing a second copy of it. It is also
+///   how a cache written before the store existed is absorbed without
+///   doubling the space it already uses.
+/// * The store entry present but the application's copy missing or
+///   truncated — the application re-links to the store's bytes.
+/// * Both present and already the same file — nothing to do, which is
+///   the case on every launch after the first.
+///
+/// The last case is the one that needs [`same_file`]: without it the
+/// only way to be sure is to re-link every time, and a re-link that
+/// fails on Windows (the file is open in another instance) would leave
+/// the application with a private copy for no reason.
+///
+/// The store is an optimisation and the application's own copy is the
+/// fallback, so a store that cannot be written never fails the launch:
+/// the application keeps its own copy, exactly as it did before.
+pub fn ensure_cached_shared(
+    store: Option<&Path>,
+    sha256: &[u8; 32],
+    dest: &Path,
+    bytes: &[u8],
+) -> std::io::Result<()> {
+    let Some(store) = store else {
+        return ensure_cached_atomic(dest, bytes);
+    };
+
+    // A store that cannot link cannot share, and is worse than no store
+    // at all. See [`store_supports_links`].
+    if !store_supports_links(store) {
+        return ensure_cached_atomic(dest, bytes);
+    }
+
+    let entry = store_entry_path(store, sha256);
+    let dest_ok = is_correct_len(dest, bytes.len());
+
+    if !dest_ok {
+        // The application needs a copy. The store writes the bytes once
+        // and the application links to them, so they are stored once.
+        if is_correct_len(&entry, bytes.len()) {
+            if link_over(&entry, dest).is_ok() {
+                return Ok(());
+            }
+        } else if write_atomic(&entry, bytes).is_ok() {
+            if link_over(&entry, dest).is_ok() {
+                return Ok(());
+            }
+            // The store's copy is referenced by nothing, so it is dead
+            // weight rather than a shared copy.
+            if let Some(dir) = entry.parent() {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+        }
+        // The store could not serve it after all. The application's own
+        // copy is the fallback, and it is what always worked.
+        return ensure_cached_atomic(dest, bytes);
+    }
+
+    // The application already has the right bytes. Share them with the
+    // store, so that another application built from the same library
+    // stack can use them too.
+    if !is_correct_len(&entry, bytes.len()) {
+        // Adopt the application's copy: a link costs a directory entry,
+        // not the bytes, so nothing is written twice.
+        let _ = link_over(dest, &entry);
+    } else if !same_file(dest, &entry) {
+        // A private copy and a store copy of the same JAR. Make the
+        // application's entry the link, so the bytes are stored once.
+        let _ = link_over(&entry, dest);
+    }
+    Ok(())
 }
 
 /// Compute the path to the per-launch log file. Sits next to the
@@ -191,30 +473,23 @@ fn hex_lower_impl(bytes: &[u8]) -> String {
 
 // --- Retention policy ---------------------------------------------------
 
-/// How many recently-used entries to retain per application.
-const KEEP_RECENT: usize = 3;
-
-/// Lower bound on one application's byte budget.
-const MIN_CACHE_BUDGET: u64 = 512 * 1024 * 1024;
-
-/// Upper bound on one application's byte budget.
-const MAX_CACHE_BUDGET: u64 = 8 * 1024 * 1024 * 1024;
-
-/// The byte budget for a build of `build_bytes`.
+/// How many generations of an application to retain in its own root.
 ///
-/// Scales with the build so a large application keeps a few generations
-/// rather than collapsing to just the current one, then clamps at both
-/// ends. The floor stops small applications being rationed — bounding
-/// large applications is the budget's job, not rationing small ones. The
-/// ceiling stops the largest being unbounded: without it a 4 GB fat JAR
-/// would retain 12 GB indefinitely.
-fn budget_for(build_bytes: u64) -> u64 {
-    build_bytes
-        .saturating_mul(KEEP_RECENT as u64)
-        .clamp(MIN_CACHE_BUDGET, MAX_CACHE_BUDGET)
-}
+/// One. The application's root holds the running build and nothing else:
+/// a second generation is a second copy of the application on disk, and
+/// anything it might still be wanted for is recoverable from the store
+/// or from the payload.
+///
+/// The running build's own entries count toward this depth, so a build
+/// of three JARs fills it on its own.
+const KEEP_RECENT: usize = 1;
 
-/// Evict an entry this long after it was last used, whatever its rank.
+/// Evict a store entry this long after it was last used.
+///
+/// The store's horizon, and the only time-based rule in the cache. The
+/// per-application root has no age rule because it has no history to
+/// age out: it holds one generation, and the store holds the previous
+/// ones.
 const MAX_UNUSED_AGE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
 /// Minimum gap between two sweeps.
@@ -275,20 +550,20 @@ pub struct SweepReport {
 /// Delete cache entries the application no longer needs.
 ///
 /// `current` holds the hex digests of the JARs in the running build —
-/// those are never evicted. `build_bytes` is their total size, which
-/// scales the budget so a large application still retains a few
-/// generations instead of collapsing to just the current one.
+/// those are never evicted, and everything else is a previous generation
+/// of this application.
+///
+/// The policy is one generation. The running build's entries fill the
+/// depth on their own, so an older generation goes on the next sweep
+/// whether it was used yesterday or a year ago. What it costs is a
+/// re-extraction for anyone who launches the older build again — and the
+/// store is what stops that being expensive, because the older build's
+/// JARs are still in it.
 ///
 /// `now` is a parameter rather than read from the clock so the whole
 /// policy is testable without waiting 30 days.
-pub fn sweep(
-    root: &Path,
-    current: &HashSet<String>,
-    build_bytes: u64,
-    now: SystemTime,
-) -> SweepReport {
+pub fn sweep(root: &Path, current: &HashSet<String>, now: SystemTime) -> SweepReport {
     let mut report = SweepReport::default();
-    let budget = budget_for(build_bytes);
 
     let mut entries: Vec<(String, SystemTime, u64)> = Vec::new();
     let mut partial: Vec<String> = Vec::new();
@@ -329,25 +604,30 @@ pub fn sweep(
     // every run instead of flipping between equals.
     entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
-    let mut used: u64 = 0;
-    for (name, mtime, size) in entries {
-        // The current build is never evicted, and its size counts
-        // against the budget. This is the one invariant that must hold
-        // unconditionally — everything else is recoverable, because a
-        // missing entry is re-extracted from the payload next launch.
+    // The running build's own entries fill the depth, and they are
+    // counted *before* anything else is considered. Counting them as
+    // the scan reached them would make the depth depend on which entry
+    // happened to have the newest timestamp — and the running build is
+    // not necessarily the newest, because a rebuild produces a JAR
+    // whose digest sorts nowhere near the old one's.
+    let mut kept = entries
+        .iter()
+        .filter(|(name, _, _)| current.contains(name))
+        .count();
+
+    for (name, _mtime, size) in entries {
+        // The current build is never evicted. This is the one invariant
+        // that must hold unconditionally — everything else is
+        // recoverable, because a missing entry is re-extracted from the
+        // payload next launch.
         if current.contains(&name) {
-            used = used.saturating_add(size);
-            report.kept += 1;
             continue;
         }
 
-        let stale = now
-            .duration_since(mtime)
-            .is_ok_and(|age| age > MAX_UNUSED_AGE);
-        let fits = report.kept < KEEP_RECENT && used + size <= budget;
-        if !stale && fits {
-            used = used.saturating_add(size);
-            report.kept += 1;
+        // Depth is measured against the running build's own entries, so
+        // with one generation kept there is no room for an older one.
+        if kept < KEEP_RECENT {
+            kept += 1;
             continue;
         }
 
@@ -360,7 +640,126 @@ pub fn sweep(
         }
     }
 
+    report.kept = kept;
     report
+}
+
+/// Delete store entries nothing needs any more.
+///
+/// An entry is kept while it was used within [`MAX_UNUSED_AGE`], and
+/// kept for as long as any application's cache root still points at it.
+///
+/// That second rule is what makes a rollback cheap. An application that
+/// has not run for a month still links its build's JARs, and those links
+/// are the only other copy of the bytes — deleting the store's copy
+/// would mean copying them again from the payload to get them back.
+/// The age rule alone would have thrown them away.
+///
+/// The store has no byte ceiling. A ceiling measured over the store's
+/// own entries would free nothing anyway, because a linked application's
+/// copy keeps the bytes alive, and it would evict precisely the shared
+/// libraries that make the store worth having.
+///
+/// `now` is a parameter rather than read from the clock so the whole
+/// policy is testable without waiting 30 days.
+pub fn sweep_store(store: &Path, now: SystemTime) -> SweepReport {
+    let mut report = SweepReport::default();
+
+    // The namespace holds the store and every application's root, so
+    // its parent is where the references live.
+    let Some(namespace) = store.parent() else {
+        return report;
+    };
+    let referenced = referenced_digests(namespace, store);
+
+    let Ok(dir) = std::fs::read_dir(store) else {
+        return report;
+    };
+
+    let mut entries: Vec<(String, SystemTime, u64)> = Vec::new();
+    let mut partial: Vec<String> = Vec::new();
+
+    for entry in dir.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !is_hash_dir(&name) {
+            continue;
+        }
+        match std::fs::metadata(entry.path().join(CACHED_JAR_NAME)) {
+            Ok(m) => entries.push((name, m.modified().unwrap_or(now), m.len())),
+            Err(_) => partial.push(name),
+        }
+    }
+
+    for name in partial {
+        if referenced.contains(&name) {
+            continue;
+        }
+        match std::fs::remove_dir_all(store.join(&name)) {
+            Ok(()) => report.removed.push(name),
+            Err(e) => report.errors.push(format!("{name}: {e}")),
+        }
+    }
+
+    entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    for (name, mtime, size) in entries {
+        if referenced.contains(&name) {
+            report.kept += 1;
+            continue;
+        }
+
+        let stale = now
+            .duration_since(mtime)
+            .is_ok_and(|age| age > MAX_UNUSED_AGE);
+        if !stale {
+            report.kept += 1;
+            continue;
+        }
+
+        match std::fs::remove_dir_all(store.join(&name)) {
+            Ok(()) => {
+                report.bytes_freed += size;
+                report.removed.push(name);
+            }
+            Err(e) => report.errors.push(format!("{name}: {e}")),
+        }
+    }
+
+    report
+}
+
+/// The digests that some application's cache root still points at.
+///
+/// Every application's root is `<namespace>\<company>\<app>\`, and a
+/// hash-named directory inside one is a reference to that JAR's content.
+/// The store itself is skipped by path rather than by name, so a
+/// company that happens to be called `jars` is still counted.
+fn referenced_digests(namespace: &Path, store: &Path) -> HashSet<String> {
+    let mut referenced = HashSet::new();
+
+    let Ok(companies) = std::fs::read_dir(namespace) else {
+        return referenced;
+    };
+    for company in companies.flatten() {
+        if company.path() == store {
+            continue;
+        }
+        let Ok(apps) = std::fs::read_dir(company.path()) else {
+            continue;
+        };
+        for app in apps.flatten() {
+            let Ok(entries) = std::fs::read_dir(app.path()) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if is_hash_dir(&name) {
+                    referenced.insert(name);
+                }
+            }
+        }
+    }
+    referenced
 }
 
 /// Rate-limit the sweep to one pass per [`SWEEP_INTERVAL`]. Returns
@@ -369,8 +768,21 @@ pub fn sweep(
 /// The stamp is written *before* the sweep rather than after, so a
 /// crash mid-pass cannot become a tight retry loop on every launch.
 pub fn should_sweep(root: &Path, now: SystemTime) -> bool {
-    let stamp = root.join(SWEEP_STAMP);
-    let last = std::fs::read_to_string(&stamp)
+    should_sweep_at(&root.join(SWEEP_STAMP), now)
+}
+
+/// Rate-limit the store sweep to one pass per [`SWEEP_INTERVAL`].
+///
+/// The store is shared by every application, so its stamp lives in the
+/// store: one pass per interval for the whole machine, not one per
+/// application that happens to launch.
+pub fn should_sweep_store(store: &Path, now: SystemTime) -> bool {
+    should_sweep_at(&store.join(SWEEP_STAMP), now)
+}
+
+/// The rate limit itself, against a stamp file.
+fn should_sweep_at(stamp: &Path, now: SystemTime) -> bool {
+    let last = std::fs::read_to_string(stamp)
         .ok()
         .and_then(|s| s.trim().parse::<u64>().ok())
         .map(|secs| SystemTime::UNIX_EPOCH + Duration::from_secs(secs));
@@ -383,9 +795,11 @@ pub fn should_sweep(root: &Path, now: SystemTime) -> bool {
         return false;
     }
 
-    let _ = std::fs::create_dir_all(root);
+    if let Some(parent) = stamp.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     let _ = std::fs::write(
-        &stamp,
+        stamp,
         now.duration_since(SystemTime::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs()
@@ -1011,11 +1425,9 @@ mod tests {
 
     #[test]
     fn sweep_never_removes_the_current_build() {
-        // The current build is deliberately the *oldest* entry, and
-        // there are more entries than KEEP_RECENT, so the count filter
-        // would evict it last. It has to survive anyway: everything else
-        // is recoverable by re-extraction from the payload, the running
-        // app's own classpath is not.
+        // The current build is deliberately the *oldest* entry. It has to
+        // survive anyway: everything else is recoverable by re-extraction
+        // from the payload, the running app's own classpath is not.
         let root = tempdir();
         let names: Vec<String> = (1..=5u8)
             .map(|n| entry(&root, &hash_name(n), 64, Duration::from_secs(5 - n as u64)))
@@ -1023,119 +1435,60 @@ mod tests {
         let oldest = names[0].clone();
         let current: HashSet<String> = [oldest.clone()].into_iter().collect();
 
-        let report = sweep(&root, &current, 64, NOW);
+        let report = sweep(&root, &current, NOW);
 
         assert!(
             root.join(&oldest).exists(),
             "the current build must survive even when it ranks last"
         );
         assert!(!report.removed.contains(&oldest));
-        // Four non-current entries, three slots: hash_name(2) is the
-        // oldest of the four, so it is the one that goes.
-        assert_eq!(sorted(report.removed), sorted(vec![names[1].clone()]));
+        assert_eq!(
+            sorted(report.removed),
+            sorted(names[1..].to_vec()),
+            "every previous generation goes, however recently it was used"
+        );
     }
 
     #[test]
-    fn current_build_counts_toward_the_retained_depth() {
-        // `KEEP_RECENT` bounds the *total* retained generations, not the
-        // history on top of the current one. That is what makes the
-        // `build_bytes * KEEP_RECENT` budget line up: a single-JAR app
-        // holds three copies of itself, not four.
+    fn the_application_root_keeps_one_generation() {
+        // One. A second generation is a second copy of the application
+        // on disk, and the store is where the previous build's JARs live
+        // until they age out of it.
         let root = tempdir();
         let names: Vec<String> = (1..=4u8)
             .map(|n| entry(&root, &hash_name(n), 64, Duration::from_secs(4 - n as u64)))
             .collect();
         let current: HashSet<String> = [names[3].clone()].into_iter().collect();
 
-        let report = sweep(&root, &current, 64, NOW);
+        let report = sweep(&root, &current, NOW);
 
         assert_eq!(report.kept, KEEP_RECENT);
-        assert_eq!(report.removed.len(), 1);
-        assert_eq!(sorted(report.removed), sorted(vec![names[0].clone()]));
-    }
-
-    #[test]
-    fn sweep_evicts_the_oldest_over_budget() {
-        let root = tempdir();
-        // Five fresh entries; the budget is clamped to MIN_CACHE_BUDGET
-        // for a tiny build, so the *count* is what limits retention.
-        let names: Vec<String> = (1..=5u8)
-            .map(|n| {
-                entry(
-                    &root,
-                    &hash_name(n),
-                    1024,
-                    Duration::from_secs(5 - n as u64),
-                )
-            })
-            .collect();
-        // The current build is the newest, as it would be in practice.
-        let current: HashSet<String> = [names[4].clone()].into_iter().collect();
-
-        let report = sweep(&root, &current, 1024, NOW);
-
-        assert_eq!(report.kept, KEEP_RECENT);
-        assert_eq!(sorted(report.removed), sorted(names[..2].to_vec()));
-        for gone in &names[..2] {
+        assert!(root.join(&names[3]).exists());
+        for gone in &names[..3] {
             assert!(!root.join(gone).exists(), "{gone} should be evicted");
         }
-        for kept in &names[2..] {
+    }
+
+    #[test]
+    fn a_multi_jar_build_keeps_all_of_its_own_jars() {
+        // The depth is counted in entries and the running build's own
+        // entries fill it, so a build of three JARs keeps all three —
+        // and still keeps no previous generation.
+        let root = tempdir();
+        let names: Vec<String> = (1..=5u8)
+            .map(|n| entry(&root, &hash_name(n), 64, Duration::from_secs(5 - n as u64)))
+            .collect();
+        let current: HashSet<String> = names[..3].iter().cloned().collect();
+
+        let report = sweep(&root, &current, NOW);
+
+        assert_eq!(report.kept, 3);
+        for kept in &names[..3] {
             assert!(root.join(kept).exists(), "{kept} should survive");
         }
-    }
-
-    #[test]
-    fn sweep_respects_count_even_with_a_huge_budget() {
-        // 100 tiny entries under an enormous build size: the count must
-        // still bound retention, so the directory count can't run away.
-        let root = tempdir();
-        for n in 1..=100u8 {
-            entry(&root, &hash_name(n), 1, HOUR);
+        for gone in &names[3..] {
+            assert!(!root.join(gone).exists(), "{gone} should be evicted");
         }
-        let current: HashSet<String> = HashSet::new();
-
-        let report = sweep(&root, &current, MAX_CACHE_BUDGET, NOW);
-
-        assert_eq!(report.kept, KEEP_RECENT);
-        assert_eq!(report.removed.len(), 100 - KEEP_RECENT);
-    }
-
-    #[test]
-    fn sweep_evicts_by_age_regardless_of_budget() {
-        // Under budget and recently ranked, but untouched for 40 days:
-        // the age filter is what catches the long tail the budget never
-        // would.
-        let root = tempdir();
-        let old = entry(
-            &root,
-            &hash_name(1),
-            10,
-            Duration::from_secs(40 * 24 * 3600),
-        );
-        let current: HashSet<String> = HashSet::new();
-
-        let report = sweep(&root, &current, 0, NOW);
-
-        assert!(!root.join(&old).exists());
-        assert_eq!(report.kept, 0);
-        assert_eq!(report.bytes_freed, 10);
-    }
-
-    #[test]
-    fn sweep_keeps_entries_younger_than_the_age_limit() {
-        let root = tempdir();
-        let recent = entry(
-            &root,
-            &hash_name(1),
-            10,
-            Duration::from_secs(29 * 24 * 3600),
-        );
-        let current: HashSet<String> = HashSet::new();
-
-        let report = sweep(&root, &current, 0, NOW);
-
-        assert!(root.join(&recent).exists());
-        assert_eq!(report.kept, 1);
     }
 
     #[test]
@@ -1154,7 +1507,7 @@ mod tests {
         let upper = root.join("A".repeat(64));
         std::fs::create_dir_all(&upper).unwrap();
 
-        sweep(&root, &HashSet::new(), 0, NOW);
+        sweep(&root, &HashSet::new(), NOW);
 
         assert!(stamp.exists());
         assert!(stray.exists());
@@ -1170,7 +1523,7 @@ mod tests {
         let partial = root.join(hash_name(1));
         std::fs::create_dir_all(&partial).unwrap();
 
-        let report = sweep(&root, &HashSet::new(), 0, NOW);
+        let report = sweep(&root, &HashSet::new(), NOW);
 
         assert!(!partial.exists());
         assert_eq!(report.removed, vec![hash_name(1)]);
@@ -1186,7 +1539,7 @@ mod tests {
         std::fs::create_dir_all(root.join(&partial)).unwrap();
         let current: HashSet<String> = [partial.clone()].into_iter().collect();
 
-        let report = sweep(&root, &current, 0, NOW);
+        let report = sweep(&root, &current, NOW);
 
         assert!(root.join(&partial).exists());
         assert!(report.removed.is_empty());
@@ -1195,23 +1548,8 @@ mod tests {
     #[test]
     fn sweep_tolerates_a_missing_root() {
         let missing = tempdir().join("does-not-exist");
-        let report = sweep(&missing, &HashSet::new(), 0, NOW);
+        let report = sweep(&missing, &HashSet::new(), NOW);
         assert_eq!(report, SweepReport::default());
-    }
-
-    #[test]
-    fn budget_clamps_at_both_ends() {
-        // Floor: a tiny build still gets the minimum rather than being
-        // rationed to a few bytes.
-        assert_eq!(budget_for(0), MIN_CACHE_BUDGET);
-        assert_eq!(budget_for(1), MIN_CACHE_BUDGET);
-        // Mid-range: scales with the build.
-        let mid = MIN_CACHE_BUDGET * 4;
-        assert_eq!(budget_for(mid), mid * KEEP_RECENT as u64);
-        // Ceiling: an enormous build is capped, and can't overflow.
-        assert_eq!(budget_for(MAX_CACHE_BUDGET), MAX_CACHE_BUDGET);
-        assert_eq!(budget_for(u64::MAX / 2), MAX_CACHE_BUDGET);
-        assert_eq!(budget_for(u64::MAX), MAX_CACHE_BUDGET);
     }
 
     #[test]
@@ -1245,5 +1583,236 @@ mod tests {
         assert!(!is_hash_dir(&"g".repeat(64)));
         assert!(!is_hash_dir(SWEEP_STAMP));
         assert!(!is_hash_dir("app.jar"));
+    }
+
+    // --- The shared store -------------------------------------------------
+
+    /// A digest, and the hex name the cache stores it under.
+    fn digest_and_name(n: u8) -> ([u8; 32], String) {
+        let digest = [n; 32];
+        let name = hex_lower(&digest);
+        (digest, name)
+    }
+
+    /// An application's cache root inside a namespace.
+    fn app_root(namespace: &Path, company: &str, app: &str) -> PathBuf {
+        namespace.join(company).join(app)
+    }
+
+    /// A store entry of `size` bytes, last used `age` before [`NOW`].
+    fn store_entry(store: &Path, name: &str, size: usize, age: Duration) -> PathBuf {
+        let dir = store.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let jar = dir.join(CACHED_JAR_NAME);
+        std::fs::write(&jar, vec![b'x'; size]).unwrap();
+        touch_at(&jar, NOW - age);
+        dir
+    }
+
+    #[test]
+    fn two_applications_sharing_a_jar_hold_its_bytes_once() {
+        // The whole point of the store. Two applications built from the
+        // same library stack used to write the same JAR out twice; now
+        // the second one links to what the first one already wrote.
+        let dir = tempdir();
+        let store = dir.join("jars");
+        let (digest, _) = digest_and_name(7);
+        let bytes = b"PK\x03\x04 the same fat jar in two places".to_vec();
+
+        let first = cached_jar_path(&app_root(&dir, "Acme", "First"), &digest);
+        let second = cached_jar_path(&app_root(&dir, "Acme", "Second"), &digest);
+
+        ensure_cached_shared(Some(&store), &digest, &first, &bytes).unwrap();
+        ensure_cached_shared(Some(&store), &digest, &second, &bytes).unwrap();
+
+        assert_eq!(std::fs::read(&first).unwrap(), bytes);
+        assert_eq!(std::fs::read(&second).unwrap(), bytes);
+        assert!(
+            same_file(&first, &second),
+            "both applications must point at the same bytes"
+        );
+        assert_eq!(
+            std::fs::read(store_entry_path(&store, &digest)).unwrap(),
+            bytes,
+            "the store holds the bytes"
+        );
+    }
+
+    #[test]
+    fn a_truncated_application_entry_is_repaired_from_the_store() {
+        // The write that repairs a truncated entry replaces a directory
+        // entry. If that touched the store's copy, the two would drift
+        // apart and the bytes would be stored twice.
+        let dir = tempdir();
+        let store = dir.join("jars");
+        let (digest, _) = digest_and_name(9);
+        let bytes = b"PK\x03\x04 the whole fat jar, all of it".to_vec();
+
+        let dest = cached_jar_path(&app_root(&dir, "Acme", "App"), &digest);
+        ensure_cached_shared(Some(&store), &digest, &dest, &bytes).unwrap();
+
+        // Exactly the state an interrupted write leaves behind.
+        std::fs::write(&dest, &bytes[..10]).unwrap();
+
+        ensure_cached_shared(Some(&store), &digest, &dest, &bytes).unwrap();
+
+        assert_eq!(std::fs::read(&dest).unwrap(), bytes);
+        assert!(
+            same_file(&dest, &store_entry_path(&store, &digest)),
+            "the repaired entry must share the store's bytes, not copy them"
+        );
+    }
+
+    #[test]
+    fn an_existing_private_copy_is_adopted_rather_than_duplicated() {
+        // A cache written before the store existed holds a private copy
+        // of the JAR. Adopting it as the shared one costs a directory
+        // entry rather than the bytes, so the upgrade to the store does
+        // not double the space the cache already uses.
+        let dir = tempdir();
+        let store = dir.join("jars");
+        let (digest, _) = digest_and_name(11);
+        let bytes = b"PK\x03\x04 an older cache's own copy".to_vec();
+
+        let dest = cached_jar_path(&app_root(&dir, "Acme", "App"), &digest);
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        std::fs::write(&dest, &bytes).unwrap();
+
+        ensure_cached_shared(Some(&store), &digest, &dest, &bytes).unwrap();
+
+        assert!(
+            same_file(&dest, &store_entry_path(&store, &digest)),
+            "the existing copy must be adopted, not copied"
+        );
+    }
+
+    #[test]
+    fn without_a_store_the_application_keeps_its_own_copy() {
+        // The fallback for a relocated cache root: no store, so no link,
+        // and the application's own directory holds the only copy.
+        let dir = tempdir();
+        let (digest, _) = digest_and_name(17);
+        let bytes = b"PK\x03\x04 on its own".to_vec();
+
+        let dest = cached_jar_path(&app_root(&dir, "Acme", "App"), &digest);
+        ensure_cached_shared(None, &digest, &dest, &bytes).unwrap();
+
+        assert_eq!(std::fs::read(&dest).unwrap(), bytes);
+        assert!(
+            !dir.join("jars").exists(),
+            "no store is created without one"
+        );
+    }
+
+    #[test]
+    fn the_store_keeps_an_entry_an_application_still_points_at() {
+        // The rollback case. An application that has not run for a month
+        // still links its build's JARs, and those links are the only
+        // other copy of the bytes: deleting the store's copy would mean
+        // copying them again from the payload to get them back.
+        let dir = tempdir();
+        let store = dir.join("jars");
+        let (digest, _) = digest_and_name(13);
+
+        let dest = cached_jar_path(&app_root(&dir, "Acme", "App"), &digest);
+        ensure_cached_shared(Some(&store), &digest, &dest, b"payload").unwrap();
+
+        // Age the shared file past the horizon, as a month without
+        // running the application would.
+        touch_at(&dest, NOW - Duration::from_secs(40 * 24 * 3600));
+
+        let report = sweep_store(&store, NOW);
+
+        assert!(
+            store_entry_path(&store, &digest).exists(),
+            "a referenced entry must survive the age limit"
+        );
+        assert!(report.removed.is_empty());
+    }
+
+    #[test]
+    fn the_store_ages_out_an_entry_nothing_points_at() {
+        let dir = tempdir();
+        let store = dir.join("jars");
+        let (_, name) = digest_and_name(15);
+        let entry = store_entry(&store, &name, 32, Duration::from_secs(40 * 24 * 3600));
+
+        let report = sweep_store(&store, NOW);
+
+        assert!(!entry.exists(), "an unreferenced entry must be reclaimed");
+        assert_eq!(report.bytes_freed, 32);
+    }
+
+    #[test]
+    fn the_store_keeps_a_recently_used_entry() {
+        let dir = tempdir();
+        let store = dir.join("jars");
+        let (_, name) = digest_and_name(19);
+        let entry = store_entry(&store, &name, 32, Duration::from_secs(29 * 24 * 3600));
+
+        let report = sweep_store(&store, NOW);
+
+        assert!(entry.exists(), "a recent entry must survive");
+        assert_eq!(report.kept, 1);
+        assert!(report.removed.is_empty());
+    }
+
+    #[test]
+    fn the_store_sweep_tolerates_a_missing_store() {
+        let missing = tempdir().join("no-store");
+        let report = sweep_store(&missing, NOW);
+        assert_eq!(report, SweepReport::default());
+    }
+
+    #[test]
+    fn should_sweep_store_rate_limits_repeat_calls() {
+        // The store is shared by every application, so its rate limit is
+        // a machine-wide one rather than one per application.
+        let store = tempdir().join("jars");
+        assert!(should_sweep_store(&store, NOW), "first call should run");
+        assert!(
+            !should_sweep_store(&store, NOW + HOUR),
+            "a second call within the interval must be skipped"
+        );
+        assert!(
+            should_sweep_store(&store, NOW + SWEEP_INTERVAL + HOUR),
+            "a call past the interval should run"
+        );
+    }
+
+    #[test]
+    fn the_store_sits_in_the_snug_namespace() {
+        let store = store_root(None).expect("the platform always has a base");
+        assert_eq!(store.file_name().unwrap(), STORE_SUBDIR);
+        assert_eq!(store.parent().unwrap().file_name().unwrap(), SNUG_SUBDIR);
+    }
+
+    #[test]
+    fn an_overridden_cache_root_disables_the_store() {
+        // A hard link only works within one volume, and an override may
+        // well point at another one. The store is switched off rather
+        // than silently costing a second copy on a different disk.
+        assert!(store_root(Some(Path::new("/somewhere/else"))).is_none());
+    }
+
+    #[test]
+    fn the_store_probes_for_hard_links() {
+        // A filesystem that cannot link gets no store at all, rather
+        // than a store that copies the JAR again on every launch
+        // because the two copies would never be the same file.
+        let dir = tempdir();
+        assert!(
+            probe_hard_links(&dir),
+            "an ordinary filesystem has hard links"
+        );
+        assert!(
+            probe_hard_links(&dir.join("not-created-yet")),
+            "the probe creates the directory it needs"
+        );
+        assert!(
+            staging_files(&dir).is_empty(),
+            "the probe must not leave its files behind: {:?}",
+            staging_files(&dir)
+        );
     }
 }

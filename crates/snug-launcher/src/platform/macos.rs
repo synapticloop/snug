@@ -188,13 +188,12 @@ pub fn run(self_path: &Path, embedded: &SnugEmbedded) -> Result<u32, LauncherErr
         let root = cache_root.clone();
         let current: std::collections::HashSet<String> =
             jars.iter().map(|j| cache::hex_lower(&j.sha256)).collect();
-        let build_bytes: u64 = jars.iter().map(|j| j.bytes.len() as u64).sum();
         std::thread::spawn(move || {
             let now = std::time::SystemTime::now();
             if !cache::should_sweep(&root, now) {
                 return;
             }
-            let report = cache::sweep(&root, &current, build_bytes, now);
+            let report = cache::sweep(&root, &current, now);
             log::log(&format!(
                 "cache sweep: kept {}, removed {} ({} MB), {} error(s)",
                 report.kept,

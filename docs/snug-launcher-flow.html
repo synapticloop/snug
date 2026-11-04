@@ -151,7 +151,7 @@ flowchart TD
   Scan --> Decode
 
   Decode["<b>decode payload</b> postcard<br/>localize::init bundles"] --> CacheStep
-  CacheStep["<b>cache::ensure_cached</b><br/>extract every JAR to<br/>%LOCALAPPDATA%\snug\CO\APP\SHA256\app.jar"] -->|io error| E_Io
+  CacheStep["<b>cache::ensure_cached_shared</b><br/>extract every JAR to<br/>%LOCALAPPDATA%\snug\CO\APP\SHA256\app.jar<br/>(hard link to snug\jars\SHA256\)"] -->|io error| E_Io
   CacheStep --> LogStep
   LogStep["<b>log::init</b><br/>open snug.log next to JAR<br/>(best-effort)"] --> MainClassStep
 
@@ -332,7 +332,8 @@ flowchart TD
 
   <h2>Quick reference</h2>
   <ul>
-    <li><strong>JAR cache:</strong> <code>%LOCALAPPDATA%\snug\<company>\<app>\<jar-sha256>\app.jar</code></li>
+    <li><strong>JAR cache:</strong> <code>%LOCALAPPDATA%\snug\&lt;company&gt;\&lt;app&gt;\&lt;jar-sha256&gt;\app.jar</code></li>
+    <li><strong>Shared JAR store:</strong> <code>%LOCALAPPDATA%\snug\jars\&lt;jar-sha256&gt;\app.jar</code> &mdash; one copy of each distinct JAR; an application's entry is a hard link to it.</li>
     <li><strong>JDK install root:</strong> <code>%LOCALAPPDATA%\snug\jdk\<version>\</code></li>
     <li><strong>Per-launch log:</strong> <code>%LOCALAPPDATA%\snug\<company>\<app>\<jar-sha256>\snug.log</code></li>
     <li><strong>Payload storage:</strong> <code>SNUGEMBD</code> magic + u16 version + u32 length + u32 CRC32 + postcard bytes &mdash; stored as <code>RT_RCDATA</code> resource, not binary overlay.</li>
