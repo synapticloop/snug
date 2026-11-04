@@ -815,6 +815,24 @@ by accident.
   `refresh-stub.ps1` and `build.cmd` (via `scripts\windows\cargo-repro.ps1`)
   set it, so the two agree by construction rather than by convention. Build
   the stub with one of those two, never with bare cargo.
+- **The stub is a function of the build *scope* as well as the source.** The
+  note above says two builds of the same version are byte-identical once the
+  link timestamp, checksum and RSDS record are normalised. That holds for two
+  builds of the same *scope*, and the scope has to be named, because a
+  whole-workspace `cargo build --release` and
+  `cargo build --release -p snug-launcher` produce two different binaries
+  from identical source. Measured here: 750,739 of 1,148,928 bytes differ —
+  65% of the file — and the difference is purely *link layout*. Every string
+  extracted from the two images matches; they are simply laid out in a
+  different order. The launcher source fingerprint cannot see this, because
+  the source genuinely has not moved, so `check-stub-pair.ps1` passes for
+  both. The symptom is `refresh-stub.ps1 -CheckOnly` reporting the committed
+  stub as out of date, and `build.cmd` rewriting
+  `bin\launcher-stub-windows-x86_64.exe` on every release run because it
+  copies its own launcher over the committed one. So: build the stub with
+  `refresh-stub.ps1` or `build.cmd`, both of which select `-p snug-launcher`,
+  and treat a whole-workspace `cargo build` as a *different* build for this
+  purpose even though it produced a perfectly working launcher.
 - **Default increment is the micro (patch) number:**
   `0.2.0` → `0.2.1` → `0.2.2`. Use this for fixes, copy changes,
   refactors, and anything that doesn't alter the CLI surface or the
