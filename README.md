@@ -40,6 +40,8 @@ You need the Windows `snug.exe` builder and a runnable Java JAR. To try Snug wit
 
 The executable contains your Java application and the native launcher. On first launch, Snug can offer to download a compatible Java runtime if one is not already available.
 
+> **In a hurry?** Each release also ships `snug-javafx-demo-windows.exe` beside the demo JAR — the same demo, already built by snug. Download it from [GitHub Releases](https://github.com/synapticloop/snug/releases) and double-click it; there is no build step to run.
+
 <div align="center">
 
 <img src="assets/snug-javafx-demo-screenshot.png" alt="The Snug JavaFX demo application" width="302">

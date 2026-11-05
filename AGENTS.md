@@ -277,8 +277,8 @@ The *binary name is always `snug`*; the platform lives in the directory:
 
 ```text
 release/
-├── windows-x86_64/            # snug.exe, Snug Quick Build.exe, snug_preview.exe, demo JAR, licences
-│   └── github/                # the release archive, and a copy of the demo JAR
+├── windows-x86_64/            # snug.exe, Snug Quick Build.exe, snug_preview.exe, demo JAR, demo EXE, licences
+│   └── github/                # the release archive, the demo JAR and the demo EXE
 ├── macos-arm64/snug
 └── macos-x86_64/snug
 ```
@@ -300,10 +300,11 @@ the documentation never has to name two different binaries. `arm64` is
 listing will recognise — the Rust target is spelled `aarch64`.
 
 The `github/` folder inside the Windows tree is what a release consists
-of: the ZIP a user downloads, and the demo JAR beside it. The archive's
-inner folder is always `snug`, so the same convention applies one level
-up — the platform lives in the *file* name
-(`snug-<version>-windows-x86_64.zip`), never in the folder inside.
+of: the ZIP a user downloads, and the demo beside it — the JAR it was built
+from, and the EXE snug made out of that JAR. The archive's inner folder is
+always `snug`, so the same convention applies one level up — the platform
+lives in the *file* name (`snug-<version>-windows-x86_64.zip`), never in the
+folder inside.
 
 **Windows uses the same convention.** `build.cmd` stages into
 `release\windows-x86_64\`, derived from the same `TARGET_ARCH` the cargo
@@ -425,7 +426,7 @@ lookup. Both docs used to describe the appended layout; neither matched
 | 7 | Per-user cache + old-version cleanup           | **done** — cache entries expire. `cache::touch` stamps a cached JAR's mtime on **every** launch that uses it, and `cache::sweep` runs off a detached thread (rate-limited to once per 6h by a `.sweep` stamp file) to delete the ones no longer wanted. **The application's own root holds one generation**: the running build's JARs and nothing else, so a rebuild does not leave a second copy of the application on disk. The running build's entries count toward that depth, and they are counted *before* the newest-first scan rather than as it reaches them — a rebuild's digest is not the newest, and counting in scan order made the depth depend on a timestamp. **A shared store sits beside those roots** at `<base>\snug\jars\<sha256>\app.jar`: one copy of each distinct JAR, and an application's entry is a *hard link* to it, so two applications built from the same library stack hold the bytes once between them. The link degrades to a copy on a filesystem without hard links (FAT32, exFAT), and the store is switched off entirely when `--cache-dir` relocates the cache root — a link cannot cross a volume, and the store would then be a second copy on a different disk. **The store is Windows-only for now**: `platform/macos.rs` still carries its own truncate-in-place `ensure_cached` and does not link to the store, so a macOS launcher keeps a private copy per application until that platform adopts the shared helper. The *retention* change is not platform-specific, though — `KEEP_RECENT` is one everywhere, because it lives in the shared module. **The store's retention is by reference and by age**: `cache::sweep_store` keeps an entry while any application's root still points at it, and otherwise evicts it after `MAX_UNUSED_AGE` (30 days) without a use. It has *no byte ceiling*: a ceiling measured over the store's own entries would free nothing, because a linked application's copy keeps the bytes alive, and it would evict precisely the shared libraries that make the store worth having. Everything is recoverable because a missing entry is re-extracted from the payload on the next launch. Sweeping is *not* triggered by the builder — `snug-cli` never writes to the cache, so the launcher is the sole owner of the policy. |
 | 8 | GitHub Actions CI (windows-latest release)     | planned    |
 | 9 | `Snug Quick Build` beginner drag-and-drop shim   | **done** — separate `crates/snug-dropper` crate. Drop a `.jar` or a folder of JARs on `Snug Quick Build.exe` and it runs `snug.exe --name "Example Application Name" --company "Example Company Pty Ltd" -o "<parent>/Example Application Name.exe" <input>` behind an indeterminate marquee on a worker thread, then reports with a `MessageBoxW`. Double-click opens a command window in the EXE's own folder. Two or more items, or one item that is neither a `.jar` nor a directory, get a dialog and *then* the terminal as a hand-off. A build failure or a missing `snug.exe` gets an error dialog and **no** terminal. Built as `snug-dropper.exe`; renamed to `Snug Quick Build.exe` at packaging time. Must ship in the same folder as `snug.exe`. |
-| 10 | Native macOS / Linux `snug` CLI builds    | **done** — `cargo build --workspace` and `cargo test --workspace --lib --bins --tests` pass on macOS, and the CLI produces a real `PE32+ executable (GUI) x86-64` end-to-end from a Mac. The count is a **Windows** measurement, and it is not platform-independent: the suite is pure Rust, but `platform/windows.rs` and `prompt_window.rs` are Windows-gated while `appkit.rs` is macOS-gated, so each platform compiles a different set of tests. A Windows run reports **669 passed, 2 ignored** (measured on Windows at 0.17.5). Treat that number as a pinned checkpoint rather than a fact to restate: it moved four times in the week this line was written at 495, and every bump of it is a line edit here rather than a fact someone re-derived. `scripts/macos/build-macos.sh` stages two thin per-arch binaries into `release/macos-arm64/snug` and `release/macos-x86_64/snug` at a macOS 12.0 deployment floor — same binary name on every platform, platform in the directory, so docs never name two binaries. No universal2: macOS 27 is the last release with Rosetta 2, so arm64 is the future-proof slice and x86_64 only serves the four Intel models that top out at macOS 26. Windows-only surfaces are gated: the six Win32 GUI modules in `snug-launcher` use file-level `#![cfg(windows)]` (joining `jdk_install.rs` / `splash.rs`), while the three Windows-only *binaries* use per-item `#[cfg(windows)]` plus a real non-Windows `main`. `editpe` was made unconditional (pure-Rust PE parsing — `snug-cli` needs it to build EXEs anywhere) and `ureq` Windows-only. Homebrew tap / Developer ID notarization is follow-up; see "Build host". |
+| 10 | Native macOS / Linux `snug` CLI builds    | **done** — `cargo build --workspace` and `cargo test --workspace --lib --bins --tests` pass on macOS, and the CLI produces a real `PE32+ executable (GUI) x86-64` end-to-end from a Mac. The count is a **Windows** measurement, and it is not platform-independent: the suite is pure Rust, but `platform/windows.rs` and `prompt_window.rs` are Windows-gated while `appkit.rs` is macOS-gated, so each platform compiles a different set of tests. A Windows run reports **670 passed, 2 ignored** (measured on Windows at 0.17.6). Treat that number as a pinned checkpoint rather than a fact to restate: it moved four times in the week this line was written at 495, and every bump of it is a line edit here rather than a fact someone re-derived. `scripts/macos/build-macos.sh` stages two thin per-arch binaries into `release/macos-arm64/snug` and `release/macos-x86_64/snug` at a macOS 12.0 deployment floor — same binary name on every platform, platform in the directory, so docs never name two binaries. No universal2: macOS 27 is the last release with Rosetta 2, so arm64 is the future-proof slice and x86_64 only serves the four Intel models that top out at macOS 26. Windows-only surfaces are gated: the six Win32 GUI modules in `snug-launcher` use file-level `#![cfg(windows)]` (joining `jdk_install.rs` / `splash.rs`), while the three Windows-only *binaries* use per-item `#[cfg(windows)]` plus a real non-Windows `main`. `editpe` was made unconditional (pure-Rust PE parsing — `snug-cli` needs it to build EXEs anywhere) and `ureq` Windows-only. Homebrew tap / Developer ID notarization is follow-up; see "Build host". |
 | 11 | macOS launcher runtime (`libjvm.dylib` + JNI) | **done, verified against a real JDK on macOS.** `platform/macos.rs` mirrors `platform/windows.rs` step for step: cache extraction + sweep, log, `Main-Class` resolution, JVM discovery, `libjvm.dylib` load via the same `jni` 0.22 invocation API, and the `main(String[])` / JavaFX `Application.launch` dispatch. `tests/macos_launch_e2e.rs` compiles a real class with `javac`, packages it with `jar`, hands it to the launcher, and asserts the JVM actually runs it — it is skipped rather than failed when no JDK is present. **Not implemented:** splash, the Adoptium download flow, and error dialogs (all Win32); `DownloadJdkMode::Auto`/`Force` degrade to discovery-only and *log* that. |
 | 12 | macOS `.app` bundle emitter | **done, verified by launching a real bundle.** The output extension selects the artefact: `-o MyApp.app` builds a macOS bundle, `-o MyApp.exe` a Windows one, and the *default* is the host's own — `snug app.jar` with no `-o` gives `app.app` on macOS and `app.exe` elsewhere. `macos_bundle.rs` writes `Contents/{Info.plist,MacOS/<App>,Resources/<App>.snugpayload,Resources/App.icns}` and ad-hoc signs it. The launcher is a **byte-copy** — unlike the Windows stub there is nothing to stamp, because a Mach-O has no resource directory and `editpe` is PE-only. `bin/launcher-stub-macos-<arch>` is embedded per `#[cfg(target_arch)]`, so each `snug` binary carries one launcher and can only build a `.app` for its own arch. |
 | 13 | macOS Adoptium JDK download | **the flow works; the dialogs do not exist yet.** `jdk_install.rs` now compiles on macOS. `adoptium_target()` sends this host's `os`/`architecture` in Adoptium's own spelling, macOS assets unpack as `.tar.gz` (via `tar` + `flate2`), `find_java_home` understands the `*.jdk/Contents/Home` bundle and `bin/java`, and `open_in_browser` uses `/usr/bin/open`. Verified live: the query returns the correct `x64_mac_hotspot` asset, and the tarball/extraction path is covered by tests that build a real `.tar.gz` in Adoptium's shape. **Still Win32:** the splash, the download dialogs, and the error dialog — so `Auto` logs that it has nothing to ask with and falls back to discovery, while `Force` downloads and logs its progress. See the Backlog for the AppKit route. |
@@ -1919,14 +1920,18 @@ by accident.
     iterating on an icon was broken.
   - **`release\` is the shipping folder, and it ignores itself.**
     `build.cmd` step 10 stages `snug.exe`,
-    `Snug Quick Build.exe`, `snug_preview.exe` and
-    `snug-javafx-demo-windows.jar` in there; the nested `.gitignore` hides
-    everything but itself, so a fresh clone has the directory and the
-    rules without a single artefact. The two shipping EXEs are staged
-    *together* on purpose — same co-location invariant as step 7, now
-    enforced at the shipping boundary. The demo JAR is there so someone
-    can try the whole drop-a-JAR flow before writing a JAR of their
-    own, which is the entire pitch of the tool.
+    `Snug Quick Build.exe`, `snug_preview.exe`,
+    `snug-javafx-demo-windows.jar` and `snug-javafx-demo-windows.exe` in
+    there; the nested `.gitignore` hides everything but itself, so a fresh
+    clone has the directory and the rules without a single artefact. The two
+    shipping EXEs are staged *together* on purpose — same co-location
+    invariant as step 7, now enforced at the shipping boundary. The demo JAR
+    is there so someone can try the whole drop-a-JAR flow before writing a
+    JAR of their own, which is the entire pitch of the tool; the demo EXE
+    beside it is what snug made out of that JAR, so a reader can see the
+    result without running anything. It comes from step 4, so
+    `--SkipPackage` leaves it unbuilt — which also skips the archive, since
+    one without it would offer half a sample.
     `snug_preview.exe` is a dev tool and ships anyway: it is how you
     look at snug's dialogs and error copy without building and
     launching an app. It comes from step 7, so `--SkipDevTools` leaves
@@ -1940,8 +1945,9 @@ by accident.
 - **The release archive is written by the `zip` crate, not by
   `Compress-Archive`.** Step 11 puts a versioned ZIP in
   `release\windows-<arch>\github\`, holding `snug.exe`, `snug_preview.exe`
-  and the `Snug Quick Build` shim under a `snug\` folder, with a copy of
-  the demo JAR beside it. Both of PowerShell's zip routes write
+  and the `Snug Quick Build` shim under a `snug\` folder, with the demo
+  beside it — the JAR it was built from, and the EXE snug made out of it.
+  Both of PowerShell's zip routes write
   **backslash** entry names — `Compress-Archive -Path <dir>` and
   `[System.IO.Compression.ZipFile]::CreateFromDirectory(<dir>, <zip>,
   ..., $true)` both produce `snug\snug.exe` — and the ZIP appnote requires

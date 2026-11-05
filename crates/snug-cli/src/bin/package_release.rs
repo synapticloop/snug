@@ -2,8 +2,9 @@
 //!
 //! `scripts\windows\build.cmd` stages the shipping artefacts into
 //! `release\windows-x86_64\`: `snug.exe`, the `Snug Quick Build.exe` shim,
-//! the `snug_preview.exe` dialog preview and the demo JAR. That folder is
-//! the *build output*; what a user downloads is one archive.
+//! the `snug_preview.exe` dialog preview, the demo JAR and the demo EXE
+//! snug built out of it. That folder is the *build output*; what a user
+//! downloads is one archive.
 //!
 //! ## The archive's shape
 //!
@@ -43,10 +44,12 @@
 //!
 //! ## What is deliberately not in the archive
 //!
-//! The demo JAR is copied *beside* the archive rather than into it, so a
-//! release page can offer the application and the sample separately. It is
-//! also the one payload that does not belong to someone who is here to
-//! *build* an app.
+//! The demo is copied *beside* the archive rather than into it — both halves
+//! of it: the JAR the sample was built from, and the EXE snug made out of
+//! that JAR. A release page can therefore offer the application and the
+//! sample separately, and the reader can see what snug *produces* without
+//! having to run anything to find out. They are also the payloads that do
+//! not belong to someone who is here to *build* an app.
 //!
 //! ## Verification
 //!
@@ -117,11 +120,19 @@ const SHIPPED: &[&str] = &[
 
 /// Copied *beside* the archive rather than into it.
 ///
-/// The name carries the platform because the demo JAR does: the JavaFX
-/// demo's native libraries are per-platform (`glass.dll` vs
-/// `libglass.dylib`), which is why `snug.windows.options` and
-/// `snug.macos.options` name different inputs for the same demo.
-const SIDECAR: &str = "snug-javafx-demo-windows.jar";
+/// Two files, and they are two halves of one story: the demo JAR is the
+/// sample application, and the EXE is what snug made out of it. The release
+/// page offers the archive, the sample and the sample's built result, so
+/// someone can see what the tool does before they run it.
+///
+/// The names carry the platform because the demo does: the JavaFX demo's
+/// native libraries are per-platform (`glass.dll` vs `libglass.dylib`),
+/// which is why `snug.windows.options` and `snug.macos.options` name
+/// different inputs for the same demo.
+const SIDECARS: &[&str] = &[
+    "snug-javafx-demo-windows.jar",
+    "snug-javafx-demo-windows.exe",
+];
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -230,12 +241,18 @@ fn run(opts: &Options) -> Result<()> {
             );
         }
     }
-    let sidecar_source = source.join(SIDECAR);
-    if !sidecar_source.is_file() {
-        bail!(
-            "`{}` is missing from the staged tree",
-            sidecar_source.display()
-        );
+    // The demo is a release asset in its own right, so it is required the
+    // same way the shipping artefacts are. A *half* offer — the JAR without
+    // the EXE, or the reverse — reads as a packaging bug on the release page
+    // rather than as a decision, so the packager refuses to build one.
+    for name in SIDECARS {
+        let path = source.join(name);
+        if !path.is_file() {
+            bail!(
+                "`{}` is missing from the staged tree — the release would ship without the demo",
+                path.display()
+            );
+        }
     }
 
     let out_dir = source.join(OUT_DIR);
@@ -244,19 +261,24 @@ fn run(opts: &Options) -> Result<()> {
     let zip_path = out_dir.join(format!("snug-{VERSION}-{}.zip", opts.tag));
 
     write_archive(&zip_path, source)?;
-    let sidecar_path = out_dir.join(SIDECAR);
-    copy_sidecar(&sidecar_source, &sidecar_path)?;
+    for name in SIDECARS {
+        copy_sidecar(&source.join(name), &out_dir.join(name))?;
+    }
 
     // Read the archive back. The write path is not evidence.
     verify_archive(&zip_path, source)?;
-    verify_sidecar(&sidecar_source, &sidecar_path)?;
+    for name in SIDECARS {
+        verify_sidecar(&source.join(name), &out_dir.join(name))?;
+    }
 
     println!("package_release: {}", zip_path.display());
     println!("  entries:");
     for name in SHIPPED {
         println!("    {ROOT}/{name}");
     }
-    println!("  sidecar: {}", sidecar_path.display());
+    for name in SIDECARS {
+        println!("  sidecar: {}", out_dir.join(name).display());
+    }
     println!(
         "  archive: {} bytes, sha256 {}",
         fs::metadata(&zip_path)
@@ -305,7 +327,7 @@ fn write_archive(zip_path: &Path, source: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Copy the demo JAR beside the archive.
+/// Copy a demo file beside the archive.
 fn copy_sidecar(from: &Path, to: &Path) -> Result<()> {
     fs::copy(from, to)
         .with_context(|| format!("copying `{}` to `{}`", from.display(), to.display()))?;
@@ -377,7 +399,7 @@ fn verify_archive(zip_path: &Path, source: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Prove the copied sidecar is the file it claims to be.
+/// Prove a copied demo file is the file it claims to be.
 fn verify_sidecar(from: &Path, to: &Path) -> Result<()> {
     let original = fs::read(from).with_context(|| format!("reading `{}`", from.display()))?;
     let copied = fs::read(to).with_context(|| format!("reading `{}`", to.display()))?;
@@ -484,7 +506,9 @@ mod tests {
         fs::write(dir.join("snug.exe"), b"snug cli").expect("snug.exe");
         fs::write(dir.join("snug_preview.exe"), b"preview").expect("preview");
         fs::write(dir.join("Snug Quick Build.exe"), b"dropper").expect("dropper");
-        fs::write(dir.join(SIDECAR), b"demo jar").expect("sidecar");
+        for name in SIDECARS {
+            fs::write(dir.join(name), format!("demo: {name}").as_bytes()).expect("sidecar");
+        }
         for name in ["LICENSE", "LICENSE-MIT", "LICENSE-APACHE", "NOTICE"] {
             fs::write(dir.join(name), name.as_bytes()).expect(name);
         }
@@ -527,11 +551,12 @@ mod tests {
         );
     }
 
-    /// The demo JAR travels beside the archive, not inside it. It is the
-    /// one payload that does not belong to someone here to build an app,
-    /// and a release page can offer the two separately.
+    /// The demo travels beside the archive, not inside it — both halves of
+    /// it: the JAR the sample was built from, and the EXE snug made out of
+    /// that JAR. They are the payloads that do not belong to someone here
+    /// to build an app, and a release page can offer the two separately.
     #[test]
-    fn the_demo_jar_is_copied_beside_the_archive_and_not_into_it() {
+    fn the_demo_travels_beside_the_archive_and_not_into_it() {
         let dir = scratch("sidecar");
         staged_tree(&dir);
 
@@ -541,22 +566,48 @@ mod tests {
         };
         run(&opts).expect("packaging should succeed");
 
-        let copied = dir.join(OUT_DIR).join(SIDECAR);
-        assert!(copied.is_file(), "the demo JAR should be copied");
-        assert_eq!(
-            fs::read(&copied).expect("read copied"),
-            fs::read(dir.join(SIDECAR)).expect("read staged"),
-            "the copied JAR should be byte-identical to the staged one"
-        );
+        for name in SIDECARS {
+            let copied = dir.join(OUT_DIR).join(name);
+            assert!(
+                copied.is_file(),
+                "{name} should be copied beside the archive"
+            );
+            assert_eq!(
+                fs::read(&copied).expect("read copied"),
+                fs::read(dir.join(name)).expect("read staged"),
+                "the copied {name} should be byte-identical to the staged one"
+            );
+        }
 
         let zip_path = dir
             .join(OUT_DIR)
             .join(format!("snug-{VERSION}-windows-x86_64.zip"));
         let file = File::open(&zip_path).expect("open");
         let archive = ZipArchive::new(file).expect("read");
+        for name in SIDECARS {
+            assert!(
+                !archive.file_names().any(|n| n.ends_with(name)),
+                "the demo `{name}` should not be inside the archive"
+            );
+        }
+    }
+
+    /// A missing demo file must stop the build rather than produce a
+    /// release that quietly offers half a sample.
+    #[test]
+    fn a_missing_demo_file_fails_the_build() {
+        let dir = scratch("missing-demo");
+        staged_tree(&dir);
+        fs::remove_file(dir.join("snug-javafx-demo-windows.exe")).expect("remove");
+
+        let opts = Options {
+            source: dir.clone(),
+            tag: "windows-x86_64".into(),
+        };
+        let err = run(&opts).expect_err("a missing demo should fail");
         assert!(
-            !archive.file_names().any(|n| n.ends_with(".jar")),
-            "the demo JAR should not be inside the archive"
+            err.to_string().contains("snug-javafx-demo-windows.exe"),
+            "the error should name the missing file, got: {err}"
         );
     }
 

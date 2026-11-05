@@ -47,16 +47,19 @@ REM   9. Verify each EXE's MAINICON really is the PNG it was stamped with
 REM      (verify_icons; pixel-exact, plus a check for orphan RT_ICON entries
 REM      left behind by an earlier stamp).
 REM  10. Stage release\: the EXEs a user runs (snug, Snug Quick Build, and
-REM      the snug_preview dialog preview) plus the demo JAR, so someone can
-REM      try the whole drop-a-JAR flow before building a JAR of their own.
+REM      the snug_preview dialog preview) plus the demo JAR and the demo EXE
+REM      snug built out of it, so someone can try the whole drop-a-JAR flow
+REM      before building a JAR of their own - and see what the result looks
+REM      like without having to build anything.
 REM      They land in release\windows-<arch>\ - the same <os>-<arch>
 REM      convention build-macos.sh stages macos-arm64/ and macos-x86_64/
 REM      into. release\ ignores its own contents, so nothing here is
 REM      tracked. Skip with --SkipRelease.
 REM  11. Package the release archive. release\windows-<arch>\github\ holds
 REM      the ZIP a user downloads - snug.exe, snug_preview.exe and the
-REM      Snug Quick Build shim, all under a snug\ folder inside it - plus a
-REM      copy of the demo JAR beside it. Written by the zip crate
+REM      Snug Quick Build shim, all under a snug\ folder inside it - plus the
+REM      demo beside it: the JAR it was built from and the EXE snug made out
+REM      of it. Written by the zip crate
 REM      (crates\snug-cli\src\bin\package_release.rs), not by
 REM      Compress-Archive: the PowerShell cmdlets write backslash entry
 REM      names, which a POSIX extractor reads as one filename containing a
@@ -68,7 +71,12 @@ REM
 REM Flags:
 REM     --SkipLauncherRebuild   Skip steps 1+2 (stub unchanged from prior build).
 REM                             --CrossCompile is also ignored in this case.
-REM     --SkipPackage           Skip step 4 (build launcher + CLI only).
+REM     --SkipPackage           Skip step 4 (package the demo JAR into the demo
+REM                             EXE). The EXE is a release asset, so this also
+REM                             skips step 11: a run that does not rebuild the
+REM                             demo cannot produce a complete release, and a
+REM                             stale demo shipped in an archive is worse than
+REM                             no archive.
 REM     --SkipVerify            Skip steps 5 and 9 (the embedded-stub sha256
 REM                             check and the icon provenance check). Both are
 REM                             post-build assertions over artefacts that are
@@ -608,10 +616,10 @@ REM ---------------------------------------------------------------------------
 REM 10. Stage the release directory.
 REM
 REM    release\windows-x86_64\ is the folder a user unpacks: snug.exe, the
-REM    Snug Quick Build shim, the snug_preview dialog preview, and the demo
+REM    Snug Quick Build shim, the snug_preview dialog preview, the demo
 REM    JAR so the whole drop-a-JAR flow can be tried before writing a JAR of
-REM    their own. The directory ignores its own contents, so nothing in it
-REM    is tracked.
+REM    their own, and the demo EXE snug built out of that JAR. The directory
+REM    ignores its own contents, so nothing in it is tracked.
 REM
 REM    The <os>-<arch> subdirectory is the same convention
 REM    scripts/build-macos.sh uses for release/macos-arm64/ and
@@ -658,6 +666,13 @@ call :stage "!BUILT_PREVIEW_EXE!" "snug_preview.exe"
 if errorlevel 1 exit /b 1
 call :stage "!DEMO_JAR!" "snug-javafx-demo-windows.jar"
 if errorlevel 1 exit /b 1
+REM The demo EXE is what snug made out of the demo JAR: the sample, already
+REM built. It is staged beside the JAR so the release can offer the sample
+REM and the sample's built result, which is the only way a reader can see
+REM what snug produces without running anything. Built in step 4, so
+REM --SkipPackage leaves it unbuilt and :stage warns rather than aborting.
+call :stage "!DEMO_EXE!" "snug-javafx-demo-windows.exe"
+if errorlevel 1 exit /b 1
 REM The licence texts ship with the binaries. MIT requires its notice in
 REM "all copies or substantial portions of the Software", and Apache-2.0
 REM section 4(a) requires a copy of the licence to accompany
@@ -685,7 +700,8 @@ REM ---------------------------------------------------------------------------
 REM 11. Package the release archive.
 REM
 REM    release\windows-x86_64\github\ holds what a release consists of: the
-REM    ZIP a user downloads, and a copy of the demo JAR beside it.
+REM    ZIP a user downloads, and the demo beside it - the JAR it was built
+REM    from and the EXE snug made out of it.
 REM
 REM    The ZIP's shape is
 REM
@@ -717,9 +733,10 @@ REM    folder. The packager also reads its own output back and compares
 REM    every entry against the staged file it came from, so a zip that
 REM    quietly lost a file does not ship.
 REM
-REM    The archive is skipped when the staged tree is partial. --SkipDropper
-REM    and --SkipDevTools leave a shipping artefact out of the tree, and an
-REM    archive missing one of them is worse than no archive at all.
+REM    The archive is skipped when the staged tree is partial. --SkipDropper,
+REM    --SkipDevTools and --SkipPackage leave a shipping artefact out of the
+REM    tree, and an archive missing one of them is worse than no archive at
+REM    all.
 REM ---------------------------------------------------------------------------
 
 REM Why the archive is skipped, if it is. Computed before the branch so the
@@ -729,6 +746,7 @@ if "!SKIP_ARCHIVE!"=="1" set "ARCHIVE_SKIP_REASON=--SkipArchive was given"
 if "!SKIP_RELEASE!"=="1" set "ARCHIVE_SKIP_REASON=--SkipRelease was given, so nothing was staged"
 if "!SKIP_DROPPER!"=="1" set "ARCHIVE_SKIP_REASON=--SkipDropper was given, so Snug Quick Build.exe is not in the tree"
 if "!SKIP_DEV_TOOLS!"=="1" set "ARCHIVE_SKIP_REASON=--SkipDevTools was given, so snug_preview.exe is not in the tree"
+if "!SKIP_PACKAGE!"=="1" set "ARCHIVE_SKIP_REASON=--SkipPackage was given, so the demo EXE was not rebuilt"
 
 if not "!ARCHIVE_SKIP_REASON!"=="" goto skip_archive
 
@@ -768,6 +786,7 @@ for %%I in ("!STAGE_DIR!\snug.exe")               do ( if exist "!STAGE_DIR!\snu
 for %%I in ("!STAGE_DIR!\!DROPPER_SHIPPED!")     do ( if exist "!STAGE_DIR!\!DROPPER_SHIPPED!" echo     !DROPPER_SHIPPED!:   !STAGE_DIR!\!DROPPER_SHIPPED! ^(%%~zI bytes^) )
 for %%I in ("!STAGE_DIR!\snug_preview.exe")      do ( if exist "!STAGE_DIR!\snug_preview.exe" echo     snug_preview.exe        !STAGE_DIR!\snug_preview.exe ^(%%~zI bytes^) )
 for %%I in ("!STAGE_DIR!\snug-javafx-demo-windows.jar") do ( if exist "!STAGE_DIR!\snug-javafx-demo-windows.jar" echo     snug-javafx-demo-windows.jar !STAGE_DIR!\snug-javafx-demo-windows.jar ^(%%~zI bytes^) )
+for %%I in ("!STAGE_DIR!\snug-javafx-demo-windows.exe") do ( if exist "!STAGE_DIR!\snug-javafx-demo-windows.exe" echo     snug-javafx-demo-windows.exe !STAGE_DIR!\snug-javafx-demo-windows.exe ^(%%~zI bytes^) )
 for %%I in ("!STAGE_DIR!\LICENSE")           do ( if exist "!STAGE_DIR!\LICENSE" echo     LICENSE                   !STAGE_DIR!\LICENSE ^(%%~zI bytes^) )
 for %%I in ("!STAGE_DIR!\LICENSE-MIT")       do ( if exist "!STAGE_DIR!\LICENSE-MIT" echo     LICENSE-MIT               !STAGE_DIR!\LICENSE-MIT ^(%%~zI bytes^) )
 for %%I in ("!STAGE_DIR!\LICENSE-APACHE")    do ( if exist "!STAGE_DIR!\LICENSE-APACHE" echo     LICENSE-APACHE            !STAGE_DIR!\LICENSE-APACHE ^(%%~zI bytes^) )
@@ -780,6 +799,7 @@ REM for-block as block syntax, and the whole line dies with
 REM ": was unexpected at this time" before the summary is printed.
 for %%I in ("!STAGE_DIR!\github\*.zip") do ( if exist "!STAGE_DIR!\github\%%~nxI" echo     archive:                  !STAGE_DIR!\github\%%~nxI ^(%%~zI bytes^) )
 for %%I in ("!STAGE_DIR!\github\*.jar") do ( if exist "!STAGE_DIR!\github\%%~nxI" echo     demo JAR copy:            !STAGE_DIR!\github\%%~nxI ^(%%~zI bytes^) )
+for %%I in ("!STAGE_DIR!\github\*.exe") do ( if exist "!STAGE_DIR!\github\%%~nxI" echo     demo EXE copy:            !STAGE_DIR!\github\%%~nxI ^(%%~zI bytes^) )
 
 REM End the main flow here. :stage and :verify_icon below are reachable only
 REM through CALL, which is what stops the pipeline running off the end of the
