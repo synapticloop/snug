@@ -4,7 +4,7 @@ Pages: 23
 Copied local assets: 43
 
 Chapter boundaries: 22
-Source CSS rules scoped to content: 2250
+Source CSS rules scoped to content: 2238
 Tables given vertical spacing: 167
 Tables preserved: 166
 Tables with formatting preserved: 166
